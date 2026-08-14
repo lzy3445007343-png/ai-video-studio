@@ -272,8 +272,7 @@
         <button class="mute" id="muteBtn" title="静音/取消静音">🔊</button>
         <span class="tc" id="timecode">00:00.000 / 00:00.000</span>
       </div>
-      <div id="mediaStatus" style="font-size:11px;color:#ffb84d;padding:2px 10px 6px;min-height:14px;line-height:1.4;word-break:break-all;"></div>
-    </div>
+        </div>
 
     <div class="tools" id="toolsPanel">
       <div class="tools-rail" id="toolsRail">
@@ -616,8 +615,33 @@ function setZoom(v) {
     const phXNew = phUs / 1e6 * pps();
     scroll.scrollLeft = Math.max(0, phXNew - offset);
     positionPlayhead();
+    if (isPlaying) repositionTimelineZoom();   // 播放期 renderTimeline 冻结，缩放必须手动重定位片段块+标尺，否则播放头与片段错位
     drawAllWaves();
   });
+}
+// Round G2：播放期 renderTimeline 被冻结（renderAll L2067 的 if(!isPlaying)），但缩放必须让片段块与标尺跟随新 pps 重定位，
+// 否则播放头（用新 pps 画）与片段块（旧 pps 冻结）错位 → 用户看到「播放头跑到错误秒数」。
+// 此函数只更新现有 .seg 的 left/width 与标尺刻度（不含任何媒体元素，安全），不重建 timeline DOM。
+function repositionTimelineZoom() {
+  const p = pps();
+  document.querySelectorAll("#tlContent .seg").forEach(seg => {
+    const leftUs = parseFloat(seg.dataset.leftUs || "0");
+    const widthUs = parseFloat(seg.dataset.widthUs || "0");
+    seg.style.left = (leftUs / 1e6 * p) + "px";
+    seg.style.width = Math.max(8, widthUs / 1e6 * p) + "px";
+  });
+  // 标尺刻度跟随新 pps 重画（renderTimeline 冻结期不会重画，否则刻度留旧比例）
+  const ruler = $("ruler"), totalSec = ($("tlContent").offsetWidth) / p;
+  const step = p >= 200 ? 1 : p >= 80 ? 2 : 5;
+  ruler.innerHTML = "";
+  for (let t = 0; t <= totalSec; t += step) {
+    const tick = document.createElement("div");
+    tick.className = "tick";
+    tick.style.left = (t * p) + "px";
+    tick.innerHTML = "<span>" + usToTime(t * 1e6) + "</span>";
+    ruler.appendChild(tick);
+  }
+  renderGroupBox();   // 选中态包围盒跟随缩放
 }
 function usToTime(us) {
   const s = us / 1e6; const m = Math.floor(s / 60); const sec = s - m * 60;
@@ -815,6 +839,8 @@ function makeSeg(s, type, ti, idx, overrideLeftUs, forceDragging) {
   const seg = document.createElement("div");
   seg.className = "seg" + (Store.state.selectedKeys.includes(key) ? " sel" : "") + (dragging ? " dragging" : "");
   seg.dataset.key = key;
+  seg.dataset.leftUs = leftUs;        // 缩放重定位用：存原始时间值，避免播放期重建 timeline DOM
+  seg.dataset.widthUs = g.widthUs;
   seg.style.left = (leftUs / 1e6 * pps()) + "px";
   seg.style.width = Math.max(8, g.widthUs / 1e6 * pps()) + "px";
   // 视频/图片：OpenCut 同款胶片条平铺——单张缩略图按 16:9 瓦片横向 repeat-x，
@@ -991,9 +1017,11 @@ function positionPlayhead() { $("playhead").style.left = (Store.state.playheadUs
 // 播放头是纯前端状态，不进草稿、不被 get_state 轮询覆盖，故导航只需改 Store；无需后端 set_playhead。
 function seekPlayhead(us) {
   const max = totalDurationUs();
-  Store.set({ playheadUs: Math.max(0, Math.min(max, Math.round(us))) });
+  const clamped = Math.max(0, Math.min(max, Math.round(us)));
+  Store.set({ playheadUs: clamped });
   positionPlayhead(); renderTimecode();
   if (!isPlaying) applyKfLiveAll();   // 拖动播放头时实时刷新关键帧动画
+  else { playStartUs = clamped; playStartWall = performance.now(); }   // Step5：播放中拖拽重锚墙钟，修 Bug B 回弹（下一帧 wallUs≈clamped，不再被旧锚点覆盖）
 }
 
 // 音频波形绘制：对齐 OpenCut audio-waveform.tsx（bar 宽 1px + 间隙 1px、上下对称、按振幅×高度）。
@@ -1061,8 +1089,6 @@ let playStartWall = 0;        // 开始播放时的 performance.now()
 let playStartUs = 0;          // 开始播放时的 playheadUs
 let lastHitSig = "";          // 播放时命中段签名；跨段才重建预览，平时只动红线
 let previewMuted = false;     // 全局预览静音：false=有声，true=静音
-let audioUnlocked = false;    // Round E-F：音频是否已解锁。浏览器 autoplay 策略要求“首个用户手势”后才能放有声媒体；
-                              // 我们用「静音起播 + playing 事件解除静音」绕过手势时序，audioUnlocked 仅用于首次手势后补解除残留静音
 let mediaClockReady = true;   // 视频/音频已 seek 到播放位置：true 时播放头跟随媒体时钟，false 时信任墙钟（避免读到脏 currentTime 跳回段起点）
 let _mcrWaitAt = 0;           // mediaClockReady 看门狗计时起点（performance.now()），用于 D 超时回退
 let _lastPlayAll = 0;          // playAllMedia 防抖计时（performance.now()），避免同一媒体被反复 play 引发 AbortError
@@ -1109,6 +1135,165 @@ function _makeVisualEl(mtype) {
   wrap.style.display = "none";
   return wrap;
 }
+
+// ============================================================
+// PlayerManager —— 媒体生命周期收口门面（Phase 2 / Step 1：仅建壳，行为零变化）
+// ------------------------------------------------------------
+// 设计定位（facade-first）：
+//   本阶段 PlayerManager 只是一个「门面」，所有方法内部直接代理现有全局函数，
+//   不引入任何新逻辑、不改任何调用点、不改播放行为、不修 bug、不改数据结构、不改 UI。
+//   现有代码完全照旧运行——本对象目前没有任何外部调用（纯脚手架）。
+//   后续各 Phase 才会：①把对应原语逻辑逐步「搬进」PlayerManager 内部；
+//   ②把外部散落的媒体调用点逐个改为走 PlayerManager（最终目标：Player 之外媒体原语调用点 = 0）。
+// ============================================================
+const PlayerManager = {
+  // 媒体池（未来 clip-agnostic；壳阶段仅占位，未启用）
+  pool: new Map(),
+
+  // ---- 创建 / 销毁 ----
+  // Step2 收口：所有 media 元素的 createElement 只发生在 PlayerManager 内部（_createElement）。
+  // 外部（_setVisualContent / renderPreview）只调用 PlayerManager.create(mtype, parent, layerKey) 拿元素，
+  // 不再直接 document.createElement('video'/'audio')。类型特有属性（src/muted/playsInline）仍由调用方设置，
+  // 以保证行为零变化、可回滚。
+  create(mtype, parent, layerKey) {
+    return this._createElement(mtype, parent, layerKey);
+  },
+  _createElement(mtype, parent, layerKey) {
+    const el = document.createElement(mtype === "video" ? "video" : "audio");
+    // Round C：seek 中不打标，避免读到脏 currentTime 抢置媒体时钟
+    el.onplaying = () => { if (!el.seeking) mediaClockReady = true; };
+    // Round F4：媒体元素 error 后尝试 reload 恢复（video/audio 共用同一恢复路径）
+    el.addEventListener("error", () => _tryReloadMedia(el, mtype, layerKey), { once: true });
+    parent.appendChild(el);
+    return el;
+  },
+  // 销毁：壳阶段未实现（后续 Phase 收口 removeAttribute("src")+load() 等销毁逻辑）
+  destroy(/* key */) {
+    // TODO(后续Phase): 统一销毁媒体节点，替代散落的 removeAttribute("src")/load()
+  },
+
+  // ---- 播放控制（Step 4：play/pause/全局静音逻辑已收口进 Player；顶层 playAllMedia/pausePlay/toggleMute 退化为薄包装）----
+  // 原 playAllMedia()：播放所有命中媒体（点击手势 / sticky-activation 跨段上下文内调用）
+  play() {
+    const now = performance.now();
+    if (now - _lastPlayAll < 250) return;   // 防抖：250ms 内不重复整批 play，避免同一媒体被反复 play 引发 AbortError
+    _lastPlayAll = now;
+    const hits = resolveHits(Store.state.playheadUs);
+    const activeKeys = new Set(hits.map(h => h.key));
+    // 直接按期望音量播放（不静音起播掩盖 bug）；WebView2 要求有声 play() 需手势，故采用「静音起播 + playing 解除静音」适配。
+    const attempt = (el, rec, type, ti) => {
+      if (!el || !el.paused) return;       // 已在播则跳过（其静音状态由 seekActiveMediaToPlayhead 维护）
+      const want = wantSound(type, ti);
+      el.muted = true;
+      const restore = () => {
+        // 只在该元素仍是当前播放头命中的活跃段时才解除静音，避免旧段/旧元素被复活
+        const stillActive = resolveHits(Store.state.playheadUs).some(h => h.key === rec.key);
+        el.muted = !(stillActive && want);
+      };
+      el.addEventListener("playing", restore, { once: true });
+      const p = el.play();
+      if (p && p.then) p.then(restore, restore);
+      setTimeout(restore, 80);
+      if (p && p.catch) p.catch(err => {
+        const name = (err && err.name) || "Error";
+        if (name === "AbortError") {
+          // seek/play 竞态（跨段边 seek 边 play），非致命：轻量重试一次
+          setTimeout(() => { if (isPlaying && el.paused) { const r = el.play(); if (r && r.catch) r.catch(() => {}); } }, 60);
+        } else if (name === "NotSupportedError") {
+          // 媒体文件偶发不可解码 / HTTP 代理返回异常，非代码错误：不弹 fatal 红条，尝试 reload 恢复
+          console.warn("[play] 媒体不可解码，尝试 reload:", rec.key, err);
+          _tryReloadMedia(el, type, rec.key || (type + ":" + ti));
+        } else {
+          // 播放器内部错误：暴露真实错误名，不静音、不掩，便于开发期排查
+          console.warn("[play] 播放错误:", name, rec.key, err);
+          showFatal("⚠ 播放错误(" + (rec.key || type) + ")：" + name + " — 详见控制台");
+        }
+      });
+    };
+    for (const [, rec] of previewState.visualEls) {
+      if (rec.el.style.display === "none") continue;
+      const v = rec.el.firstElementChild;
+      if (v && v.tagName === "VIDEO") {
+        const ti = parseInt((rec.key || "video:0").split(":")[1], 10) || 0;
+        if (!activeKeys.has(rec.key)) { if (!v.paused) { v.pause(); v.muted = true; } continue; }  // E④：非命中轨不播且主动静音停车
+        attempt(v, rec, "video", ti);
+      }
+    }
+    for (const [, rec] of previewState.audioEls) {
+      const ti = parseInt((rec.key || "audio:0").split(":")[1], 10) || 0;
+      if (!activeKeys.has(rec.key)) { if (!rec.el.paused) { rec.el.pause(); rec.el.muted = true; } continue; }  // E④
+      attempt(rec.el, rec, "audio", ti);
+    }
+  },
+  // 原 pausePlay()：暂停整个播放会话
+  pause() {
+    isPlaying = false;
+    if (playRAF) { cancelAnimationFrame(playRAF); playRAF = null; }
+    $("playBtn").textContent = "▶";
+    for (const rec of previewState.visualEls.values()) {
+      const v = rec.el.firstElementChild;
+      if (v && v.pause) v.pause();
+    }
+    for (const rec of previewState.audioEls.values()) {
+      rec.el.pause();
+    }
+  },
+  // 原 toggleMute()：全局静音切换（切换语义；真正的 setMute(state) 留 Phase 3）
+  setGlobalMute() {
+    previewMuted = !previewMuted;
+    for (const rec of previewState.visualEls.values()) {
+      const v = rec.el.firstElementChild;
+      if (v && v.tagName === "VIDEO") {
+        const layerKey = rec.key || "";
+        const trackMuted = layerKey.startsWith("video:") ? isTrackMuted("video", parseInt(layerKey.split(":")[1], 10)) : false;
+        v.muted = previewMuted || trackMuted;
+      }
+    }
+    for (const rec of previewState.audioEls.values()) {
+      const layerKey = rec.key || "";
+      const ti = parseInt(layerKey.split(":")[1], 10) || 0;
+      rec.el.muted = previewMuted || isTrackMuted("audio", ti);
+    }
+    updateMuteBtn();
+  },
+  // 兼容壳阶段代理名（无外部调用，仅保底）
+  setMute() { return this.setGlobalMute(); },
+
+  // ---- 定位 ----
+  // 收口：原 PlayerManager.seek(el, seg, us) 已迁入本方法（行为零变化）。
+  // 单元素 seek，含 timeline→source 换算：seg 可能只引用原素材一段（src_start~src_end），
+  // split/trim 后 start 会变，源内实际起止由 src_start/src_end 决定。
+  seek(el, seg, us) {
+    const srcStartUs = seg.src_start || 0;
+    const srcEndUs = seg.src_end || (srcStartUs + seg.duration);
+    const localUs = Math.max(0, us - seg.start);
+    // B2-A：上界必须是源绝对结束 srcEndUs（而非段时长）。旧写法对 src_start>0 的右段会反复从切点重播。
+    const t = Math.max(srcStartUs / 1e6, Math.min(srcEndUs / 1e6, (srcStartUs + localUs) / 1e6));
+    try {
+      if (Math.abs((el.currentTime || 0) - t) > 0.05) el.currentTime = t;
+    } catch (e) {}
+    // Round F2：把目标时间挂在元素上，供 _waitSeekSettled 验证 seek 是否真正落位（WebView2 下 seeked 可能提前触发）。
+    el._seekTarget = t;
+  },
+
+  // ---- 同步（Phase 4 才合并 drift / crossSegment / seek 的内部逻辑）----
+  // 原：correctActiveMediaDrift(us) + seekActiveMediaToPlayhead(us)
+  syncTimeline(us) {
+    correctActiveMediaDrift(us);
+    seekActiveMediaToPlayhead(us);
+  },
+  // 原：_handleCrossSegment(us)（async）
+  handleCrossSegment(us) {
+    return _handleCrossSegment(us);
+  },
+
+  // ---- 重载 / 错误 ----
+  // 原：_tryReloadMedia(el, type, layerKey) —— error→load()→canplay 后 seek+play 复合操作
+  reload(el, type, layerKey) {
+    return _tryReloadMedia(el, type, layerKey);
+  },
+};
+
 function _setVisualContent(wrap, mtype, path, muted) {
   if (wrap.dataset.mtype === mtype && wrap.dataset.path === path && wrap.dataset.muted === String(muted)) return false; // 无变化
   wrap.innerHTML = "";
@@ -1116,16 +1301,12 @@ function _setVisualContent(wrap, mtype, path, muted) {
   wrap.dataset.path = path;
   wrap.dataset.muted = String(muted);
   if (mtype === "video") {
-    const v = document.createElement("video");
+    const layerKey = wrap.id || "video:?";
+    const v = PlayerManager.create("video", wrap, layerKey);
     v.src = fileURL(path);
     // 轨道静音 或 全局预览静音 → 关闭该视频段的内嵌音频
     v.muted = !!muted || previewMuted;
     v.playsInline = true;
-    v.onplaying = () => { if (!v.seeking) mediaClockReady = true; };   // Round C：seek 中不打标，避免读到脏 currentTime 抢置媒体时钟
-    // Round F4：video 元素 error 后同样尝试 reload 恢复，避免偶发解码失败导致整段哑火
-    const layerKey = wrap.id || "video:?";
-    v.addEventListener("error", () => _tryReloadMedia(v, "video", layerKey), { once: true });
-    wrap.appendChild(v);
   } else if (mtype === "image") {
     const img = document.createElement("img");
     img.src = fileURL(path);
@@ -1139,24 +1320,6 @@ function _setTextContent(wrap, text) {
   wrap.dataset.text = text;
   return true;
 }
-function _seekMedia(el, seg, us) {
-  // 播放位置必须映射到源素材时间轴：seg 可能只引用原素材的一段（src_start ~ src_end），
-  // split/trim 后 start 会变，但源内实际起止由 src_start/src_end 决定。忽略 src_start 会导致
-  // split 右段从素材头重播、trim 后位置错位、拉长段 seek 超出源范围。
-  const srcStartUs = seg.src_start || 0;
-  const srcEndUs = seg.src_end || (srcStartUs + seg.duration);
-  const localUs = Math.max(0, us - seg.start);
-  // B2-A：上界必须是源绝对结束 srcEndUs（而非段时长 srcEndUs-srcStartUs）。
-  // 旧写法对 src_start>0 的右段会把段内偏移超过段时长的值钳回 src_start，导致 split 右段反复从切点重播。
-  const t = Math.max(srcStartUs / 1e6, Math.min(srcEndUs / 1e6, (srcStartUs + localUs) / 1e6));
-  try {
-    if (Math.abs((el.currentTime || 0) - t) > 0.05) el.currentTime = t;
-  } catch (e) {}
-  // Round F2：把目标时间挂在元素上，供 _waitSeekSettled 验证 seek 是否真正落位。
-  // WebView2 下 audio 的 seeked 事件可能提前触发或 currentTime 更新滞后，导致“已经 seek 完成”的误判。
-  el._seekTarget = t;
-}
-
 // Round D/F2: Seek Barrier —— 等浏览器完成一次异步 seek 且 currentTime 真正接近目标，再放行 play()。
 // 用 addEventListener 一次性监听，绝不写 el.onseeked（那是 DOM 单归属属性，调用方会覆盖 resolver → Promise 永久 pending）。
 // 放行条件：不在 seeking、readyState>=2、且 currentTime 与 _seekTarget 差距 <100ms；否则继续等或主动重 seek。
@@ -1202,6 +1365,30 @@ function _waitSeekSettled(el) {
   });
 }
 
+// Round G1：等媒体元素加载到可 seek 状态（readyState >= 2）。
+// startPlay 调用前必须等这一步，否则在元素未加载完时 seek 会静默失败，导致音频从头播。
+// Round G3：必须加 3 秒安全网 + error 预检，否则媒体已 error 或事件丢失时会永久 pending，
+// 导致 startPlay 卡在 await、playTick 永远不启动、播放头一动不动。
+function _waitMediaReady(el) {
+  return new Promise((resolve) => {
+    if (!el || (el.tagName !== "VIDEO" && el.tagName !== "AUDIO")) { resolve(); return; }
+    if (el.readyState >= 2 || el.error) { resolve(); return; }   // error 已存在也放行，让后续 _tryReloadMedia 去恢复
+    let timer = null;
+    const cleanup = () => {
+      if (timer) { clearTimeout(timer); timer = null; }
+      el.removeEventListener("canplay", onReady);
+      el.removeEventListener("canplaythrough", onReady);
+      el.removeEventListener("error", onReady);
+      resolve();
+    };
+    const onReady = () => { cleanup(); };
+    el.addEventListener("canplay", onReady, { once: true });
+    el.addEventListener("canplaythrough", onReady, { once: true });
+    el.addEventListener("error", onReady, { once: true });
+    timer = setTimeout(() => { console.warn("[_waitMediaReady] 超时放行:", el.tagName, (el.currentSrc || el.src || "").slice(0, 70)); cleanup(); }, 3000);
+  });
+}
+
 // Round F4：媒体元素 error 恢复。WebView2 下偶发文件句柄/网络波动会导致 <audio>/<video> 进入 error 状态，
 // 一旦 error 后续 seek/play 全部失效（表现为某段后突然没声）。不重建元素（守 E 的媒体生命周期纪律），
 // 而是重新 load() 同一 src，并在 load 完成后 seek 回当前播放头、继续播放。
@@ -1227,17 +1414,25 @@ function _tryReloadMedia(el, type, layerKey) {
   // 重新 load()：不重建元素、不改 src，只让浏览器重新拉取
   try { el.load(); } catch (e) { console.warn("load() 失败:", e); }
   // load 完成后 seek 回当前播放头并继续播放
-  const onLoaded = () => {
+    const onLoaded = () => {
     el.removeEventListener("canplaythrough", onLoaded);
     el.removeEventListener("canplay", onLoaded);
     el.removeEventListener("error", onLoadedError);
     const rec = type === "video" ? previewState.visualEls.get(layerKey) : previewState.audioEls.get(layerKey);
-    if (rec && rec.seg) _seekMedia(el, rec.seg, Store.state.playheadUs);
+    if (rec && rec.seg) PlayerManager.seek(el, rec.seg, Store.state.playheadUs);
     if (isPlaying && el.paused) {
+      const want = wantSound(type, parseInt((layerKey.split(":")[1] || "0"), 10));
+      // Round G2：reload 发生在播放中，通常没有用户手势，同样要走静音起播适配 autoplay
       el.muted = true;
+      const restore = () => {
+        const stillActive = rec && resolveHits(Store.state.playheadUs).some(h => h.key === rec.key);
+        el.muted = !(stillActive && want);
+      };
+      el.addEventListener("playing", restore, { once: true });
       const p = el.play();
-      if (p && p.then) p.then(() => { if (rec && !rec.el.paused) rec.el.muted = !wantSound(type, parseInt((layerKey.split(":")[1] || "0"), 10)); });
-      setTimeout(() => { if (rec && !rec.el.paused) rec.el.muted = !wantSound(type, parseInt((layerKey.split(":")[1] || "0"), 10)); }, 50);
+      if (p && p.then) p.then(restore, restore);
+      setTimeout(restore, 80);
+      if (p && p.catch) p.catch(() => {});
     }
   };
   const onLoadedError = () => {
@@ -1304,12 +1499,11 @@ function renderPreview(s) {
       if (media) {
     const onReady = () => {
         if (rec.el.dataset.pendingSeek) {
-          _seekMedia(media, h.seg, Store.state.playheadUs);
+          PlayerManager.seek(media, h.seg, Store.state.playheadUs);
           if (isPlaying) media.onseeked = () => { mediaClockReady = true; };
           rec.el.dataset.pendingSeek = "";
         }
-        // play() 不在 oncanplay 里调：异步回调无用户手势，会被 autoplay 策略拒绝且 .catch 静默吞掉。
-        // 统一交给 playAllMedia()，它在 startPlay 点击手势（或 sticky-activation 跨段）内播放并带静音兜底。
+        // play() 不在 oncanplay 里调：统一交给 playAllMedia() 在 startPlay 点击手势（或 sticky-activation 跨段）内播放。
       };
       media.oncanplay = onReady;
       media.onloadedmetadata = onReady;
@@ -1318,7 +1512,7 @@ function renderPreview(s) {
       const media = rec.el.firstElementChild;
       if (media) {
         if (media.tagName === "VIDEO") media.muted = isTrackMuted(h.type, h.ti) || previewMuted;
-        _seekMedia(media, h.seg, us);
+        PlayerManager.seek(media, h.seg, us);
         if (isPlaying) media.onseeked = () => { mediaClockReady = true; };
       }
     }
@@ -1422,12 +1616,8 @@ function renderPreview(s) {
     activeAudioKeys.add(layerKey);
     let rec = previewState.audioEls.get(layerKey);
     if (!rec) {
-      const a = document.createElement("audio");
+      const a = PlayerManager.create("audio", $("audioPool"), layerKey);
       a.muted = previewMuted;
-      a.onplaying = () => { if (!a.seeking) mediaClockReady = true; };   // Round C：seek 中不打标，避免读到脏 currentTime 抢置媒体时钟
-      // Round F4：音频元素进入 error 后，不重建就无法继续播放；监听 error 并尝试reload恢复
-      a.addEventListener("error", () => _tryReloadMedia(a, "audio", layerKey), { once: true });
-      $("audioPool").appendChild(a);
       rec = { el: a, key: layerKey };
       previewState.audioEls.set(layerKey, rec);
     }
@@ -1438,13 +1628,13 @@ function renderPreview(s) {
       rec.el._pendingSeg = h.seg;
       rec.el.oncanplay = () => {
         if (rec.el.dataset.pendingSeek) {
-          _seekMedia(rec.el, h.seg, Store.state.playheadUs);
+          PlayerManager.seek(rec.el, h.seg, Store.state.playheadUs);
           rec.el.dataset.pendingSeek = "";
         }
         // play() 交给 playAllMedia()，避免异步无手势被 autoplay 拒绝
       };
     } else {
-      _seekMedia(rec.el, h.seg, us);
+      PlayerManager.seek(rec.el, h.seg, us);
       if (isPlaying) rec.el.onseeked = () => { mediaClockReady = true; };
     }
     rec.key = h.key;
@@ -1455,7 +1645,7 @@ function renderPreview(s) {
   for (const [layerKey, rec] of previewState.audioEls) {
     if (!activeAudioKeys.has(layerKey)) {
       rec.el.pause();
-      rec.el.muted = true; // 避免暂停后残留声音；下次命中时 playAllMedia/_seekMedia 会恢复正确 muted 状态
+      rec.el.muted = true; // 避免暂停后残留声音；下次命中时 playAllMedia/PlayerManager.seek 会恢复正确 muted 状态
     }
   }
 
@@ -1482,25 +1672,23 @@ async function startPlay() {
   _mcrWaitAt = 0;
   $("playBtn").textContent = "⏸";
   lastHitSig = resolveHits(Store.state.playheadUs).map(h => h.key).join("|");
-  renderPreview();            // 立即更新元素
-  const seeked = seekActiveMediaToPlayhead(Store.state.playheadUs);  // F1：新元素先 seek 到播放头，否则首次 play 从源素材 0 秒开始（根因 A：三段从头开始）
-  await Promise.all(seeked.map(_waitSeekSettled));   // Round D：等 seek 完成再播，消除「边 seek 边 play」的 AbortError/未启动竞态
-  playAllMedia();             // 在点击手势上下文内播放（含 autoplay 静音兜底 + 探针上报）
+  renderPreview();            // 立即更新元素（新素材可能刚设置 src，还未加载完）
+  // Round G1：必须等命中媒体元素加载到可 seek 状态，否则 seek 会静默失败，音频从头播。
+  // Round G3：外层再包 5 秒总超时，避免任何子 promise 漏网导致 startPlay 永久挂起、播放头不动。
+  const withTimeout = (p, ms, label) => Promise.race([p, new Promise(r => setTimeout(() => { console.warn("[startPlay] " + label + " 总超时，强制继续"); r(); }, ms))]);
+  const hits = resolveHits(Store.state.playheadUs);
+  const readyPromises = hits.map(h => {
+    const rec = h.type === "video" ? previewState.visualEls.get("video:" + h.ti) : previewState.audioEls.get("audio:" + h.ti);
+    const el = rec ? (h.type === "video" ? rec.el.firstElementChild : rec.el) : null;
+    return el ? _waitMediaReady(el) : Promise.resolve();
+  });
+  await withTimeout(Promise.all(readyPromises), 5000, "等待媒体就绪");
+  const seeked = seekActiveMediaToPlayhead(Store.state.playheadUs);  // 此时元素已可 seek，不会静默失败
+  await withTimeout(Promise.all(seeked.map(_waitSeekSettled)), 5000, "等待 seek 落位");   // Round D：等 seek 完成再播，消除「边 seek 边 play」竞态
+  playAllMedia();             // 在点击手势上下文内直接播放
   playTick();
 }
-function pausePlay() {
-  isPlaying = false;
-  if (playRAF) { cancelAnimationFrame(playRAF); playRAF = null; }
-  $("playBtn").textContent = "▶";
-  // 暂停所有 video / audio
-  for (const rec of previewState.visualEls.values()) {
-    const v = rec.el.firstElementChild;
-    if (v && v.pause) v.pause();
-  }
-  for (const rec of previewState.audioEls.values()) {
-    rec.el.pause();
-  }
-}
+function pausePlay() { return PlayerManager.pause(); }
 function updateMuteBtn() {
   const btn = $("muteBtn");
   if (!btn) return;
@@ -1508,128 +1696,13 @@ function updateMuteBtn() {
   btn.title = previewMuted ? "已静音，点击恢复声音" : "静音";
   btn.classList.toggle("muted", previewMuted);
 }
-function toggleMute() {
-  audioUnlocked = true;   // Round E-F：点 🔊 是明确的用户手势，标记音频已解锁（与 playAllMedia 的静音起播互补）
-  // autoplay 兜底只静音了元素（el.muted=true），没有改全局 previewMuted。
-  // 此时用户点 🔊 应直接恢复有声，而不是先切到全局静音再切回来。
-  if (!previewMuted) {
-    let recovered = false;
-    for (const rec of previewState.visualEls.values()) {
-      const v = rec.el.firstElementChild;
-      if (v && v.tagName === "VIDEO" && v.muted) {
-        const layerKey = rec.key || "";
-        const trackMuted = layerKey.startsWith("video:") ? isTrackMuted("video", parseInt(layerKey.split(":")[1], 10)) : false;
-        if (!trackMuted) {
-          v.muted = false;
-          const p = v.play(); if (p && p.catch) p.catch(() => {});
-          recovered = true;
-        }
-      }
-    }
-    for (const rec of previewState.audioEls.values()) {
-      if (rec.el.muted) {
-        rec.el.muted = false;
-        const p = rec.el.play(); if (p && p.catch) p.catch(() => {});
-        recovered = true;
-      }
-    }
-    if (recovered) { clearAutoplayFatal(); return; }
-  }
-  previewMuted = !previewMuted;
-  // 同步所有现有 video / audio 元素
-  for (const rec of previewState.visualEls.values()) {
-    const v = rec.el.firstElementChild;
-    if (v && v.tagName === "VIDEO") {
-      // video 静音 = 全局静音 或 轨道静音
-      const layerKey = rec.key || "";
-      const trackMuted = layerKey.startsWith("video:") ? isTrackMuted("video", parseInt(layerKey.split(":")[1], 10)) : false;
-      v.muted = previewMuted || trackMuted;
-    }
-  }
-  for (const rec of previewState.audioEls.values()) {
-    rec.el.muted = previewMuted;
-  }
-  updateMuteBtn();
-  if (!previewMuted) clearAutoplayFatal();   // 用户主动恢复有声 → 消掉之前的 autoplay 软提醒红条
-}
-// Round E-F：首个用户手势（任意 pointerdown，含播放按钮）即解锁音频，并解除当前正在播放媒体的静音。
-// 与 playAllMedia 的「静音起播 + playing 事件解除静音」构成双保险：即使某 WebView2 构建对“无手势改 muted”较严，
-// 首次点击也能把已在播放的元素带入声音，确保跨段第二段无需手动点 🔊。
-function unlockAudio() {
-  if (audioUnlocked) return;
-  audioUnlocked = true;
-  for (const rec of previewState.visualEls.values()) {
-    const v = rec.el.firstElementChild;
-    const ti = parseInt((rec.key || "video:0").split(":")[1], 10) || 0;
-    if (v && v.tagName === "VIDEO" && !v.paused && wantSound("video", ti)) v.muted = false;
-  }
-  for (const rec of previewState.audioEls.values()) {
-    const ti = parseInt((rec.key || "audio:0").split(":")[1], 10) || 0;
-    if (!rec.el.paused && wantSound("audio", ti)) rec.el.muted = false;
-  }
-  clearAutoplayFatal();
-}
-document.addEventListener("pointerdown", unlockAudio, true);
-function playAllMedia() {
-  // 在 startPlay 的点击手势（或 sticky-activation 跨段）上下文内调用。
-  // 尝试播放「当前播放头命中」的可见 video/audio；autoplay 被拒则按错误类型分流兜底。
-  // Round E④：播放资格严格按当前 resolveHits 的 key 精确过滤——非命中轨（即便 display≠none 曾用过）绝不续播，杜绝双播/错段。
-  const now = performance.now();
-  if (now - _lastPlayAll < 250) return;   // 防抖：250ms 内不重复整批 play，避免同一媒体被反复 play 引发 AbortError
-  _lastPlayAll = now;
-  const hits = resolveHits(Store.state.playheadUs);
-  const activeKeys = new Set(hits.map(h => h.key));
-  // Round E-F：起播一律先静音（静音 autoplay 在任意上下文——含异步跨段——都被浏览器允许），
-  // 待元素真正开始播放（'playing' 事件）再按期望解除静音。改 muted 属性不需要用户手势，
-  // 因此第一段（点击手势内）与跨段第二段（await 之后、无手势）都能可靠带入声音，无需手动点 🔊。
-  const attempt = (el, rec, type, ti) => {
-    if (!el || !el.paused) return;       // 已在播则跳过（其静音状态由 seekActiveMediaToPlayhead 维护）
-    const want = wantSound(type, ti);
-    // Round F2：静音起播规避 NotAllowedError，但 play() 被接受后要立即恢复音量。
-    // 改 muted 属性不需要用户手势；play() 调用瞬间 muted=true 已通过 autoplay 检查，之后恢复不会触发错误。
-    // 三重保险：playing 事件 / play Promise resolve / 50ms 后备，确保任意 WebView2 构建下都能有声。
-    el.muted = true;
-    const restore = () => { if (!el.paused) el.muted = !want; };
-    el.addEventListener("playing", restore, { once: true });
-    const p = el.play();
-    if (p && p.then) p.then(restore, restore);
-    setTimeout(restore, 50);
-    if (p && p.catch) p.catch(err => {
-      const name = (err && err.name) || "Error";
-      if (name === "AbortError") {
-        // seek/play 竞态（跨段边 seek 边 play），非致命：轻量重试一次
-        setTimeout(() => { if (isPlaying && el.paused) { const r = el.play(); if (r && r.catch) r.catch(() => {}); } }, 60);
-      } else if (name === "NotSupportedError") {
-        // 媒体文件偶发不可解码 / HTTP 代理返回异常，非代码错误：不弹 fatal 红条，尝试 reload 恢复
-        console.warn("[playAllMedia] 媒体不可解码，尝试 reload:", rec.key, err);
-        _tryReloadMedia(el, type, rec.key || (type + ":" + ti));
-      } else {
-        // 播放器内部错误：暴露真实错误名，不静音、不掩，便于开发期排查
-        console.warn("[playAllMedia] 播放错误:", name, rec.key, err);
-        showFatal("⚠ 播放错误(" + (rec.key || type) + ")：" + name + " — 详见控制台");
-      }
-      // 注：NotAllowedError 不应再发生（已静音起播）；若极端情况下发生，元素保持静音，等用户手动 🔊 或下次手势解除
-    });
-  };
-  for (const [, rec] of previewState.visualEls) {
-    if (rec.el.style.display === "none") continue;
-    const v = rec.el.firstElementChild;
-    if (v && v.tagName === "VIDEO") {
-      const ti = parseInt((rec.key || "video:0").split(":")[1], 10) || 0;
-      if (!activeKeys.has(rec.key)) { if (!v.paused) { v.pause(); v.muted = true; } continue; }  // E④：非命中轨不播且主动静音停车
-      attempt(v, rec, "video", ti);
-    }
-  }
-  for (const [, rec] of previewState.audioEls) {
-    const ti = parseInt((rec.key || "audio:0").split(":")[1], 10) || 0;
-    if (!activeKeys.has(rec.key)) { if (!rec.el.paused) { rec.el.pause(); rec.el.muted = true; } continue; }  // E④
-    attempt(rec.el, rec, "audio", ti);
-  }
-}
+function toggleMute() { return PlayerManager.setGlobalMute(); }
+function playAllMedia() { return PlayerManager.play(); }
 // Round E②：drift 检测辅助（替代原 _dominantMediaUs 的“媒体当 master”角色）。
 // 播放头是 master（墙钟）。这里只做被动收口：媒体若因缓冲/解码滞后偏离播放头 >100ms，
 // 才把它 seek 回正确时间轴位置；绝不反写 playheadUs，避免“谁在播谁是老大”导致的跳/双播/回弹。
 function correctActiveMediaDrift(us) {
+  if (crossSegmentPending) return;   // Step5：跨段期间由 _handleCrossSegment 独占媒体 seek，禁止每帧 drift 与跨段 seek 双系统互殴（修 Bug A）
   const hits = resolveHits(us);
   const consider = (rec, type) => {
     if (!rec) return;
@@ -1645,12 +1718,12 @@ function correctActiveMediaDrift(us) {
     // 说明跨段 seek 没有真正落位（WebView2 下 audio 常见：seeked 事件触发后 play() 又把 currentTime 冲回 0）。
     // 这种情况不能当成“映射过期”跳过，必须强制 seek 到正确位置，否则用户会一直听到素材头。
     if (ct < ssSec - 0.1 || ct > endSec + 0.1) {
-      _seekMedia(el, s, us);
+      PlayerManager.seek(el, s, us);
       return;
     }
     const mapped = s.start + (ct * 1e6 - srcStartUs);  // 媒体当前位置映射回时间轴
     if (mapped < s.start || mapped > s.start + s.duration) return;  // 映射过期（跨段未刷新）→ 跳过，交给 _handleCrossSegment
-    if (Math.abs(mapped - us) > 100000) _seekMedia(el, s, us);      // 仅 >100ms 大漂移才纠正；绝不反写播放头
+    if (Math.abs(mapped - us) > 100000) PlayerManager.seek(el, s, us);      // 仅 >100ms 大漂移才纠正；绝不反写播放头
   };
   for (const h of hits) {
     if (h.type === "video") consider(previewState.visualEls.get("video:" + h.ti), "video");
@@ -1702,7 +1775,7 @@ function seekActiveMediaToPlayhead(us) {
     // B2-B：跨段只 seek 不复建元素，必须同步刷新 rec.seg/key，否则 playAllMedia 兜底仍用旧段元数据
     // 算时间轴位置 → 播放头反复判定跨段 → 来回 seek → 闪/卡/反复播。仅跨段（seg/key 变化）才写，避免每 tick 无效写对象。
     if (rec && (rec.seg !== h.seg || rec.key !== h.key)) { rec.seg = h.seg; rec.key = h.key; }
-    _seekMedia(el, h.seg, us);   // 唯一 seek 入口：timeline→source 换算在 _seekMedia 内部完成，禁第二套逻辑
+    PlayerManager.seek(el, h.seg, us);   // 唯一 seek 入口：timeline→source 换算在 PlayerManager.seek 内部完成，禁第二套逻辑
     seeked.push(el);            // Round D：记录待屏障元素
     if (isPlaying) el.onseeked = () => { mediaClockReady = true; };
   }
@@ -1757,7 +1830,7 @@ function playTick() {
   if (!mediaClockReady) {
     if (!_mcrWaitAt) _mcrWaitAt = now;
     else if (now - _mcrWaitAt > 800) {
-      playAllMedia();            // 重试播放（sticky-activation 下通常能成；被拒则 playAllMedia 内静音兜底）
+      playAllMedia();            // 重试播放（sticky-activation 下通常能成）
       _mcrWaitAt = now;          // 重置计时，避免每帧重试；只等下一次 800ms 窗口
     }
   } else { _mcrWaitAt = 0; }
@@ -1788,33 +1861,8 @@ function playTick() {
   const keySig = hits.map(h => h.key).join("|");
   if (keySig !== lastHitSig) {
     lastHitSig = keySig;
-    _handleCrossSegment(us);   // Round D：抽异步，await 屏障后 playAllMedia；fire-and-forget，不阻塞 RAF 下一帧
+    PlayerManager.handleCrossSegment(us);   // Step5：跨段处理统一走 Player 入口（fire-and-forget，不阻塞 RAF 下一帧）
   }
-  // ===== 临时调试 HUD（诊断“分段从头播”）：显示活动音频的实际 currentTime / 目标 t / src_start =====
-  (function(){
-    const aHits = hits.filter(h => h.type === "audio");
-    const parts = aHits.map(h => {
-      const rec = previewState.audioEls.get("audio:" + h.ti);
-      const el = rec ? rec.el : null;
-      const ss = (h.seg.src_start || 0) / 1e6;
-      const local = Math.max(0, us - h.seg.start) / 1e6;
-      const tgt = ss + local;
-      const ct = el ? (el.currentTime || 0) : -1;
-      return `${h.key} ct=${ct.toFixed(3)} tgt=${tgt.toFixed(3)} ss=${ss.toFixed(3)}` + (el ? (el.paused?" [PAUSED]":(" [PLAY" + (el.muted?"🔇]":"🔊]"))) : " [NOEL]");
-    });
-    const vHits = hits.filter(h => h.type === "video");
-    const vpart = vHits.map(h => {
-      const rec = previewState.visualEls.get("video:" + h.ti);
-      const el = rec ? rec.el.firstElementChild : null;
-      const ss = (h.seg.src_start || 0) / 1e6;
-      const local = Math.max(0, us - h.seg.start) / 1e6;
-      const tgt = ss + local;
-      const ct = el ? (el.currentTime || 0) : -1;
-      return `${h.key} ct=${ct.toFixed(3)} tgt=${tgt.toFixed(3)} ss=${ss.toFixed(3)}` + (el ? (el.paused?" [PAUSED]":(" [PLAY" + (el.muted?"🔇]":"🔊]"))) : " [NOEL]");
-    });
-    dbg("[DBG] us=" + (us/1e6).toFixed(3) + " | A:" + (parts.join("  ") || "无") + " | V:" + (vpart.join("  ") || "无"));
-  })();
-  // ===== 调试 HUD 结束 =====
   playRAF = requestAnimationFrame(playTick);
 }
 
