@@ -1146,6 +1146,50 @@ function _makeVisualEl(mtype) {
 //   后续各 Phase 才会：①把对应原语逻辑逐步「搬进」PlayerManager 内部；
 //   ②把外部散落的媒体调用点逐个改为走 PlayerManager（最终目标：Player 之外媒体原语调用点 = 0）。
 // ============================================================
+
+// ============================================================
+// PlaySession —— 播放事务状态层（Step A：v2.2 设计稿落地；详见 docs/architecture/player-session-v2-design.md）
+// 纯状态容器：只存「本次播放事务」的意图 + 状态；绝不碰媒体元素 el。
+// 所有媒体执行（play/pause/muted）都在 PlayerManager 内；Session 只提供 isCurrent()/canRestore() 等判断。
+// ============================================================
+const PLAY_SESSION_STATE = Object.freeze({
+  CREATED:        "CREATED",
+  STARTING:       "STARTING",
+  MUTED_PLAYING:  "MUTED_PLAYING",   // 临时保护态（= PLAYING + autoplayUnlockPending），窗口仅数十 ms；业务主判 autoplayUnlockPending
+  PLAYING:        "PLAYING",
+  PAUSED:         "PAUSED",
+  RECOVERING:     "RECOVERING",
+  ENDED:          "ENDED",
+  CANCELLED:      "CANCELLED",
+});
+let currentSessionId = 0;
+let currentSession = null;
+
+// 最终媒体是否应静音（单一计算点）：用户意图 / autoplay 待解锁 / 媒体暂 inactive 任一为真即静音。
+// 注：本函数供 Step D 收口 _applyMediaState 时使用；Step A 的 restore/onPlaying 直接按 want 解静音。
+function shouldMediaBeMuted(s) {
+  return previewMuted || s.autoplayUnlockPending || s.mediaMuteReasons.size > 0;
+}
+
+function createSession(targets) {
+  const s = {
+    id: ++currentSessionId,
+    state: PLAY_SESSION_STATE.CREATED,
+    targets,                                   // [{el,rec,type,ti,key,want}]
+    userMuteIntent: previewMuted,               // (B) 用户意图快照
+    autoplayUnlockPending: true,                // (A) 静音起播，等 onPlaying 清除
+    mediaMuteReasons: new Set(),                // (C) 临时静音来源集合（gap/seek/crossSegment...）
+    userPaused: false,
+    lastPlayhead: Store.state.playheadUs,
+    isCurrent() { return this.id === currentSessionId; },
+    canRestore() { return !this.userMuteIntent && !this.userPaused && this.autoplayUnlockPending; },
+    cancel() { this.state = PLAY_SESSION_STATE.CANCELLED; },
+  };
+  currentSession = s;
+  console.log("[PlaySession]", s.id, s.state, s.targets.length, s.autoplayUnlockPending);
+  return s;
+}
+
 const PlayerManager = {
   // 媒体池（未来 clip-agnostic；壳阶段仅占位，未启用）
   pool: new Map(),
@@ -1176,59 +1220,92 @@ const PlayerManager = {
   // 原 playAllMedia()：播放所有命中媒体（点击手势 / sticky-activation 跨段上下文内调用）
   play() {
     const now = performance.now();
-    if (now - _lastPlayAll < 250) return;   // 防抖：250ms 内不重复整批 play，避免同一媒体被反复 play 引发 AbortError
+    if (now - _lastPlayAll < 250) return;   // 防抖：250ms 内不重复整批 play
     _lastPlayAll = now;
+
+    // ① 先选 targets（resolveHits 仅用于「选谁参与」，绝不用于解静音 —— GPT v2.1 必改）
     const hits = resolveHits(Store.state.playheadUs);
     const activeKeys = new Set(hits.map(h => h.key));
-    // 直接按期望音量播放（不静音起播掩盖 bug）；WebView2 要求有声 play() 需手势，故采用「静音起播 + playing 解除静音」适配。
-    const attempt = (el, rec, type, ti) => {
-      if (!el || !el.paused) return;       // 已在播则跳过（其静音状态由 seekActiveMediaToPlayhead 维护）
-      const want = wantSound(type, ti);
-      el.muted = true;
-      const restore = () => {
-        // 只在该元素仍是当前播放头命中的活跃段时才解除静音，避免旧段/旧元素被复活
-        const stillActive = resolveHits(Store.state.playheadUs).some(h => h.key === rec.key);
-        el.muted = !(stillActive && want);
-      };
-      el.addEventListener("playing", restore, { once: true });
+    const targets = [];
+    for (const [, rec] of previewState.visualEls) {
+      if (rec.el.style.display === "none") continue;
+      const v = rec.el.firstElementChild;
+      if (v && v.tagName === "VIDEO") {
+        const ti = parseInt((rec.key || "video:0").split(":")[1], 10) || 0;
+        if (!activeKeys.has(rec.key)) { if (!v.paused) { v.pause(); v.muted = true; } continue; }  // E④：非命中轨停车静音
+        targets.push({ el: v, rec, type: "video", ti, key: rec.key, want: wantSound("video", ti) });
+      }
+    }
+    for (const [, rec] of previewState.audioEls) {
+      const ti = parseInt((rec.key || "audio:0").split(":")[1], 10) || 0;
+      if (!activeKeys.has(rec.key)) { if (!rec.el.paused) { rec.el.pause(); rec.el.muted = true; } continue; }  // E④
+      targets.push({ el: rec.el, rec, type: "audio", ti, key: rec.key, want: wantSound("audio", ti) });
+    }
+
+    // ② 空则直接返回（不建 session、不废旧事务 —— GPT v2.2 钉子3）
+    if (targets.length === 0) { isPlaying = false; return; }
+
+    // ③ 取消旧事务 → id++ → 建新事务（Step A：PlaySession 状态层落地）
+    if (currentSession && currentSession.isCurrent()) currentSession.cancel();
+    const session = createSession(targets);
+    this.start(session);
+  },
+  // Step A：静音起播（仅 PlayerManager 动 el）。逐 target 绑定真实 playing 事件 + restore/onPlaying 两阶段解锁。
+  start(session) {
+    session.state = PLAY_SESSION_STATE.STARTING;
+    for (const t of session.targets) {
+      const { el, rec, type, ti } = t;
+      if (!el || !el.paused) continue;        // 已在播则跳过（静音状态由 seekActiveMediaToPlayhead 维护）
+      el.muted = true;                         // (A) 静音起播，解锁后再解
+      el.addEventListener("playing", () => this.onPlaying(session, t), { once: true });
+      const restore = () => this.restore(session, t);
       const p = el.play();
       if (p && p.then) p.then(restore, restore);
       setTimeout(restore, 80);
       if (p && p.catch) p.catch(err => {
         const name = (err && err.name) || "Error";
         if (name === "AbortError") {
-          // seek/play 竞态（跨段边 seek 边 play），非致命：轻量重试一次
+          // seek/play 竞态（跨段边 seek 边 play），非致命：轻量重试一次（Step B 将改 continueStart）
           setTimeout(() => { if (isPlaying && el.paused) { const r = el.play(); if (r && r.catch) r.catch(() => {}); } }, 60);
         } else if (name === "NotSupportedError") {
-          // 媒体文件偶发不可解码 / HTTP 代理返回异常，非代码错误：不弹 fatal 红条，尝试 reload 恢复
           console.warn("[play] 媒体不可解码，尝试 reload:", rec.key, err);
           _tryReloadMedia(el, type, rec.key || (type + ":" + ti));
         } else {
-          // 播放器内部错误：暴露真实错误名，不静音、不掩，便于开发期排查
           console.warn("[play] 播放错误:", name, rec.key, err);
           showFatal("⚠ 播放错误(" + (rec.key || type) + ")：" + name + " — 详见控制台");
         }
       });
-    };
-    for (const [, rec] of previewState.visualEls) {
-      if (rec.el.style.display === "none") continue;
-      const v = rec.el.firstElementChild;
-      if (v && v.tagName === "VIDEO") {
-        const ti = parseInt((rec.key || "video:0").split(":")[1], 10) || 0;
-        if (!activeKeys.has(rec.key)) { if (!v.paused) { v.pause(); v.muted = true; } continue; }  // E④：非命中轨不播且主动静音停车
-        attempt(v, rec, "video", ti);
-      }
     }
-    for (const [, rec] of previewState.audioEls) {
-      const ti = parseInt((rec.key || "audio:0").split(":")[1], 10) || 0;
-      if (!activeKeys.has(rec.key)) { if (!rec.el.paused) { rec.el.pause(); rec.el.muted = true; } continue; }  // E④
-      attempt(rec.el, rec, "audio", ti);
-    }
+    session.state = PLAY_SESSION_STATE.MUTED_PLAYING;
+    console.log("[PlaySession]", session.id, session.state, session.targets.length, session.autoplayUnlockPending);
+  },
+  // Step A：restore 阶段一（请求解静音）。条件去掉「播放头实时命中」(stillActive)，只查事务/用户意图（GPT v2.1 必改；修「没声家族」根因）。
+  // 阶段二（清 autoplayUnlockPending + 置 PLAYING）由 onPlaying（真实 playing 事件）执行，不靠 play() promise 是否 resolve。
+  restore(session, t) {
+    if (!session.isCurrent() || session.userPaused || previewMuted) return;
+    if (!session.autoplayUnlockPending) return;   // 幂等：已解锁则跳过（promise+定时器可能双触发）
+    t.el.muted = !t.want;                          // want=false（静音轨/用户静音）保持静音，否则解静音
+    session.autoplayUnlockPending = false;
+    session.state = PLAY_SESSION_STATE.PLAYING;
+    console.log("[PlaySession]", session.id, session.state, session.targets.length, session.autoplayUnlockPending);
+  },
+  // Step A：真实 playing 事件 = 媒体真的在播；幂等清 (A) + 确保解静音（不依赖 play() promise resolve）
+  onPlaying(session, t) {
+    if (!session.isCurrent()) return;
+    session.autoplayUnlockPending = false;
+    session.state = PLAY_SESSION_STATE.PLAYING;
+    if (!previewMuted && t.want) t.el.muted = false;
+    console.log("[PlaySession]", session.id, session.state, session.targets.length, session.autoplayUnlockPending);
   },
   // 原 pausePlay()：暂停整个播放会话
   pause() {
     isPlaying = false;
     if (playRAF) { cancelAnimationFrame(playRAF); playRAF = null; }
+    if (currentSession && currentSession.isCurrent()) {   // Step A 验证：记录暂停态（pause 属 PlayerManager，可改 session 状态）
+      currentSession.userPaused = true;
+      currentSession.state = PLAY_SESSION_STATE.PAUSED;
+      console.log("[PlaySession]", currentSession.id, currentSession.state, currentSession.targets.length, currentSession.autoplayUnlockPending);
+    }
     $("playBtn").textContent = "▶";
     for (const rec of previewState.visualEls.values()) {
       const v = rec.el.firstElementChild;
