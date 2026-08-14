@@ -1243,7 +1243,10 @@ const PlayerManager = {
     }
 
     // ② 空则直接返回（不建 session、不废旧事务 —— GPT v2.2 钉子3）
-    if (targets.length === 0) { isPlaying = false; return; }
+    // 关键：此处**不能**设 isPlaying=false。gap 期间 _handleCrossSegment(L1885)/playTick重试(L1905)
+    // 也会强制调 play()，若在此关掉 isPlaying，播放头会卡在段尾。正确行为：gap 处不启动任何媒体，
+    // 但保留 isPlaying，让 playTick 沿墙钟自然穿过空白到下一段再建 session。
+    if (targets.length === 0) return;
 
     // ③ 取消旧事务 → id++ → 建新事务（Step A：PlaySession 状态层落地）
     if (currentSession && currentSession.isCurrent()) currentSession.cancel();
