@@ -56,4 +56,6 @@ clip 段字段：`start` / `duration` / `src_start` / `src_end`（**均微秒**�
 
 ## 提交约定
 
-本仓库只含运行必需源码 + 关键文档。所有 `*_backup.html` / `Step1_*` 历史原型 / `_*.py` 调试脚本 / `reference/`（OpenCut 第三方源码）/ `.venv` / 运行时生成物 等均由 `.gitignore` 排除。
+仓库根目录只放**运行必需文件**（`main.py` / `mcp_server.py` / `start.bat` / `工作台v0.8时间轴.html` / `README.md` / `SCHEMA.md` / `.gitignore`）。所有架构设计、审计、决策文档统一放 `docs/`（`architecture/` 设计、`audits/` 核查、`decisions/` 重大决策），**禁止在根目录新建诊断 / 方案 markdown**。
+
+所有 `*_backup.html` / `Step1_*` 历史原型 / `_*.py` 调试脚本 / `reference/`（OpenCut 第三方源码）/ `.venv` / 运行时生成物 等均由 `.gitignore` 排除。
