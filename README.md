@@ -17,27 +17,16 @@
 依赖：`pywebview` + `pyJianYingDraft`（本地 `.venv`，不进 git，需 `pip install`）。
 运行：`start.bat`（必须先起，否则前端拿不到 `MEDIA_BASE`，媒体会被兜底成 `file://` 并被 WebView2 拒绝加载）。
 
-## 当前播放 bug（重点给 Codex 看）
+## 已知问题 / 当前重点
 
-**症状**：多段（中间有空白 gap）时间轴连续播放时——① 播放头视觉跳过空白；② 第二段被提前播放（听到"播两次"观感）；③ 跨段时播放头位置与媒体时钟脱节。
+当前正在把**播放器地基**打稳：多段（含空白 gap）的时间轴连续播放时，偶发"跳过空白""跨段后没声""暂停再播没声"等现象。
 
-**根因（已层层缩小到一处结构性缺陷）**：
+这些问题不是某个函数写错，而是"媒体生命周期归属"没定清楚导致的结构性问题。修复方向是：**播放头永远由时间轴驱动，媒体只被动跟随**——禁止任何媒体时钟反向决定播放头位置。
 
-1. 播放头位置被"正在播放的媒体"反推：`playTick` 每帧用 `_dominantMediaUs()` 把 video/audio 的 `currentTime` 反推成时间轴位置。
-2. 跨段处理触发太早：`_handleCrossSegment()` 在 `us` 到达 **gap 入口（上一段末尾）** 就被 `playTick` 触发，立刻把下一段 `seek` 到 `src_start` 并 `playAllMedia()`。于是下一段音频在空白区就被提前播放。
-3. dominant clock 把它映射回段起点：提前播放的下一段 `currentTime≈0` 被 `_dominantMediaUs` 映射成 `clip2.start`，播放头瞬间跳到下一段起点 → 空白被视觉跳过。
+想深入技术细节或看重构路线，请参阅：
 
-**已做的小范围修复（未触及架构）**：
-
-- **Round D**：seek 屏障 `_waitSeekSettled`（用 `addEventListener` 一次性监听 `seeked`，避免抢占 `onseeked` 单归属属性；防 seek/play 竞态死锁）。
-- **Round D.1**：删除 `playTick` 连续播放期的 gap 瞬移（`playStartUs/playStartWall/us` 三连重置）。
-- **Round D.2 / D.2b**：`_dominantMediaUs` 源范围 validity guard——媒体 `currentTime` 跑出 `rec.seg` 源范围时返回 `null`（治"卡死"，但没治"提前播/跳过"）。
-- **Round D.4**：`_waitSeekSettled` 加 700ms 超时兜底，防后端未连时永久死锁。
-
-**核心未解（需要重构的方向，用户已立架构红线）**：
-
-> **媒体元素只能执行播放，不能决定时间轴位置。**
-> 当前 `_dominantMediaUs` 仍"谁在播谁是老大"。应引入 ClockManager：先选权威轨（用户操作轨 / 主视频轨 / 音频轨 / wall fallback），只信任其 `seg` 时间轴区间**包含当前 `us`** 的媒体。这也解决多轨场景（如 bgm 0-60 跨空白时不能篡夺视频轨时钟权）。
+- `docs/architecture/player-ownership.md` —— 媒体控制权收口方案
+- `docs/audits/playback-state-analysis.md` —— 播放状态机诊断
 
 ## 关键代码位置（`工作台v0.8时间轴.html`）
 
