@@ -1,0 +1,63 @@
+# Python 虚拟环境（不进 git，本地运行用，需自行 pip install）
+.venv/
+
+# Python 缓存
+__pycache__/
+*.pyc
+
+# 本地测试产物（草稿输出、测试视频，不进 git）
+sample_draft/
+*.mp4
+
+# 导入的素材（用户本地文件，不进 git）
+assets/
+
+# 非组件归档（调研文档/开发验证脚本，留档不进 git）
+archive/
+
+# 用户本地设置（默认导出路径等，含本机绝对路径，不进 git）
+settings.json
+
+# 草稿共享状态（人和 AI 共用同一份，运行时生成，不进 git）
+draft_state.json
+
+# MCP 连接状态（运行时由 MCP server 写入，不进 git）
+mcp_state.json
+
+# ===== 第三方开源对照仓库（OpenCut 源码，含其自身 .git，仅本地研究 UX 用，非运行依赖，体积大） =====
+reference/
+opencut-classic-src/
+opencut-bridge/
+
+# ===== 所有版本备份 / 历史原型（非当前运行版本） =====
+*_backup.html
+Step1_*.html
+*.bak
+工作台v0.1*.html
+工作台v0.2*.html
+工作台v0.3*.html
+工作台v0.4*.html
+工作台v0.5*.html
+工作台v0.6*.html
+工作台v0.7*.html
+
+# ===== 临时 / 调试脚本（非运行） =====
+_*.py
+_check_*.py
+_decrypt_*.py
+_parse_*.py
+_inspect_*.py
+_regenerate_*.py
+_test_*.py
+tmp_check.js
+studio_read.py
+repair_current_project.py
+
+# ===== 运行生成物 / 派生目录（非源码） =====
+preview_cache/
+extracted_audio/
+probe/
+koubo_edit/
+
+# 轮次开发确认笔记（内部记录，非运行）
+Step1_*.md

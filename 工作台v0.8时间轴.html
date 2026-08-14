@@ -1,0 +1,3337 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI剪辑工作台 v0.9</title>
+<style>
+  :root {
+    --bg: #1a1a1e;
+    --panel: #232329;
+    --panel-2: #2b2b32;
+    --border: #383842;
+    --text: #e6e6ea;
+    --muted: #9a9aa6;
+    --primary: #3da9ff;
+    --primary-dim: #2b7fc4;
+    --seg-video: #3a5a40;
+    --seg-audio: #4a3a5a;
+    --seg-text: #4a4a2a;
+  --wave: #c9b6f5;        /* 音频波形条颜色（亮紫，衬深紫音频轨） */
+    --track-h: 48px;
+    --label-w: 132px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    font-family: -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+    background: var(--bg); color: var(--text); font-size: 13px;
+    overflow: hidden; user-select: none;
+  }
+  button { font-family: inherit; color: inherit; cursor: pointer; border: none; background: none; }
+
+  .app {
+    display: flex; flex-direction: column;
+    height: 100vh; min-height: 0;
+    overflow: hidden;
+  }
+  .main {
+    flex: 1; min-height: 0; min-width: 0;
+    display: flex; flex-direction: row;
+    overflow: hidden;
+  }
+  .topbar { flex: none; height: 42px; display: flex; align-items: center; gap: 10px; padding: 0 12px;
+    background: var(--panel); border-bottom: 1px solid var(--border); }
+  .topbar .title { font-weight: 600; font-size: 13px; }
+  .topbar .spacer { flex: 1; }
+  .topbar .btn { background: var(--panel-2); border: 1px solid var(--border); padding: 5px 12px;
+    border-radius: 6px; font-size: 12px; }
+  .topbar .btn:hover { background: #34343c; }
+  .topbar .btn.primary { background: var(--primary-dim); border-color: var(--primary); }
+  .mcp-pill { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
+  .mcp-dot { width: 8px; height: 8px; border-radius: 50%; background: #888; }
+  .mcp-dot.on { background: #4ade80; }
+
+  .assets { width: 250px; flex: none; background: var(--panel); border-right: 1px solid var(--border);
+    display: flex; flex-direction: column; overflow: hidden; min-height: 0; }
+  .assets .head { display: flex; align-items: center; gap: 8px; padding: 10px; border-bottom: 1px solid var(--border); }
+  .assets .head .btn { background: var(--primary-dim); border: 1px solid var(--primary); padding: 5px 10px;
+    border-radius: 6px; font-size: 12px; }
+  .tabs { display: flex; gap: 4px; padding: 8px 10px 4px; flex-wrap: wrap; }
+  .tabs .tab { padding: 4px 9px; border-radius: 14px; font-size: 12px; color: var(--muted);
+    background: var(--panel-2); border: 1px solid transparent; }
+  .tabs .tab.active { color: var(--text); background: #34343c; border-color: var(--border); }
+  .media-list-wrapper { flex: 1; overflow-y: auto; min-height: 0; overscroll-behavior: contain; }
+  .media-list-wrapper::-webkit-scrollbar { width: 6px; }
+  .media-list-wrapper::-webkit-scrollbar-track { background: transparent; }
+  .media-list-wrapper::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+  .media-list-wrapper::-webkit-scrollbar-thumb:hover { background: var(--muted); }
+  .media-list { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; padding: 8px 10px; align-content: start; }
+  .media-card { background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px;
+    overflow: hidden; cursor: grab; position: relative; }
+  .media-card:active { cursor: grabbing; }
+  .media-card .thumb { height: 56px; background: #15151a center/cover no-repeat; display: flex;
+    align-items: center; justify-content: center; color: var(--muted); font-size: 22px; }
+  .media-card .name { padding: 4px 6px; font-size: 11px; color: var(--muted);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .media-card .add { position: absolute; bottom: 4px; right: 4px; width: 20px; height: 20px;
+    border-radius: 50%; background: rgba(0,0,0,.55); color: #fff; font-size: 14px; line-height: 20px;
+    text-align: center; opacity: 0; transition: opacity .12s; pointer-events: none; }
+  .media-card:hover .add { opacity: 1; pointer-events: auto; }
+  .drag-ghost { position: fixed; z-index: 9999; width: 80px; height: 80px; pointer-events: none;
+    border-radius: 6px; overflow: hidden; box-shadow: 0 6px 24px rgba(0,0,0,.55); border: 2px solid var(--primary);
+    background: #15151a center/cover no-repeat; display: flex; align-items: center; justify-content: center; }
+  .drop-newtrack-hint { position: absolute; left: 50%; top: 50%; transform: translate(-50%,-50%);
+    background: rgba(0,0,0,.7); color: #fff; padding: 4px 10px; border-radius: 12px; font-size: 11px;
+    pointer-events: none; z-index: 10; white-space: nowrap; display: none; }
+
+  .preview { flex: 1; min-height: 0; min-width: 0; background: #0e0e10; display: flex; flex-direction: column; overflow: hidden; }
+  .preview .stage { flex: 1; display: flex; align-items: center; justify-content: center; position: relative; overflow: hidden; }
+  .preview .preview-stack { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; }
+  .preview .preview-stack .vis-layer,
+  .preview .preview-stack video,
+  .preview .preview-stack img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; background: #000; }
+  .preview .preview-stack .text-layer { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+    font-size: 22px; color: #fff; text-shadow: 0 1px 4px rgba(0,0,0,0.8); pointer-events: none; }
+  .preview .placeholder { color: var(--muted); font-size: 13px; }
+  .preview .controls { display: flex; align-items: center; gap: 12px; padding: 8px 14px;
+    border-top: 1px solid var(--border); background: var(--panel); }
+  .preview .controls .play,
+  .preview .controls .mute { width: 30px; height: 30px; border-radius: 50%; background: var(--panel-2);
+    border: 1px solid var(--border); font-size: 13px; line-height: 1; }
+  .preview .controls .play:hover,
+  .preview .controls .mute:hover { background: #34343c; }
+  .preview .controls .mute.muted { background: #ff4d4f22; border-color: #ff4d4f55; }
+  .preview .tc { font-variant-numeric: tabular-nums; color: var(--muted); font-size: 12px; min-width: 96px; }
+
+  .skill { width: 220px; flex: none; background: var(--panel); border-left: 1px solid var(--border);
+    display: flex; flex-direction: column; overflow: hidden; min-height: 0; }
+  .skill .head { padding: 10px; border-bottom: 1px solid var(--border); font-weight: 600; font-size: 12px; }
+  .skill .body { flex: 1; overflow-y: auto; padding: 12px; color: var(--muted); font-size: 12px; line-height: 1.6; }
+  .skill .skill-item { background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px;
+    padding: 10px; margin-bottom: 8px; }
+  .skill .skill-item .t { color: var(--text); font-size: 12px; font-weight: 600; margin-bottom: 3px; }
+  .skill .skill-item .d { color: var(--muted); font-size: 11px; }
+  .skill .empty { text-align: center; padding: 30px 12px; color: var(--muted); }
+
+  /* 关键帧面板（对齐 OpenCut 属性面板 keyframe 轨道） */
+  .kfpanel { width: 250px; flex: none; background: var(--panel); border-left: 1px solid var(--border); display: flex; flex-direction: column; }
+  .kfpanel .head { padding: 10px; border-bottom: 1px solid var(--border); font-weight: 600; font-size: 12px; display: flex; align-items: center; gap: 6px; }
+  .kfpanel .head .seg { color: var(--muted); font-weight: 400; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+  .kfpanel .body { flex: 1; overflow-y: auto; padding: 10px; }
+  .kfpanel .empty { text-align: center; color: var(--muted); font-size: 11px; padding: 24px 8px; line-height: 1.6; }
+  .kf-row { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; }
+  .kf-row .tog { width: 22px; height: 22px; border-radius: 5px; border: 1px solid var(--border); background: var(--panel-2); color: var(--muted); cursor: pointer; flex: none; font-size: 11px; line-height: 1; }
+  .kf-row .tog.on { background: var(--primary); color: #fff; border-color: var(--primary); }
+  .kf-row .lab { width: 50px; font-size: 11px; color: var(--text); flex: none; }
+  .kf-row .val { width: 52px; background: var(--panel-2); border: 1px solid var(--border); border-radius: 4px; color: var(--text); font-size: 11px; padding: 2px 4px; }
+  .kf-row .add { flex: 1; font-size: 10px; padding: 3px 0; border-radius: 4px; border: 1px solid var(--border); background: var(--panel-2); color: var(--text); cursor: pointer; }
+  .kf-row .add:hover { border-color: var(--primary); }
+  .kf-graph { position: relative; height: 70px; margin: 8px 0; background: var(--panel-2); border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+  .kf-graph .kf-axis { position: absolute; left: 0; right: 0; top: 50%; border-top: 1px dashed var(--border); }
+  .kf-graph .kf-diamond { position: absolute; width: 11px; height: 11px; background: var(--primary); transform: translate(-50%, -50%) rotate(45deg); cursor: pointer; border-radius: 2px; }
+  .kf-graph .kf-diamond.sel { background: #ffd24d; box-shadow: 0 0 0 2px rgba(255, 210, 77, .5); }
+  .kf-sel { background: var(--panel-2); border: 1px solid var(--border); border-radius: 6px; padding: 8px; font-size: 11px; color: var(--text); }
+  .kf-sel .hd { font-weight: 600; margin-bottom: 4px; }
+  .kf-sel .row { display: flex; align-items: center; gap: 6px; margin-top: 6px; }
+  .kf-sel input { width: 72px; background: var(--panel); border: 1px solid var(--border); color: var(--text); border-radius: 4px; padding: 2px 4px; }
+  .kf-sel button { font-size: 11px; padding: 2px 8px; border-radius: 4px; border: 1px solid var(--border); background: var(--panel); color: var(--text); cursor: pointer; }
+  .kf-sel .del { color: #ff6b6b; }
+  .kf-sel .del:hover { border-color: #ff6b6b; }
+  .kf-hint { font-size: 10px; color: var(--muted); margin-top: 6px; line-height: 1.5; }
+
+  .timeline { flex: none; height: var(--bottom-h, 300px); min-height: 0; background: var(--panel); border-top: 1px solid var(--border);
+    display: flex; flex-direction: column; overflow: hidden; }
+  .tl-toolbar { display: flex; align-items: center; gap: 6px; padding: 6px 10px; border-bottom: 1px solid var(--border); }
+  .tl-toolbar .tool { width: 30px; height: 30px; border-radius: 6px; background: var(--panel-2);
+    border: 1px solid var(--border); font-size: 14px; display: flex; align-items: center; justify-content: center; }
+  .tl-toolbar .tool:hover { background: #34343c; }
+  .tl-toolbar .tool.active { color: var(--primary); border-color: var(--primary); }
+  .tl-toolbar .tool:disabled { opacity: .35; cursor: not-allowed; }
+  .tl-toolbar .spacer { flex: 1; }
+  .tl-toolbar .zoom { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; }
+  .tl-toolbar .zoom input { width: 110px; }
+
+  /* 上半区（素材/预览/Skill）↔ 下半区（时间轴）之间的高度分配分隔条，对齐 OpenCut 的横向 resizable handle */
+  .split { flex: none; width: 100%; height: 6px; cursor: row-resize; position: relative; z-index: 7;
+    background: var(--panel); border-top: 1px solid var(--border); border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: center; }
+  .split::after { content: ""; width: 46px; height: 3px; border-radius: 2px; background: var(--border); transition: background .12s; }
+  .split:hover::after, .split.dragging::after { background: var(--primary); }
+
+  .tl-main { flex: 1; display: flex; overflow: hidden; }
+  .tl-labels { width: var(--label-w); flex: none; background: var(--panel-2); border-right: 1px solid var(--border);
+    overflow-y: auto; overflow-x: hidden; scrollbar-width: none; -ms-overflow-style: none; }
+  .tl-labels::-webkit-scrollbar { display: none; }
+  .tl-labels .ruler-spacer { height: 28px; border-bottom: 1px solid var(--border); flex: none; }
+  .tl-labels .scrollbar-spacer { flex: none; background: transparent; }
+  .track-label { height: var(--track-h); display: flex; align-items: center; gap: 6px; padding: 0 8px;
+    border-bottom: 1px solid var(--border); }
+  .track-label .name { flex: 1; font-size: 12px; color: var(--text); white-space: nowrap; overflow: hidden; }
+  .track-label .icon { width: 20px; height: 20px; border-radius: 4px; display: flex; align-items: center;
+    justify-content: center; color: var(--muted); font-size: 12px; cursor: pointer; }
+  .track-label .icon:hover { background: #34343c; color: var(--text); }
+  .track-label .icon.off { color: #ff4d4f; opacity: .75; }
+
+  .tl-scroll { flex: 1; overflow: auto; position: relative; }
+  .tl-content { position: relative; min-width: 100%; }
+  .ruler { height: 28px; position: sticky; top: 0; background: var(--panel); border-bottom: 1px solid var(--border);
+    z-index: 5; cursor: pointer; }
+  .ruler .tick { position: absolute; top: 0; bottom: 0; border-left: 1px solid var(--border); }
+  .ruler .tick span { position: absolute; top: 6px; left: 4px; font-size: 10px; color: var(--muted); }
+  .track { height: var(--track-h); border-bottom: 1px solid var(--border); position: relative; }
+  .track.track-hidden { opacity: .45; }
+  .track.track-muted.audio .seg { opacity: .55; }
+  .track .empty-hint { position: absolute; inset: 0; border: 1px dashed var(--border); border-radius: 4px; margin: 4px; }
+
+  .seg { position: absolute; top: 4px; bottom: 4px; border-radius: 4px; overflow: hidden;
+    box-shadow: 0 0 0 1.5px transparent; cursor: grab; }
+  .seg.sel { box-shadow: 0 0 0 2.5px var(--primary); }
+  .seg.dragging { opacity: .85; cursor: grabbing; pointer-events: none; }
+  .track.drop-target { outline: 2px dashed var(--accent); outline-offset: -2px; background: rgba(64,150,255,.08); }
+  .track.drop-preview { outline: 2px dashed var(--accent); outline-offset: -2px; background: rgba(64,150,255,.14); }
+  .seg .fill { position: absolute; inset: 0; background-position: left center; pointer-events: none; }
+  .seg canvas.fill { pointer-events: none; display: block; position: absolute; inset: 0; width: 100%; height: 100%; }
+  .seg .hdr { position: absolute; top: 0; left: 0; right: 0; height: 18px; display: flex; align-items: center;
+    padding: 0 6px; font-size: 10px; color: rgba(255,255,255,.8); background: linear-gradient(to bottom, rgba(0,0,0,.35), transparent);
+    pointer-events: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .seg .handle { position: absolute; top: 0; bottom: 0; width: 7px; cursor: ew-resize; }
+  .seg .handle.l { left: 0; } .seg .handle.r { right: 0; }
+  .seg .handle:hover { background: rgba(61,169,255,.4); }
+  /* 变速倍率徽章：段上显示当前 speed（对齐 OpenCut speed 标签），speed=1 不显示 */
+  .seg .speed-badge { position: absolute; right: 4px; bottom: 2px; font-size: 9px; line-height: 1;
+    background: rgba(0,0,0,.55); color: #fff; padding: 1px 3px; border-radius: 3px; pointer-events: none;
+    z-index: 4; }
+
+  .playhead { position: absolute; top: 0; bottom: 0; width: 2px; background: #ff4d4f; z-index: 8; pointer-events: auto; cursor: col-resize; }
+  /* 透明命中扩展：把 2px 红线变成 ~12px 可点区（对齐 OpenCut 整线可拖；WebView2 下细线难命中） */
+  .playhead::after { content: ""; position: absolute; top: 0; bottom: 0; left: -6px; right: -6px; pointer-events: auto; }
+  .playhead::before { content: ""; position: absolute; top: 0; left: -5px; border: 6px solid transparent; border-top-color: #ff4d4f; pointer-events: none; }
+  /* 顶部可拖拽帽（对齐 OpenCut TimelinePlayhead 的拖拽圆点）；position:sticky 钉在视口顶部，竖向滚动后仍能抓到 */
+  .playhead-handle { position: sticky; top: 2px; left: 50%; margin-left: -8px;
+    width: 17px; height: 17px; border-radius: 50%; background: #ff4d4f; border: 2px solid rgba(255,255,255,.7);
+    cursor: col-resize; pointer-events: auto; z-index: 11; box-shadow: 0 1px 4px rgba(0,0,0,.5); }
+  .playhead-handle:hover, .playhead-handle.dragging { background: #ff6b6d; border-color: #fff; }
+  .drop-line { position: absolute; top: 28px; bottom: 0; width: 2px; background: var(--accent); z-index: 7; pointer-events: none; display: none; }
+  /* 吸附参考线：拖拽/拖播放头吸附命中时，在吸附点位置贯穿时间轴画一条蓝线（对齐 OpenCut SnapGuides vertical） */
+  .snap-guide { position: absolute; top: 0; bottom: 0; width: 2px; background: #4096ff; z-index: 7; pointer-events: none; display: none; box-shadow: 0 0 6px rgba(64,150,255,.85); }
+  .ruler .bm-mark { position: absolute; top: 0; width: 0; height: 15px; border-left: 2px solid #ff4d4f; transform: translateX(-1px); cursor: pointer; pointer-events: auto; z-index: 6; }
+  .ruler .bm-mark::before { content: ""; position: absolute; top: 0; left: -4px; border: 5px solid transparent; border-top-color: #ff4d4f; }
+  /* 框选覆盖层 */
+  .sel-box { position: absolute; border: 1px dashed #faad14; background: rgba(250,173,20,.12); z-index: 6; pointer-events: none; display: none; }
+  /* 整组缩放包围盒：跨选中段时间轴跨度，含左右把手 */
+  .group-box { position: absolute; border: 1px solid #faad14; z-index: 6; pointer-events: none; display: none; }
+  .group-box .gh { position: absolute; top: 0; bottom: 0; width: 8px; background: #faad14; cursor: ew-resize; pointer-events: auto; }
+  .group-box .gh.l { left: -4px; } .group-box .gh.r { right: -4px; }
+  .media-card.sel { border-color: var(--primary); box-shadow: 0 0 0 1.5px var(--primary); }
+  .media-card .del { position: absolute; top: 4px; right: 28px; width: 20px; height: 20px;
+    border-radius: 50%; background: rgba(0,0,0,.55); color: #fff; font-size: 13px; line-height: 20px;
+    text-align: center; opacity: 0; transition: opacity .12s; cursor: pointer; pointer-events: none; }
+  .media-card:hover .del { opacity: 1; pointer-events: auto; }
+  .assets.drag-over { outline: 2px dashed var(--accent); outline-offset: -3px; background: rgba(64,150,255,.06); }
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="topbar">
+    <span class="title">AI剪辑工作台 v0.9</span>
+    <button class="btn" id="undoBtn" title="撤销">↶</button>
+    <button class="btn" id="redoBtn" title="重做">↷</button>
+    <span class="spacer"></span>
+    <span class="mcp-pill"><span class="mcp-dot" id="mcpDot"></span><span id="mcpName">未连接</span></span>
+    <button class="btn" id="skillBtn">Skill</button>
+    <button class="btn primary" id="exportBtn">导出剪映草稿</button>
+  </div>
+
+  <div class="main">
+    <div class="assets">
+      <div class="head"><button class="btn" id="importBtn">+ 导入素材</button><button class="btn" id="importJyBtn">导入剪映</button></div>
+      <div class="tabs" id="mediaTabs">
+        <div class="tab active" data-f="all">全部</div>
+        <div class="tab" data-f="video">视频</div>
+        <div class="tab" data-f="audio">音频</div>
+        <div class="tab" data-f="image">图片</div>
+        <div class="tab" data-f="text">文本</div>
+      </div>
+      <div class="media-list-wrapper">
+        <div class="media-list" id="mediaList"></div>
+      </div>
+    </div>
+
+    <div class="preview">
+      <div class="stage" id="stage">
+        <div id="previewStack" class="preview-stack">
+        <svg id="maskDefs" width="0" height="0" style="position:absolute;left:0;top:0;overflow:visible"><defs id="maskDefsDefs"></defs></svg>
+        <svg id="maskOverlay" class="mask-overlay"></svg>
+      </div>
+        <div class="placeholder" id="previewPlaceholder">导入素材并拖入时间轴后，点标尺定位预览</div>
+      </div>
+      <div id="audioPool" style="display:none;position:absolute;width:0;height:0;overflow:hidden;"></div>
+      <div class="controls">
+        <button class="play" id="playBtn">▶</button>
+        <button class="mute" id="muteBtn" title="静音/取消静音">🔊</button>
+        <span class="tc" id="timecode">00:00.000 / 00:00.000</span>
+      </div>
+      <div id="mediaStatus" style="font-size:11px;color:#ffb84d;padding:2px 10px 6px;min-height:14px;line-height:1.4;word-break:break-all;"></div>
+    </div>
+
+    <div class="tools" id="toolsPanel">
+      <div class="tools-rail" id="toolsRail">
+        <button class="rail-btn active" data-tab="kf" title="关键帧">🎞</button>
+        <button class="rail-btn" data-tab="mask" title="遮罩">🎭</button>
+        <button class="rail-btn" data-tab="sub" title="字幕">💬</button>
+        <button class="rail-btn" data-tab="sticker" title="贴纸">⭐</button>
+      </div>
+      <div class="tools-content">
+    <div class="kfpanel" id="kfPanel">
+      <div class="head">关键帧 <span class="seg" id="kfSegName"></span></div>
+      <div class="body" id="kfBody">
+        <div class="empty" id="kfEmpty">选中视频/音频段后，可在此打关键帧做动画</div>
+        <div id="kfRows" style="display:none"></div>
+        <div class="kf-graph" id="kfGraph" style="display:none"><div class="kf-axis"></div></div>
+        <div class="kf-sel" id="kfSel" style="display:none"></div>
+        <div class="kf-hint" id="kfHint" style="display:none">用法：① 点亮属性左侧 ◆ 开启动画 → ② 拖动播放头到目标时间 → ③ 在输入框填值并点「加关键帧」。曲线默认线性，可改台阶(hold)。</div>
+      </div>
+    </div>
+
+    <div class="maskpanel" id="maskPanel">
+      <div class="head">遮罩 <span class="seg" id="maskSegName"></span></div>
+      <div class="body" id="maskBody">
+        <div class="empty" id="maskEmpty">选中视频/图片段可加遮罩（矩形/椭圆/星形/爱心/菱形/线性/电影黑边）</div>
+        <div id="maskShapes" style="display:none" class="mask-shapes"></div>
+        <div id="maskCtrls" style="display:none" class="mask-ctrls"></div>
+      </div>
+    </div>
+
+    <div class="subpanel" id="subPanel">
+      <div class="head">字幕生成 <span class="seg" id="subSegName"></span></div>
+      <div class="body" id="subBody">
+        <div class="empty" id="subEmpty">自动从「选中的视频/音频」或「主视频轨」识别语音生成字幕（本地 Whisper，离线可用）</div>
+        <div id="subCtrls" style="display:none">
+          <div class="row"><label>来源</label><span id="subSource" class="src">—</span></div>
+          <div class="row">
+            <label>语言</label>
+            <select id="subLang">
+              <option value="auto">自动检测</option>
+              <option value="zh">中文</option>
+              <option value="en">英文</option>
+              <option value="ja">日文</option>
+              <option value="ko">韩文</option>
+              <option value="fr">法文</option>
+              <option value="de">德文</option>
+              <option value="es">西文</option>
+              <option value="ru">俄文</option>
+            </select>
+          </div>
+          <div class="row">
+            <label>模型</label>
+            <select id="subModel">
+              <option value="tiny">tiny（最快/最糙）</option>
+              <option value="small" selected>small（推荐）</option>
+              <option value="base">base（更准/更慢）</option>
+            </select>
+          </div>
+          <button id="subGen" class="gen">▶ 生成字幕</button>
+          <div class="row file"><label>导入</label><input type="file" id="subSrtFile" accept=".srt,.ass,.vtt,text/plain"></div>
+          <div class="row"><label>字号</label><input type="range" id="subFont" min="6" max="20" step="1" value="10"><span class="val" id="subFontVal">10</span></div>
+          <label class="chk"><input type="checkbox" id="subBg"> 黑底描边背景</label>
+          <div class="status" id="subStatus"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="stickerpanel" id="stickerPanel">
+      <div class="head">贴纸 <span class="seg" id="stSegName"></span></div>
+      <div class="body" id="stickerBody">
+        <div class="empty" id="stickerEmpty">贴纸 = 本地透明图片叠加（PNG/WebP），离线可用。点「选择图片」→「添加到播放头」。</div>
+        <div id="stickerCtrls" style="display:none">
+          <button id="stAddTrack" class="gen" style="background:#3a3f4a">＋ 新建贴纸轨</button>
+          <div class="sub">添加贴纸</div>
+          <div class="row">
+            <label>图片</label>
+            <button id="stPick" class="gen" style="background:#2a2e37">选择图片…</button>
+          </div>
+          <div class="row"><label>已选</label><span id="stPickName" class="src" style="flex:1;color:var(--fg);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">未选择</span></div>
+          <div class="row">
+            <label>时长</label>
+            <input type="number" id="stDur" min="0.1" step="0.1" value="3" style="width:70px"> <span style="color:var(--fg2)">秒</span>
+          </div>
+          <button id="stAddAtPlayhead" class="gen">▶ 添加到播放头</button>
+          <div class="status" id="stStatus"></div>
+
+          <div class="sub">选中贴纸 · 变换</div>
+          <div class="seg-name" id="stSelName" style="display:none"></div>
+          <div id="stTf" style="display:none">
+            <div class="tf"><label>水平</label><input type="range" id="stX" min="-1" max="1" step="0.01" value="0"><span class="val" id="stXV">0</span></div>
+            <div class="tf"><label>垂直</label><input type="range" id="stY" min="-1" max="1" step="0.01" value="0"><span class="val" id="stYV">0</span></div>
+            <div class="tf"><label>缩放</label><input type="range" id="stScale" min="0.1" max="4" step="0.01" value="1"><span class="val" id="stScaleV">1</span></div>
+            <div class="tf"><label>旋转</label><input type="range" id="stRot" min="-180" max="180" step="1" value="0"><span class="val" id="stRotV">0</span></div>
+            <div class="tf"><label>透明</label><input type="range" id="stOp" min="0" max="1" step="0.01" value="1"><span class="val" id="stOpV">1</span></div>
+            <label class="chk"><input type="checkbox" id="stFlipH"> 水平翻转</label>
+            <label class="chk"><input type="checkbox" id="stFlipV"> 垂直翻转</label>
+          </div>
+        </div>
+      </div>
+    </div>
+      </div>
+    </div>
+
+    <style>
+    .maskpanel { border-top:1px solid var(--bd); }
+    .maskpanel .head { font-size:12px; padding:6px 8px; color:var(--fg2); background:#1c1f26; }
+    .maskpanel .body { padding:8px; }
+    .subpanel { border-top:1px solid var(--bd); }
+    .subpanel .head { font-size:12px; padding:6px 8px; color:var(--fg2); background:#1c1f26; }
+    .subpanel .body { padding:8px; }
+    .subpanel .row { display:flex; align-items:center; gap:6px; margin:5px 0; font-size:12px; }
+    .subpanel .row label { width:34px; color:var(--fg2); flex:none; }
+    .subpanel .row select, .subpanel .row input[type=file] { flex:1; background:#2a2e37; color:var(--fg); border:1px solid var(--bd); border-radius:4px; padding:3px; font-size:12px; }
+    .subpanel .row .src { color:var(--fg); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1; }
+    .subpanel .row .val { width:24px; text-align:right; color:var(--fg); font-variant-numeric:tabular-nums; }
+    .subpanel .gen { margin-top:6px; width:100%; padding:6px; background:#1f6feb; color:#fff; border:none; border-radius:4px; cursor:pointer; font-size:13px; }
+    .subpanel .gen:hover { background:#2a7dfb; }
+    .subpanel .gen:disabled { background:#3a3f4a; color:#888; cursor:default; }
+    .subpanel .chk { display:flex; align-items:center; gap:6px; margin:6px 0; font-size:12px; color:var(--fg2); }
+    .subpanel .status { margin-top:6px; font-size:11px; color:#9fb4c8; line-height:1.4; min-height:14px; }
+    .asr-loading { position:fixed; inset:0; background:rgba(0,0,0,.55); display:flex; align-items:center; justify-content:center; z-index:9999; color:#fff; font-size:14px; text-align:center; }
+    .asr-loading .box { background:#1c1f26; border:1px solid var(--bd); border-radius:8px; padding:18px 22px; max-width:320px; line-height:1.6; }
+    .mask-shapes { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:8px; }
+    .mask-shapes button { font-size:12px; padding:4px 8px; background:#2a2e37; color:var(--fg); border:1px solid var(--bd); border-radius:4px; cursor:pointer; }
+    .mask-shapes button:hover { background:#343a45; }
+    .mask-ctrls .row { display:flex; align-items:center; gap:6px; margin:4px 0; font-size:12px; }
+    .mask-ctrls .row label { width:42px; color:var(--fg2); flex:none; }
+    .mask-ctrls .row input[type=range] { flex:1; }
+    .mask-ctrls .row .val { width:42px; text-align:right; color:var(--fg); font-variant-numeric:tabular-nums; }
+    .mask-ctrls .chk { display:flex; align-items:center; gap:6px; margin:6px 0; font-size:12px; color:var(--fg2); }
+    .mask-ctrls .rm { margin-top:8px; width:100%; padding:5px; background:#3a2326; color:#ff9b9b; border:1px solid #5a2a2e; border-radius:4px; cursor:pointer; }
+    .mask-ctrls .rm:hover { background:#4a2a2e; }
+    .mask-ctrls .expnote { font-size:11px; color:#caa56b; margin-top:6px; line-height:1.4; }
+    .mask-overlay { position:absolute; inset:0; width:100%; height:100%; z-index:40; pointer-events:none; overflow:visible; }
+    .mask-overlay .mhandle { fill:#fff; stroke:#222; stroke-width:1.2; cursor:move; pointer-events:auto; }
+    .mask-overlay .mhandle.rot { fill:#ffd166; }
+    .mask-overlay .mhandle.scale { fill:#06d6a0; }
+    .mask-overlay .mbox { fill:none; stroke:#fff; stroke-width:1.4; stroke-dasharray:5 4; pointer-events:none; }
+    .mask-overlay .mrotline { stroke:#ffd166; stroke-width:1.2; pointer-events:none; }
+    .stickerpanel { border-top:1px solid var(--bd); }
+    .stickerpanel .head { font-size:12px; padding:6px 8px; color:var(--fg2); background:#1c1f26; }
+    .stickerpanel .body { padding:8px; }
+    .stickerpanel .empty { font-size:12px; color:#8a93a0; line-height:1.5; }
+    .stickerpanel .row { display:flex; align-items:center; gap:6px; margin:5px 0; font-size:12px; }
+    .stickerpanel .row label { width:40px; color:var(--fg2); flex:none; }
+    .stickerpanel .row input[type=number], .stickerpanel .row select { flex:1; background:#2a2e37; color:var(--fg); border:1px solid var(--bd); border-radius:4px; padding:3px; font-size:12px; }
+    .stickerpanel .gen { margin-top:6px; width:100%; padding:6px; background:#1f6feb; color:#fff; border:none; border-radius:4px; cursor:pointer; font-size:13px; }
+    .stickerpanel .gen:hover { background:#2a7dfb; }
+    .stickerpanel .gen:disabled { background:#3a3f4a; color:#888; cursor:default; }
+    .stickerpanel .chk { display:flex; align-items:center; gap:6px; margin:6px 0; font-size:12px; color:var(--fg2); }
+    .stickerpanel .status { margin-top:6px; font-size:11px; color:#9fb4c8; line-height:1.4; min-height:14px; }
+    .stickerpanel .sub { font-size:11px; color:#caa56b; margin:8px 0 2px; }
+    .stickerpanel .seg-name { font-size:12px; color:var(--fg); word-break:break-all; }
+    .stickerpanel .tf { display:flex; align-items:center; gap:6px; margin:4px 0; font-size:12px; }
+    .stickerpanel .tf label { width:52px; color:var(--fg2); flex:none; }
+    .stickerpanel .tf input[type=range] { flex:1; }
+    .stickerpanel .tf .val { width:40px; text-align:right; color:var(--fg); font-variant-numeric:tabular-nums; }
+    /* 时间轴贴纸段：缩略图 + 贴纸角标 */
+    .seg.sticker .fill { background-size:contain; background-position:center; background-repeat:no-repeat; }
+    .seg.sticker .badge { position:absolute; top:2px; right:3px; font-size:9px; background:#7b5cff; color:#fff; border-radius:3px; padding:0 3px; line-height:14px; }
+    /* 预览贴纸层 */
+    .sticker-layer { position:absolute; left:50%; top:50%; transform-origin:center center; pointer-events:none; z-index:520; will-change:transform, opacity; }
+    .sticker-layer img { width:100%; height:100%; display:block; }
+    /* 右侧工具栏：单栏 + 竖排图标页签（对齐 OpenCut PropertiesPanel） */
+    .tools { width:268px; flex:none; display:flex; flex-direction:row; background:var(--panel); border-left:1px solid var(--border); overflow:hidden; min-height:0; }
+    .tools-rail { width:46px; flex:none; display:flex; flex-direction:column; gap:6px; padding:10px 5px; background:#181b21; border-right:1px solid var(--border); }
+    .rail-btn { width:36px; height:36px; border-radius:8px; background:transparent; border:1px solid transparent; color:var(--muted); font-size:17px; cursor:pointer; display:flex; align-items:center; justify-content:center; }
+    .rail-btn:hover { background:#262932; color:var(--fg); }
+    .rail-btn.active { background:#34343c; color:var(--text); border-color:var(--border); }
+    .tools-content { flex:1; min-width:0; overflow-y:auto; }
+    .tools-content .kfpanel, .tools-content .maskpanel, .tools-content .subpanel, .tools-content .stickerpanel { display:none; border-top:none; }
+    .tools-content .panel-active { display:block; }
+    /* Skill 弹窗（顶栏按钮触发） */
+    .modal-mask { position:fixed; inset:0; background:rgba(0,0,0,.5); display:flex; align-items:center; justify-content:center; z-index:9000; }
+    .modal { width:420px; max-width:92vw; max-height:80vh; background:var(--panel); border:1px solid var(--border); border-radius:12px; display:flex; flex-direction:column; overflow:hidden; }
+    .modal-head { display:flex; align-items:center; justify-content:space-between; padding:12px 14px; border-bottom:1px solid var(--border); font-weight:600; font-size:13px; }
+    .modal-head .x { width:26px; height:26px; border-radius:6px; color:var(--muted); font-size:16px; }
+    .modal-head .x:hover { background:var(--panel-2); color:var(--text); }
+    .modal-body { padding:14px; overflow-y:auto; font-size:12px; color:var(--muted); line-height:1.6; }
+    </style>
+  </div>
+
+  <div class="modal-mask" id="skillModal" style="display:none">
+    <div class="modal">
+      <div class="modal-head">Skill 区 <button class="x" id="skillClose" title="关闭">×</button></div>
+      <div class="modal-body" id="skillModalBody">暂未接入 Skill<br><br>选中素材后，这里会列出可一键执行的剪辑 Skill（去水印 / 自动字幕 / 智能配乐 等）。当前由 MCP 连接后填充。</div>
+    </div>
+  </div>
+
+  <div class="split" id="vsplit" title="拖拽调整上下区域高度"></div>
+
+  <div class="timeline" id="timeline">
+    <div class="tl-toolbar">
+      <button class="tool" id="splitBtn" title="分割 (S / Ctrl+B)">✂</button>
+      <button class="tool" id="splitLeftBtn" title="分割保留左侧 (Q)">◀✂</button>
+      <button class="tool" id="splitRightBtn" title="分割保留右侧 (W)">✂▶</button>
+      <button class="tool" id="srcAudioBtn" title="提取原声">🔗</button>
+      <button class="tool" id="speedBtn" title="变速">⏩</button>
+      <button class="tool" id="dupBtn" title="复制">⧉</button>
+      <button class="tool" id="delBtn" title="删除 (Del)">🗑</button>
+      <button class="tool active" id="snapBtn" title="吸附（阶段3接入）">⌁</button>
+      <button class="tool" id="rippleBtn" title="波纹编辑 (R)">≈</button>
+      <span class="spacer"></span>
+      <span class="zoom">
+        <button class="tool" id="zoomOut">−</button>
+        <input type="range" id="zoomRange" min="20" max="600" value="120">
+        <button class="tool" id="zoomIn">+</button>
+      </span>
+    </div>
+    <div class="tl-main" id="tlMain">
+      <div class="tl-labels" id="tlLabels">
+        <div class="ruler-spacer"></div>
+        <div class="scrollbar-spacer" id="labelScrollbarSpacer"></div>
+      </div>
+      <div class="tl-scroll" id="tlScroll">
+        <div class="tl-content" id="tlContent">
+          <div class="ruler" id="ruler"></div>
+          <div class="playhead" id="playhead" style="left:0"><div class="playhead-handle" id="playheadHandle"></div></div>
+          <div class="drop-line" id="dropLine" style="display:none"></div>
+          <div class="drop-newtrack-hint" id="dropNewTrackHint" style="display:none">松开：新建轨道</div>
+          <div class="snap-guide" id="snapGuide" style="display:none"></div>
+          <div class="sel-box" id="selBox" style="display:none"></div>
+          <div class="group-box" id="groupBox" style="display:none"><div class="gh l" id="groupHandleL"></div><div class="gh r" id="groupHandleR"></div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+"use strict";
+
+/* === Round D 探针：临时页面日志面板（无需 DevTools）=== */
+(function(){
+  const panel = document.createElement("div");
+  panel.id = "_probeLogPanel";
+  panel.style.cssText = "position:fixed;right:8px;top:8px;width:420px;max-height:45vh;overflow-y:auto;background:rgba(0,0,0,.85);color:#0f0;font:11px/1.45 monospace;z-index:99999;padding:8px;border-radius:4px;box-shadow:0 2px 10px rgba(0,0,0,.5);";
+  const title = document.createElement("div");
+  title.textContent = "PROBE LOG (最近50条)";
+  title.style.cssText = "color:#ff0;border-bottom:1px solid #555;margin-bottom:4px;padding-bottom:2px;";
+  panel.appendChild(title);
+  (document.body || document.documentElement).appendChild(panel);
+
+  const MAX = 50, lines = [];
+  function pushRaw(args, color) {
+    const text = Array.from(args).map(a => {
+      try { return (typeof a === "object") ? JSON.stringify(a) : String(a); }
+      catch(e){ return String(a); }
+    }).join(" ");
+    const div = document.createElement("div");
+    div.style.color = color || "#0f0";
+    div.style.borderBottom = "1px solid #222";
+    div.style.padding = "1px 0";
+    div.textContent = `[${(performance.now()/1000).toFixed(2)}] ${text}`;
+    panel.appendChild(div);
+    lines.push(div);
+    while (lines.length > MAX) { const old = lines.shift(); if (old && old.parentNode) old.parentNode.removeChild(old); }
+    panel.scrollTop = panel.scrollHeight;
+  }
+
+  ["log","warn","error"].forEach(method => {
+    const orig = console[method];
+    console[method] = function(...args){ orig.apply(console, args); pushRaw(args, method==="error"?"#f55":method==="warn"?"#ff0":"#0f0"); };
+  });
+})();
+/* === 探针面板结束 === */
+
+/* 可见报错层：任何未捕获异常都浮在顶部红条，避免“静默死”难排查（WebView2 下看不到控制台时尤其有用） */
+let _autoplayFatal = false;   // 当前红条是否由 autoplay 软提醒导致（可被用户手动取消静音消除）
+function showFatal(t) {
+  let b = document.getElementById("fatalBar");
+  if (!b) {
+    b = document.createElement("div"); b.id = "fatalBar";
+    b.style.cssText = "position:fixed;left:0;right:0;top:0;z-index:99999;background:#c0392b;color:#fff;font:12px/1.5 monospace;padding:6px 10px;white-space:pre-wrap;max-height:40vh;overflow:auto;box-shadow:0 2px 8px rgba(0,0,0,.5)";
+    (document.body || document.documentElement).appendChild(b);
+  }
+  b.textContent = "⚠ 运行时错误：\n" + t + "\n（把这段红字截图发我即可定位）";
+  if (t && t.indexOf("autoplay 被拒") >= 0) _autoplayFatal = true;
+}
+function clearAutoplayFatal() {
+  if (!_autoplayFatal) return;
+  const b = document.getElementById("fatalBar");
+  if (b) b.remove();
+  _autoplayFatal = false;
+}
+window.onerror = function (msg, src, line, col, err) {
+  showFatal((msg || "") + "  @" + (src || "?").split("/").pop() + ":" + line + ":" + col + (err && err.stack ? "\n" + err.stack : ""));
+  return false;
+};
+/* =====================================================================
+ * 架构契约（第 0 步地基，必须守住）：
+ *   1. Store 是唯一真相源，任何状态变更只允许通过 Store.set / Store._emit。
+ *   2. 所有渲染函数只读 Store.state，绝不直接改 DOM 位置。
+ *   3. 交互只产生「意图」：要么改 Store（选中/缩放/播放头）→ 自动重绘；
+ *      要么改 Store.drag（拖拽临时预览）→ 自动重绘；松手才提交后端 API，
+ *      后端返回后 get_state 回填 Store.draft → 自动重绘。
+ *   4. 没有任何代码在 render 之外直接写 seg.style.left / width。
+ *   这样彻底消灭「DOM 自己改、state 又改、render 又算」的三处抢控制权。
+ * ===================================================================== */
+
+/* ---------- 唯一真相源 Store（胶水层） ---------- */
+const Store = {
+  state: {
+    draft: { video: [[]], audio: [[]], text: [[]], canvas: { ratio: "16:9", locked: false } },
+    materials: [],
+    thumbMap: {},          // path -> 缩略图（视频抽帧 / 图片原图）
+    waveMap: {},           // path -> 音频峰值数组（0~1，按时间顺序，每秒 60 点）
+    selectedKey: null,     // "type:ti:idx"
+    selectedKeys: [],      // 多选集合（Ctrl+A 全选）；单击也进此集合，selectedKey 为最后选中的焦点段
+    selectedMaterialUid: null, // 素材面板选中的素材 uid（与时间轴选中互斥）
+    pxPerSec: 120,         // 缩放
+    playheadUs: 0,
+    bookmarks: [],       // 书签列表 [{us, name}]，纯 UI 标注（对齐 OpenCut scene.bookmarks）
+    snapOn: true,
+    rippleOn: false,    // 波纹编辑开关（对齐 OpenCut rippleEditingEnabled）
+    filter: "all",
+    drag: null,            // 临时拖拽态（move / resize），提交后清空
+    pendingDrag: null,     // mousedown 后未超过阈值前的待定态
+    pendingBox: null,     // 框选待定态（空白区 mousedown 起框选）
+    groupScale: null,     // 整组缩放临时预览态 {factor, gStart, gEnd}，render 据此缩放选中段几何
+    meta: { mcp: { connected: false, agent: "" } },
+  },
+  _subs: [],
+  subscribe(fn) { this._subs.push(fn); },
+  // 合并补丁并触发整树重绘
+  set(patch) { Object.assign(this.state, patch); this._emit(); },
+  // 直接通知（用于原地修改 state.drag 的逐帧拖拽，避免每帧重建对象）
+  _emit() { for (const fn of this._subs) fn(this.state); },
+};
+
+/* ---------- 工具 ---------- */
+const THRESHOLD = 4; // 点击 vs 拖拽 的像素阈值（根治"点一下弹回"）
+let $ = id => document.getElementById(id);
+let api = () => (window.pywebview && window.pywebview.api) || null;
+function call(method, ...args) {
+  const a = api();
+  if (!a || typeof a[method] !== "function") { console.warn("api 未就绪:", method); return Promise.resolve(null); }
+  return Promise.resolve(a[method](...args));
+}
+function fileURL(p) {
+  if (!p) return "";
+  if (window.MEDIA_BASE) {
+    // 剪映原素材/任意本地绝对路径 → 走 /local/ 代理（零复制，支持 Range 播放）
+    if (/^[a-zA-Z]:[\\/]/.test(p) || p.startsWith("/")) {
+      return window.MEDIA_BASE + "/local/" + encodeURIComponent(p);
+    }
+    // 项目 assets 目录：.../ai-video-studio/assets/xxx.mp4 -> assets/xxx.mp4
+    const rel = p.replace(/.*[\\\/]assets[\\\/]/i, "assets/").replace(/\\/g, "/");
+    if (rel.toLowerCase().startsWith("assets/")) {
+      return window.MEDIA_BASE + "/" + encodeURI(rel);
+    }
+  }
+  return "file:///" + encodeURI((p).replace(/\\/g, "/"));
+}
+function pps() { return Store.state.pxPerSec; }
+/* 缩放时以当前播放头为锚点：保持播放头在屏幕上的相对位置不变，避免用户 zoom 后找不到定位 */
+function setZoom(v) {
+  v = Math.min(600, Math.max(20, v));
+  const scroll = $("tlScroll");
+  const phUs = Store.state.playheadUs;
+  const oldPps = pps();
+  const phXOld = phUs / 1e6 * oldPps;
+  const offset = phXOld - scroll.scrollLeft;   // 播放头距离视口左边缘的像素距离
+
+  $("zoomRange").value = v;
+  Store.set({ pxPerSec: v });
+
+  requestAnimationFrame(() => {
+    // Round B0：播放期 renderTimeline 被冻结(L1850)，zoom 必须自己重排容器宽度，
+    // 否则播放头按新比例算出的 left 超出旧尺寸内容区 → 被 overflow 裁剪看不见。
+    // 仅刷新宽度+重定位播放头+滚动，绝不调 renderTimeline/renderPreview/playAllMedia（不碰媒体生命周期）。
+    const width = contentWidth();
+    $("tlContent").style.width = width + "px";
+    $("ruler").style.width = width + "px";
+    const phXNew = phUs / 1e6 * pps();
+    scroll.scrollLeft = Math.max(0, phXNew - offset);
+    positionPlayhead();
+    drawAllWaves();
+  });
+}
+function usToTime(us) {
+  const s = us / 1e6; const m = Math.floor(s / 60); const sec = s - m * 60;
+  return String(m).padStart(2, "0") + ":" + sec.toFixed(3).padStart(6, "0");
+}
+function getCssVar(n) { return getComputedStyle(document.documentElement).getPropertyValue(n).trim(); }
+function findSeg(type, ti, idx) {
+  const arr = (Store.state.draft[type] || [])[ti];
+  return arr ? arr[idx] : null;
+}
+// 统一轨道高度（像素），与 CSS --track-h 保持一致。个别轨道不再单独拉高——
+// 上下区域的整体高度分配改由「上半区 / 下半区」之间的分隔条控制（见 initSplit）。
+const TRACK_H = 48;
+
+// 上半区（素材/预览/Skill）↔ 下半区（时间轴）高度分配：拖分隔条整体调整，对齐 OpenCut 的横向 resizable handle。
+// 偏好存 localStorage，重开仍保留。
+const VSPLIT_KEY = "aivs.bottomH";
+function setBottomH(px) {
+  const minH = 140, maxH = window.innerHeight - 180;
+  const h = Math.max(minH, Math.min(maxH, Math.round(px)));
+  document.documentElement.style.setProperty("--bottom-h", h + "px");
+  try { localStorage.setItem(VSPLIT_KEY, String(h)); } catch (e) {}
+}
+function initSplit() {
+  let saved = 300;
+  try { saved = parseInt(localStorage.getItem(VSPLIT_KEY)) || 300; } catch (e) {}
+  setBottomH(saved);
+  const bar = $("vsplit");
+  if (!bar) return;
+  let drag = null;
+  bar.addEventListener("mousedown", e => {
+    e.preventDefault(); e.stopPropagation();
+    const cs = getComputedStyle(document.documentElement).getPropertyValue("--bottom-h");
+    drag = { startY: e.clientY, startH: parseInt(cs) || 300 };
+    bar.classList.add("dragging");
+    window.addEventListener("mousemove", onSplitMove);
+    window.addEventListener("mouseup", onSplitEnd);
+  });
+  function onSplitMove(e) {
+    if (!drag) return;
+    setBottomH(drag.startH + (drag.startY - e.clientY)); // 鼠标上移 → 时间轴变高
+  }
+  function onSplitEnd() {
+    drag = null;
+    bar.classList.remove("dragging");
+    window.removeEventListener("mousemove", onSplitMove);
+    window.removeEventListener("mouseup", onSplitEnd);
+  }
+}
+
+/* ---------- 素材拖拽 ghost（仿 OpenCut 自定义跟随鼠标） ---------- */
+let dragGhostEl = null;
+let dragGhostData = null;
+function createDragGhost(bg, icon) {
+  removeDragGhost();
+  const el = document.createElement("div");
+  el.className = "drag-ghost";
+  el.style.backgroundImage = bg ? "url('" + bg + "')" : "none";
+  if (!bg) el.textContent = icon || "🎬";
+  document.body.appendChild(el);
+  dragGhostEl = el;
+  return el;
+}
+function moveDragGhost(x, y) {
+  if (!dragGhostEl) return;
+  dragGhostEl.style.left = (x - 40) + "px";
+  dragGhostEl.style.top = (y - 40) + "px";
+}
+function removeDragGhost() {
+  if (dragGhostEl) { dragGhostEl.remove(); dragGhostEl = null; }
+  dragGhostData = null;
+}
+
+/* ---------- 渲染：素材面板（只读 Store） ---------- */
+let _mediaSig = "";
+function renderMedia(s) {
+  const list = (s.filter === "all" ? s.materials : s.materials.filter(m => m.type === s.filter));
+  const sig = s.filter + "|" + list.map(m => (m.uid || m.path) + ":" + m.name + ":" + m.type).join(",");
+  // 仅在素材列表/筛选真正变化时重建 DOM；平时轮询只刷新选中态。
+  // 否则每 500ms 把卡片 innerHTML 清空重建，会导致 +/删除 按钮闪烁、且点击时的 DOM 被替换使 click 丢失（加号点了没反应）。
+  if (sig === _mediaSig) {
+    const box = $("mediaList");
+    for (const card of box.children) card.classList.toggle("sel", card.dataset.uid === Store.state.selectedMaterialUid);
+    return;
+  }
+  _mediaSig = sig;
+  const box = $("mediaList");
+  box.innerHTML = "";
+  for (const m of list) {
+    const card = document.createElement("div");
+    const uid = m.uid || m.path;   // 旧素材无 uid 时以 path 兜底
+    card.className = "media-card" + (uid === Store.state.selectedMaterialUid ? " sel" : "");
+    card.dataset.uid = uid;
+    card.draggable = true;
+    const isImg = m.type === "image";
+    const bg = isImg ? fileURL(m.path) : (m.thumbnail ? fileURL(m.thumbnail) : "");
+    const icon = m.type === "video" ? "🎬" : m.type === "audio" ? "♪" : m.type === "image" ? "" : "T";
+    card.innerHTML =
+      '<div class="thumb" style="' + (bg ? "background-image:url('" + bg + "')" : "") + '">' + (bg ? "" : icon) + '</div>' +
+      '<div class="name">' + (m.name || "") + '</div>' +
+      '<div class="add" title="在播放头加入">+</div>' +
+      '<div class="del" title="删除素材 (Del)">🗑</div>';
+    card.addEventListener("dragstart", e => {
+      const payload = JSON.stringify({ name: m.name, path: m.path, type: m.type });
+      e.dataTransfer.setData("text/plain", payload);
+      e.dataTransfer.effectAllowed = "copy";
+      // 隐藏默认 ghost，用自定义 80px 缩略图跟随鼠标（OpenCut 同款）
+      const emptyImg = new Image();
+      emptyImg.src = "data:image/gif;base64,R0lGADlhAQABAIAAAAUEBAAAACwAAAAAAQABAAACAkQBADs=";
+      e.dataTransfer.setDragImage(emptyImg, 0, 0);
+      dragGhostData = { bg: bg, icon: icon, payload: payload };
+      createDragGhost(bg, icon);
+      moveDragGhost(e.clientX, e.clientY);
+    });
+    card.addEventListener("drag", e => { moveDragGhost(e.clientX, e.clientY); });
+    card.addEventListener("dragend", () => removeDragGhost());
+    card.addEventListener("click", () => selectMaterial(uid));
+    card.querySelector(".add").addEventListener("click", e => {
+      e.stopPropagation();
+      call("add_to_timeline", m.name, m.path, m.type, null, Store.state.playheadUs).then(refresh);
+    });
+    card.querySelector(".del").addEventListener("click", e => {
+      e.stopPropagation();
+      deleteMaterial(uid);
+    });
+    box.appendChild(card);
+  }
+}
+
+/* ---------- 渲染：时间轴（只读 Store，含拖拽临时态） ---------- */
+function forEachSeg(fn) {
+  const d = Store.state.draft;
+  ["video", "audio", "text"].forEach(type => {
+    (d[type] || []).forEach((segs, ti) => segs.forEach((s, idx) => fn(s, type, ti, idx)));
+  });
+}
+function contentWidth() {
+  let maxUs = 10e6;
+  forEachSeg(s => { const end = s.start + s.duration; if (end > maxUs) maxUs = end; });
+  return Math.max((maxUs / 1e6) * pps() + 200, $("tlScroll").clientWidth);
+}
+function buildTracks() {
+  // 对齐 OpenCut 的轨道显示顺序：overlay(叠加) 在上、main(主场景) 居中、audio/text 在下。
+  // 注意：video 数据数组里 video[0] 永远是主轨（后端 _insert_track 保护，不允许插到主轨之上）；
+  // 因此「拖视频到主轨上方」= 在数据索引 1 处新建覆盖轨，渲染时画到主轨之上。
+  const d = Store.state.draft, out = [];
+  // 剪映层级约定：文本/贴纸/特效 在最上层（盖住视频），视频居中，音频最下。
+  // 这里只调整「时间轴轨道的显示顺序」，不影响预览 z 序（预览里文本 zIndex 已恒高于视频）。
+  const t = d.text || [];
+  for (let i = 0; i < t.length; i++) {
+    if (t[i] && t[i].length > 0) out.push({ type: "text", ti: i, label: "文本轨" + (i + 1), segs: t[i] });
+  }
+  // 贴纸轨：显示在文本轨之下、视频轨之上（与预览 z 序一致：文本 > 贴纸 > 视频）
+  const st = d.sticker || [];
+  for (let i = 0; i < st.length; i++) {
+    if (st[i] && st[i].length > 0) out.push({ type: "sticker", ti: i, label: "贴纸轨" + (i + 1), segs: st[i] });
+  }
+  const v = d.video || [];
+  // 先叠加轨(i>0，仅非空显示，高索引在上)，再主轨(i=0，恒显示)
+  for (let i = v.length - 1; i >= 1; i--) {
+    if (v[i] && v[i].length > 0) out.push({ type: "video", ti: i, label: "叠加" + i, segs: v[i] });
+  }
+  out.push({ type: "video", ti: 0, label: "主场景", segs: (v[0] || []) });
+  const a = d.audio || [];
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] && a[i].length > 0) out.push({ type: "audio", ti: i, label: "音轨" + (i + 1), segs: a[i] });
+  }
+  return out;
+}
+// 片段几何：优先用拖拽临时态，否则用草稿真实位置
+function segGeom(s, type, ti, idx) {
+  let leftUs = s.start, rightUs = s.start + s.duration;
+  const d = Store.state.drag;
+  const k = type + ":" + ti + ":" + idx;
+  if (d && d.key === k && d.moved) {
+    if (d.mode === "move") { leftUs = d.curLeftUs; rightUs = d.curLeftUs + s.duration; } // 移动：保持时长，仅平移
+    else if (d.mode === "resize") { if (d.side === "left") leftUs = d.curLeftUs; else rightUs = d.curRightUs; }
+  }
+  // 整组缩放预览：以 pivot 为不动边，按 factor 缩放选中段的位置与时长
+  const gs = Store.state.groupScale;
+  if (gs && Store.state.selectedKeys.includes(k)) {
+    const ns = gs.pivot + (leftUs - gs.pivot) * gs.factor;
+    leftUs = ns; rightUs = ns + s.duration * gs.factor;
+  } else if (d && d.isGroup && d.moved && d.mode === "move" && Store.state.selectedKeys.includes(k) && k !== d.key) {
+    // 整组移动预览：非锚点段横向跟随锚点的 dUs（保持相对布局）
+    leftUs = s.start + d.groupDeltaUs; rightUs = leftUs + s.duration;
+  }
+  return { leftUs, widthUs: rightUs - leftUs };
+}
+function makeSeg(s, type, ti, idx, overrideLeftUs, forceDragging) {
+  const key = type + ":" + ti + ":" + idx;
+  const g = segGeom(s, type, ti, idx);
+  const leftUs = (overrideLeftUs != null) ? overrideLeftUs : g.leftUs;
+  const dragging = !!forceDragging || (Store.state.drag && Store.state.drag.mode === "move" && Store.state.drag.moved && Store.state.drag.key === key);
+  const seg = document.createElement("div");
+  seg.className = "seg" + (Store.state.selectedKeys.includes(key) ? " sel" : "") + (dragging ? " dragging" : "");
+  seg.dataset.key = key;
+  seg.style.left = (leftUs / 1e6 * pps()) + "px";
+  seg.style.width = Math.max(8, g.widthUs / 1e6 * pps()) + "px";
+  // 视频/图片：OpenCut 同款胶片条平铺——单张缩略图按 16:9 瓦片横向 repeat-x，
+  // 叠一层 repeating-linear-gradient 画出瓦片间的暗缝，让它明确读作「一排连续小图」而非一张拉宽图。
+  // 瓦片高度 = 片段实际高度（轨道高 - 上下 4px 内边距），宽度 = 高 × 16/9，随轨道高度自适应。
+  let bgStyle = "";      // 背景样式字符串（放入 div.fill 的 style）
+  let waveCanvas = "";   // 波形 canvas（替代 div.fill）
+  const th = TRACK_H - 8;   // 片段可视高度 = 轨道高 - 上下各 4px 内边距
+  const tileW = th * 16 / 9;
+  if (type === "video" || type === "image") {
+    // 视频段需要显式缩略图（抽帧 jpg），不能 fallback 到视频源文件本身：
+    // CSS background-image 不会用视频文件渲染，fallback 到 path 只会导致黑底。
+    let raw = type === "image" ? s.path : (Store.state.thumbMap[s.path] || "");
+    const bg = raw ? fileURL(raw) : "";
+    if (bg) {
+      bgStyle =
+        "background-image:url('" + bg + "'), repeating-linear-gradient(to right, transparent, transparent calc(" + tileW + "px - 1px), rgba(0,0,0,.30) calc(" + tileW + "px - 1px), rgba(0,0,0,.30) " + tileW + "px);" +
+        "background-size:" + tileW + "px " + th + "px, " + tileW + "px " + th + "px;" +
+        "background-repeat:repeat-x, repeat-x;background-position:left center, left center;";
+    } else {
+      bgStyle = "background:" + getCssVar("--seg-video");
+    }
+  } else if (type === "audio") {
+    // 有峰值数据 → 用 canvas 画真实波形（OpenCut 同款：bar 宽 1px + 间隙 1px、上下对称）；否则降级为色块
+    const peaks = Store.state.waveMap[s.path];
+    if (peaks && peaks.length) {
+      // 波形必须按源素材区间 [src_start, src_end] 绘制：split/trim 后 start 会变，但峰值数组始终对应原素材 0s 起点。
+      const srcStartUs = s.src_start || 0;
+      const srcEndUs = s.src_end || (srcStartUs + s.duration);
+      const srcDurSec = Math.max(0.001, (srcEndUs - srcStartUs) / 1e6);
+      waveCanvas = '<canvas class="fill wave" data-path="' + (s.path || "") + '" data-src-start="' + srcStartUs + '" data-src-end="' + srcEndUs + '" data-dur="' + srcDurSec + '"></canvas>';
+    } else {
+      bgStyle = "background:" + getCssVar("--seg-audio");
+    }
+  }
+  else if (type === "text") bgStyle = "background:" + getCssVar("--seg-text");
+  else if (type === "sticker") {
+    const bg = s.path ? fileURL(s.path) : "";
+    if (bg) {
+      bgStyle = "background-image:url('" + bg + "'); background-size:contain; background-position:center; background-repeat:no-repeat;";
+    } else {
+      bgStyle = "background:" + getCssVar("--seg-text");
+    }
+  }
+  const headerTxt = type === "text" ? (s.text || s.name || "文本") : (s.name || "");
+  const speedBadge = (s.speed && s.speed !== 1) ? ('<div class="speed-badge">' + s.speed + 'x</div>') : '';
+  const stBadge = (type === "sticker") ? '<div class="badge">贴</div>' : '';
+  const fillHtml = waveCanvas || ('<div class="fill" style="' + bgStyle + '"></div>');
+  seg.innerHTML =
+    fillHtml +
+    '<div class="hdr">' + headerTxt + '</div>' +
+    speedBadge + stBadge +
+    (key === Store.state.selectedKey ? '<div class="handle l"></div><div class="handle r"></div>' : '');
+  return seg;
+}
+function renderTimeline(s) {
+  const content = $("tlContent"), labels = $("tlLabels"), ruler = $("ruler");
+  const scrollWrap = $("tlScroll");
+  // 销毁前记住滚动位置，避免 refresh() 重绘后弹回顶部/左侧
+  const savedTop = scrollWrap.scrollTop;
+  const savedLeft = scrollWrap.scrollLeft;
+  // 销毁旧片段/轨道/标签（标尺/播放头/落点线常驻，不碰）
+  [...content.querySelectorAll(".track, .seg")].forEach(e => e.remove());
+  [...labels.querySelectorAll(".track-label")].forEach(e => e.remove());
+
+  const w = contentWidth();
+  content.style.width = w + "px";
+  ruler.style.width = w + "px";
+  ruler.innerHTML = "";
+  const totalSec = w / pps();
+  const step = pps() >= 200 ? 1 : pps() >= 80 ? 2 : 5;
+  for (let t = 0; t <= totalSec; t += step) {
+    const tick = document.createElement("div");
+    tick.className = "tick";
+    tick.style.left = (t * pps()) + "px";
+    tick.innerHTML = "<span>" + usToTime(t * 1e6) + "</span>";
+    ruler.appendChild(tick);
+  }
+  // 书签标记（对齐 OpenCut bookmarks.tsx：标尺顶部小红旗，点击跳转、双击切换、右键删除）
+  (Store.state.bookmarks || []).forEach(b => {
+    const bm = document.createElement("div");
+    bm.className = "bm-mark";
+    bm.style.left = (b.us / 1e6 * pps()) + "px";
+    bm.dataset.us = b.us;
+    bm.title = (b.name || "书签") + " · " + usToTime(b.us);
+    ruler.appendChild(bm);
+  });
+  // 拖拽中：被拖段从源轨取出，渲染到目标轨（预览，不写真实数据）
+  const drag = Store.state.drag;
+  const isMove = drag && drag.mode === "move" && drag.moved;
+  const dragKey = isMove ? drag.key : null;
+  const eff = isMove ? (drag.targetTi === -1 ? { type: drag.type, ti: -1 } : { type: drag.targetType, ti: drag.targetTi }) : null;
+  // 构建待渲染轨道列表（显示顺序：叠加→主轨→音频→文本）
+  const tracks = buildTracks();
+  // 移动预览：目标=新建轨 → 注入一条「预览轨」(纯渲染，不进数据)，松手才真正建（对齐 OpenCut preview 机制）
+  if (isMove && drag.targetTi === -1) {
+    const previewTrack = { type: drag.type, ti: -1, label: (drag.type === "video" ? "叠加" : "轨") + "预览", segs: [], preview: true };
+    if (drag.type === "video" || drag.newAboveMain) {
+      // 视频新轨恒显示在 main 上方；音频/文本才追加到末尾
+      const mainIdx = tracks.findIndex(t => t.type === "video" && t.ti === 0);
+      if (mainIdx >= 0) tracks.splice(mainIdx, 0, previewTrack); else tracks.unshift(previewTrack);
+    } else {
+      tracks.push(previewTrack);
+    }
+  }
+  tracks.forEach(tr => {
+    const label = document.createElement("div");
+    label.className = "track-label";
+    label.dataset.type = tr.type; label.dataset.ti = tr.ti;
+    const meta = ((Store.state.draft._track_meta || {})[tr.type] || []);
+    const m = meta[tr.ti] || {};
+    const showMute = tr.type === "video" || tr.type === "audio";
+    const showHide = tr.type === "video" || tr.type === "text" || tr.type === "sticker";
+    let icons = "";
+    if (showMute) {
+      const on = !m.muted;
+      icons += '<span class="icon' + (on ? "" : " off") + '" data-act="mute" title="静音/取消静音">' + (on ? "🔊" : "🔇") + '</span>';
+    }
+    if (showHide) {
+      const on = !m.hidden;
+      icons += '<span class="icon' + (on ? "" : " off") + '" data-act="hide" title="显示/隐藏">' + (on ? "👁" : "🚫") + '</span>';
+    }
+    label.innerHTML = icons + '<span class="name">' + tr.label + '</span>';
+    labels.appendChild(label);
+    const track = document.createElement("div");
+    track.className = "track";
+    track.dataset.type = tr.type; track.dataset.ti = tr.ti;
+    if (m.hidden) track.classList.add("track-hidden");
+    if (m.muted && (tr.type === "audio" || tr.type === "video")) track.classList.add("track-muted");
+    if (tr.preview) track.classList.add("drop-preview");
+    else if (isMove && eff && eff.type === tr.type && eff.ti === tr.ti) track.classList.add("drop-target");
+    let childCount = 0;
+    // 目标轨/预览轨：先放被拖段（用源坐标 + 覆盖左边界，保持时长）
+    if (isMove && eff && eff.type === tr.type && eff.ti === tr.ti) {
+      const ds = findSeg(drag.type, drag.ti, drag.idx);
+      if (ds) { track.appendChild(makeSeg(ds, drag.type, drag.ti, drag.idx, drag.curLeftUs, true)); childCount++; }
+    }
+    tr.segs.forEach((seg, idx) => {
+      const k = tr.type + ":" + tr.ti + ":" + idx;
+      if (isMove && k === dragKey) return;            // 源轨跳过被拖段
+      track.appendChild(makeSeg(seg, tr.type, tr.ti, idx));
+      childCount++;
+    });
+    if (!childCount) { const hEl = document.createElement("div"); hEl.className = "empty-hint"; track.appendChild(hEl); }
+    content.appendChild(track);
+  });
+  // 移动预览：蓝色落点线（显示在拖拽时间位置，对齐 OpenCut 的 drop 指示）
+  // 仅移动态管理此线；素材导入的原生拖拽由 showDropPreview/hideDropPreview 控制，互不打架
+  if (isMove) {
+    const line = $("dropLine");
+    line.style.display = "";
+    line.style.left = (drag.curLeftUs / 1e6 * pps()) + "px";
+  }
+  positionPlayhead();
+  drawAllWaves();
+  requestAnimationFrame(drawAllWaves);   // 兜底：同步布局尚未完成时，下一帧再画一次
+  // 重绘完成后恢复滚动位置，并与左侧标签锁定
+  scrollWrap.scrollTop = savedTop;
+  scrollWrap.scrollLeft = savedLeft;
+  // 水平滚动条只出现在右侧 tlScroll 底部，左侧 labels 需补一个等高的 spacer 放在 label 列表末尾（底部填充），
+  // 才能让 labels 与 content 的垂直滚动范围完全一致，且轨道行与右侧一一对齐（对齐 OpenCut TrackLabelsPanel）。
+  // 注意：spacer 绝不能放在 label 列表「前面」，否则会给所有轨道整体下移一个滚动条高度，导致上下错位。
+  const scrollbarH = scrollWrap.offsetHeight - scrollWrap.clientHeight;
+  const spacer = $("labelScrollbarSpacer");
+  if (spacer) {
+    labels.appendChild(spacer); // 移到 label 列表之后，作为底部填充
+    spacer.style.height = (scrollbarH > 0 ? scrollbarH : 0) + "px";
+  }
+  labels.scrollTop = savedTop;
+  renderGroupBox();   // 选中≥1 段时绘制整组缩放包围盒（含左右把手）
+}
+function positionPlayhead() { $("playhead").style.left = (Store.state.playheadUs / 1e6 * pps()) + "px"; ensurePlayheadVisible(); if (!isPlaying) updateKfLiveValues(); }
+// 播放头导航统一入口：clamp 到 [0, 总时长] 后改 Store 并立即重绘蓝线+时间码（对齐 OpenCut playback.seek）。
+// 播放头是纯前端状态，不进草稿、不被 get_state 轮询覆盖，故导航只需改 Store；无需后端 set_playhead。
+function seekPlayhead(us) {
+  const max = totalDurationUs();
+  Store.set({ playheadUs: Math.max(0, Math.min(max, Math.round(us))) });
+  positionPlayhead(); renderTimecode();
+  if (!isPlaying) applyKfLiveAll();   // 拖动播放头时实时刷新关键帧动画
+}
+
+// 音频波形绘制：对齐 OpenCut audio-waveform.tsx（bar 宽 1px + 间隙 1px、上下对称、按振幅×高度）。
+// 后端已算好每秒 WAVE_DENSITY 个 RMS 振幅点，前端按像素密度把每个 bar 覆盖的时间区间取最大振幅画竖条；
+// 缩放时 pxPerSec 变化、bar 数变化，但振幅点不变 → 波形始终清晰。
+const WAVE_DENSITY = 60; // 与后端 _extract_audio_peaks(density=60) 对齐
+const WAVE_GAIN = 0.70;  // 最响的 bar 只用到轨道高度的 70%，留出上下边距，避免实心块
+function drawAllWaves() {
+  const canvases = document.querySelectorAll("#tlContent canvas.wave");
+  const MAX = 16000;  // 浏览器 canvas 缓冲区硬上限（约 16384px）。超长片段若不钳制，
+                      // c.width 超限后浏览器只渲染前面能容纳的部分 → 波形「前面有、后面断」。
+                      // 钳制后整段 peaks 重采样进缓冲区，再由 CSS 拉伸到片段真实宽度显示（对齐 OpenCut 只绘可视区的效果）。
+  const dpr = window.devicePixelRatio || 1;
+  canvases.forEach(c => {
+    const peaks = Store.state.waveMap[c.dataset.path];
+    const w = c.clientWidth, h = c.clientHeight;
+    if (!peaks || !peaks.length || w <= 0 || h <= 0) return;
+    const dur = parseFloat(c.dataset.dur) || 1;
+    const srcStartUs = parseFloat(c.dataset.srcStart) || 0;
+    const srcEndUs = parseFloat(c.dataset.srcEnd) || (srcStartUs + dur * 1e6);
+    const srcDur = Math.max(0.001, (srcEndUs - srcStartUs) / 1e6); // 实际用于映射 peaks 的源素材时长
+    let bufW = Math.round(w * dpr);
+    if (bufW > MAX) bufW = MAX;          // 关键：超长片段钳制缓冲区宽度
+    let bufH = Math.round(h * dpr);
+    if (c.width !== bufW) c.width = bufW;
+    if (c.height !== bufH) c.height = bufH;
+    const ctx = c.getContext("2d");
+    ctx.setTransform(1, 0, 0, 1, 0, 0);  // 直接用设备像素坐标绘制
+    ctx.clearRect(0, 0, bufW, bufH);
+    const color = getCssVar("--wave");
+    ctx.fillStyle = color;
+    const barStep = 2;                    // 每 2 缓冲区像素一个 bar（对齐 OpenCut BAR_STEP=2）
+    const bars = Math.max(1, Math.floor(bufW / barStep));
+    for (let i = 0; i < bars; i++) {
+      const bx = i * barStep;
+      // 把缓冲区坐标换算成「源素材内时间」（秒），再映射到 peaks 索引 → split/trim 后波形仍对齐真实音频内容
+      const t0 = srcStartUs / 1e6 + (bx / bufW) * srcDur;
+      const t1 = srcStartUs / 1e6 + ((i + 1) * barStep / bufW) * srcDur;
+      let i0 = Math.floor(t0 * WAVE_DENSITY);
+      let i1 = Math.floor(t1 * WAVE_DENSITY);
+      if (i0 < 0) i0 = 0;
+      if (i1 >= peaks.length) i1 = peaks.length - 1;
+      if (i1 < i0) i1 = i0;
+      let v = 0;
+      for (let j = i0; j <= i1; j++) if (peaks[j] > v) v = peaks[j]; // 取区间最大，避免漏掉鼓点/峰值
+      const barH = v * WAVE_GAIN * bufH;
+      if (barH < 1) continue;
+      const by = (bufH - barH) / 2;       // 上下对称
+      ctx.fillRect(bx, by, 1, barH);
+    }
+    // 中线：让波形对称感更明显，也更能看出强弱起伏
+    ctx.fillStyle = "rgba(255,255,255,0.14)";
+    ctx.fillRect(0, bufH / 2 - 0.5, bufW, 1);
+  });
+}
+function renderTimecode(s) {
+  let dur = 0; forEachSeg(seg => { const e = seg.start + seg.duration; if (e > dur) dur = e; });
+  $("timecode").textContent = usToTime(Store.state.playheadUs) + " / " + usToTime(dur);
+}
+
+/* ---------- 播放控制（对齐 OpenCut clock-based 模型：一个时钟推进 playheadUs，预览订阅） ---------- */
+let isPlaying = false;
+let playRAF = null;
+let playStartWall = 0;        // 开始播放时的 performance.now()
+let playStartUs = 0;          // 开始播放时的 playheadUs
+let lastHitSig = "";          // 播放时命中段签名；跨段才重建预览，平时只动红线
+let previewMuted = false;     // 全局预览静音：false=有声，true=静音
+let mediaClockReady = true;   // 视频/音频已 seek 到播放位置：true 时播放头跟随媒体时钟，false 时信任墙钟（避免读到脏 currentTime 跳回段起点）
+let _mcrWaitAt = 0;           // mediaClockReady 看门狗计时起点（performance.now()），用于 D 超时回退
+let _lastPlayAll = 0;          // playAllMedia 防抖计时（performance.now()），避免同一媒体被反复 play 引发 AbortError
+
+function totalDurationUs() {
+  let maxUs = 0;
+  forEachSeg(s => { const e = s.start + s.duration; if (e > maxUs) maxUs = e; });
+  return maxUs;
+}
+
+// 找到播放头命中的所有段（video/image/audio/text 分别归类）
+function resolveHits(us) {
+  const hits = [];
+  const d = Store.state.draft;
+  ["video", "audio", "text", "sticker"].forEach(type => {
+    (d[type] || []).forEach((track, ti) => {
+      track.forEach((seg, idx) => {
+        if (us >= seg.start && us < seg.start + seg.duration) {
+          hits.push({ seg, type, ti, idx, key: type + ":" + ti + ":" + idx });
+        }
+      });
+    });
+  });
+  return hits;
+}
+
+// 判断当前时间点是否有可播放内容（video/audio；image/text 只看不播）
+function hasPlayableAt(us) {
+  for (const h of resolveHits(us)) if (h.type === "video" || h.type === "audio") return true;
+  return false;
+}
+
+/* ---------- 多层合成预览（DOM 叠加：video/image/text 分层，audio 同步发声） ---------- */
+const previewState = {
+  visualEls: new Map(), // key="video:${ti}"，value={el, key, mtype, path}
+  audioEls: new Map(),  // key="audio:${ti}"，value={el, key, mtype, path}
+  textEls: new Map(),   // key="text:${ti}"，value={el, key, text}
+  stickerEls: new Map(), // key="sticker:${ti}"，value={el, key, seg}
+};
+
+function _makeVisualEl(mtype) {
+  const wrap = document.createElement("div");
+  wrap.className = "vis-layer";
+  wrap.style.display = "none";
+  return wrap;
+}
+function _setVisualContent(wrap, mtype, path, muted) {
+  if (wrap.dataset.mtype === mtype && wrap.dataset.path === path && wrap.dataset.muted === String(muted)) return false; // 无变化
+  wrap.innerHTML = "";
+  wrap.dataset.mtype = mtype;
+  wrap.dataset.path = path;
+  wrap.dataset.muted = String(muted);
+  if (mtype === "video") {
+    const v = document.createElement("video");
+    v.src = fileURL(path);
+    // 轨道静音 或 全局预览静音 → 关闭该视频段的内嵌音频
+    v.muted = !!muted || previewMuted;
+    v.playsInline = true;
+    v.onplaying = () => { if (!v.seeking) mediaClockReady = true; };   // Round C：seek 中不打标，避免读到脏 currentTime 抢置媒体时钟
+    wrap.appendChild(v);
+  } else if (mtype === "image") {
+    const img = document.createElement("img");
+    img.src = fileURL(path);
+    wrap.appendChild(img);
+  }
+  return true;
+}
+function _setTextContent(wrap, text) {
+  if (wrap.dataset.text === text) return false;
+  wrap.textContent = text;
+  wrap.dataset.text = text;
+  return true;
+}
+function _seekMedia(el, seg, us) {
+  // 播放位置必须映射到源素材时间轴：seg 可能只引用原素材的一段（src_start ~ src_end），
+  // split/trim 后 start 会变，但源内实际起止由 src_start/src_end 决定。忽略 src_start 会导致
+  // split 右段从素材头重播、trim 后位置错位、拉长段 seek 超出源范围。
+  const srcStartUs = seg.src_start || 0;
+  const srcEndUs = seg.src_end || (srcStartUs + seg.duration);
+  const localUs = Math.max(0, us - seg.start);
+  // B2-A：上界必须是源绝对结束 srcEndUs（而非段时长 srcEndUs-srcStartUs）。
+  // 旧写法对 src_start>0 的右段会把段内偏移超过段时长的值钳回 src_start，导致 split 右段反复从切点重播。
+  const t = Math.max(srcStartUs / 1e6, Math.min(srcEndUs / 1e6, (srcStartUs + localUs) / 1e6));
+  try {
+    if (Math.abs((el.currentTime || 0) - t) > 0.05) el.currentTime = t;
+  } catch (e) {}
+}
+
+// Round D: Seek Barrier —— 等浏览器完成一次异步 seek 再放行 play()，消除「边 seek 边 play」的 AbortError/未启动竞态。
+// 用 addEventListener 一次性监听，绝不写 el.onseeked（那是 DOM 单归属属性，调用方 4 处 onseeked=mediaClockReady 会覆盖 resolver → Promise 永久 pending）。
+// 立即放行条件：不在 seeking 且 readyState>=2(HAVE_CURRENT_DATA)，避免「换 src 加载阶段 seeking=false」误放行导致播放抢跑（审核点 1）。
+function _waitSeekSettled(el) {
+  return new Promise((resolve) => {
+    if (!el || (el.tagName !== "VIDEO" && el.tagName !== "AUDIO")) { resolve(); return; }
+    if (!el.seeking && el.readyState >= 2) { resolve(); return; }   // 已就位且可读当前帧 → 直接放行，不会 hang
+    let fired = false;
+    const done = () => {
+      if (fired) return; fired = true;
+      el.removeEventListener("seeked", done);
+      el.removeEventListener("error", done);
+      if (timer) clearTimeout(timer);
+      resolve();
+    };
+    el.addEventListener("seeked", done, { once: true });
+    el.addEventListener("error", done, { once: true });
+    // 安全网：700ms 内未触发 seeked/error（媒体未加载 / src 失效 / 后端代理未连）→ 强制放行，
+    // 避免 startPlay 的 await 永久 pending 导致「完全播不了」的静默死锁；同时上报便于区分代码竞态 vs 媒体加载失败。
+    const timer = setTimeout(() => {
+      console.warn("[_waitSeekSettled] 超时放行(媒体可能未加载):", el.tagName, "readyState=", el.readyState, "seeking=", el.seeking, "src=", (el.currentSrc || el.src || "").slice(0, 70));
+      done();
+    }, 700);
+  });
+}
+
+// 读取 draft._track_meta 判断轨道是否静音/隐藏（用于预览过滤，对齐 OpenCut 语义）
+function isTrackMuted(type, ti) {
+  const meta = (Store.state.draft._track_meta || {})[type] || [];
+  return !!(meta[ti] || {}).muted;
+}
+function isTrackHidden(type, ti) {
+  const meta = (Store.state.draft._track_meta || {})[type] || [];
+  return !!(meta[ti] || {}).hidden;
+}
+
+function renderPreview(s) {
+  const stack = $("previewStack");
+  const ph = $("previewPlaceholder");
+  const us = Store.state.playheadUs;
+  const hits = resolveHits(us);
+  const hasVisual = hits.some(h => (h.type === "video" || h.type === "image" || h.type === "text") && !isTrackHidden(h.type, h.ti));
+
+  // 视觉层：按轨道层级排列，上层（高 ti）在上；跳过本地无素材的占位段（避免空 src 报错并挡住下层视频）
+  // 隐藏的 video/text 轨在预览中不渲染（对齐 OpenCut element-bounds.ts 过滤逻辑）
+  const visualHits = hits.filter(h => h.type === "video" && h.seg.path && !isTrackHidden(h.type, h.ti));
+  const textHits = hits.filter(h => h.type === "text" && !isTrackHidden(h.type, h.ti));
+  const activeVisualKeys = new Set();
+
+  // 每条 video 轨道一个容器；同轨内当前最多一个段命中
+  for (const h of visualHits) {
+    const layerKey = "video:" + h.ti;
+    activeVisualKeys.add(layerKey);
+    let rec = previewState.visualEls.get(layerKey);
+    if (!rec) {
+      const wrap = _makeVisualEl(h.seg.type);
+      stack.appendChild(wrap);
+      rec = { el: wrap, key: layerKey };
+      previewState.visualEls.set(layerKey, rec);
+    }
+    const changed = _setVisualContent(rec.el, h.seg.type, h.seg.path, isTrackMuted(h.type, h.ti));
+    rec.el.style.display = "";
+    rec.el.style.zIndex = 10 + h.ti;
+    rec.key = h.key;
+    rec.seg = h.seg;
+    applyKfTransform(rec.el, h.seg, Math.max(0, Math.min(us - h.seg.start, h.seg.duration)));
+    applySegMask(h.seg, h.key, rec.el);   // 遮罩：把 mask 形状挂成 clip-path（对齐 OpenCut masks）
+    // 切源后等 canplay 再 seek；平时直接 seek
+    if (changed) {
+      rec.el.dataset.pendingSeek = "1";
+      rec.el._pendingSeg = h.seg;
+      const media = rec.el.firstElementChild;
+      if (media) {
+    const onReady = () => {
+        if (rec.el.dataset.pendingSeek) {
+          _seekMedia(media, h.seg, Store.state.playheadUs);
+          if (isPlaying) media.onseeked = () => { mediaClockReady = true; };
+          rec.el.dataset.pendingSeek = "";
+        }
+        // play() 不在 oncanplay 里调：异步回调无用户手势，会被 autoplay 策略拒绝且 .catch 静默吞掉。
+        // 统一交给 playAllMedia()，它在 startPlay 点击手势（或 sticky-activation 跨段）内播放并带静音兜底。
+      };
+      media.oncanplay = onReady;
+      media.onloadedmetadata = onReady;
+      }
+    } else {
+      const media = rec.el.firstElementChild;
+      if (media) {
+        if (media.tagName === "VIDEO") media.muted = isTrackMuted(h.type, h.ti) || previewMuted;
+        _seekMedia(media, h.seg, us);
+        if (isPlaying) media.onseeked = () => { mediaClockReady = true; };
+      }
+    }
+  }
+  // 隐藏当前未命中的视觉轨道
+  for (const [layerKey, rec] of previewState.visualEls) {
+    if (!activeVisualKeys.has(layerKey)) rec.el.style.display = "none";
+  }
+
+  // 文本层：每条 text 轨道一个文本 div
+  const activeTextKeys = new Set();
+  for (const h of textHits) {
+    const layerKey = "text:" + h.ti;
+    activeTextKeys.add(layerKey);
+    let rec = previewState.textEls.get(layerKey);
+    if (!rec) {
+      const el = document.createElement("div");
+      el.className = "text-layer";
+      el.style.display = "none";
+      stack.appendChild(el);
+      rec = { el };
+      previewState.textEls.set(layerKey, rec);
+    }
+    _setTextContent(rec.el, h.seg.text || h.seg.name || "");
+    rec.el.style.display = "";
+    rec.el.style.zIndex = 1000 + h.ti;
+    rec.key = h.key;
+    // 字幕预览样式：底部居中、白字粗体、自动换行、可选黑底（对齐 OpenCut）
+    const sub = h.seg.sub_style || {};
+    if (h.seg.text) {
+      rec.el.style.left = "50%";
+      rec.el.style.top = "auto";
+      rec.el.style.bottom = sub.bg ? "6%" : "5%";
+      rec.el.style.transform = "translateX(-50%)";
+      rec.el.style.textAlign = "center";
+      rec.el.style.color = sub.color || "#ffffff";
+      rec.el.style.fontWeight = sub.bold === false ? "normal" : "bold";
+      rec.el.style.maxWidth = "82%";
+      rec.el.style.lineHeight = "1.35";
+      rec.el.style.padding = sub.bg ? "2px 10px" : "0";
+      rec.el.style.background = sub.bg ? (sub.bg_color || "#000000") : "transparent";
+      rec.el.style.borderRadius = sub.bg ? "6px" : "0";
+      rec.el.style.fontSize = ((sub.font_size || 10) / 10 * 26) + "px";
+      rec.el.style.textShadow = "0 1px 2px rgba(0,0,0,.6)";
+    }
+  }
+  for (const [layerKey, rec] of previewState.textEls) {
+    if (!activeTextKeys.has(layerKey)) rec.el.style.display = "none";
+  }
+
+  // 贴纸层：每条贴纸轨一个 <img> 叠加（高于视频、低于文本），按 transform 定位/缩放/旋转/透明/翻转
+  const stickerHits = hits.filter(h => h.type === "sticker" && h.seg.path && !isTrackHidden(h.type, h.ti));
+  const activeStickerKeys = new Set();
+  const stackH = ($("previewStack").clientHeight || 540);
+  for (const h of stickerHits) {
+    const layerKey = "sticker:" + h.ti;
+    activeStickerKeys.add(layerKey);
+    let rec = previewState.stickerEls.get(layerKey);
+    if (!rec) {
+      const el = document.createElement("div");
+      el.className = "sticker-layer";
+      el.style.display = "none";
+      const img = document.createElement("img");
+      el.appendChild(img);
+      $("previewStack").appendChild(el);
+      rec = { el, img };
+      previewState.stickerEls.set(layerKey, rec);
+    }
+    const tf = h.seg.transform || {};
+    const baseH = 0.4 * stackH;   // scale=1 时贴纸占画布高度 40%（与导出 STICKER_BASE_HEIGHT_RATIO 对齐）
+    const natW = h.seg.natural_w || 1, natH = h.seg.natural_h || 1;
+    const ar = (natW && natH) ? (natW / natH) : 1;
+    const hpx = baseH * (tf.scale || 1);
+    const wpx = hpx * ar;
+    rec.el.style.width = wpx + "px";
+    rec.el.style.height = hpx + "px";
+    rec.el.style.display = "";
+    rec.el.style.zIndex = 520 + h.ti;
+    rec.el.style.opacity = (tf.opacity != null ? tf.opacity : 1);
+    rec.el.style.transform =
+      "translate(-50%,-50%) " +
+      "translate(" + ((tf.x || 0) * 50) + "%," + ((tf.y || 0) * 50) + "%) " +
+      "rotate(" + (tf.rotation || 0) + "deg) " +
+      "scale(" + (tf.flipH ? -1 : 1) + "," + (tf.flipV ? -1 : 1) + ")";
+    if (rec.img.dataset.src !== fileURL(h.seg.path)) {
+      rec.img.src = fileURL(h.seg.path);
+      rec.img.dataset.src = fileURL(h.seg.path);
+    }
+  }
+  for (const [layerKey, rec] of previewState.stickerEls) {
+    if (!activeStickerKeys.has(layerKey)) rec.el.style.display = "none";
+  }
+
+  // 音频层：命中就维护 audio 元素；播放/暂停在 startPlay/pausePlay/playTick 外统一控制
+  // 同样跳过无本地 path 的占位段，避免空 src 错误
+  // 静音的 audio 轨在预览中不发声（OpenCut AudioManager.scheduleUpcomingClips 里 clip.muted 则 continue）
+  const audioHits = hits.filter(h => h.type === "audio" && h.seg.path && !isTrackMuted(h.type, h.ti));
+  const activeAudioKeys = new Set();
+  for (const h of audioHits) {
+    const layerKey = "audio:" + h.ti;
+    activeAudioKeys.add(layerKey);
+    let rec = previewState.audioEls.get(layerKey);
+    if (!rec) {
+      const a = document.createElement("audio");
+      a.muted = previewMuted;
+      a.onplaying = () => { if (!a.seeking) mediaClockReady = true; };   // Round C：seek 中不打标，避免读到脏 currentTime 抢置媒体时钟
+      $("audioPool").appendChild(a);
+      rec = { el: a, key: layerKey };
+      previewState.audioEls.set(layerKey, rec);
+    }
+    const src = fileURL(h.seg.path);
+    if (rec.el.src !== src) {
+      rec.el.src = src;
+      rec.el.dataset.pendingSeek = "1";
+      rec.el._pendingSeg = h.seg;
+      rec.el.oncanplay = () => {
+        if (rec.el.dataset.pendingSeek) {
+          _seekMedia(rec.el, h.seg, Store.state.playheadUs);
+          rec.el.dataset.pendingSeek = "";
+        }
+        // play() 交给 playAllMedia()，避免异步无手势被 autoplay 拒绝
+      };
+    } else {
+      _seekMedia(rec.el, h.seg, us);
+      if (isPlaying) rec.el.onseeked = () => { mediaClockReady = true; };
+    }
+    rec.key = h.key;
+    rec.seg = h.seg;
+  }
+  // 未命中的音频暂停即可，不要 removeAttribute("src")+load()：load() 会 abort 正在进行中的 play()
+  // promise，导致播放末尾/切换片段/拖动 zoom 时频繁报 AbortError。保留 src 也便于同轨下一段复用元素。
+  for (const [layerKey, rec] of previewState.audioEls) {
+    if (!activeAudioKeys.has(layerKey)) {
+      rec.el.pause();
+      rec.el.muted = true; // 避免暂停后残留声音；下次命中时 playAllMedia/_seekMedia 会恢复正确 muted 状态
+    }
+  }
+
+  // 占位显隐
+  ph.style.display = hasVisual ? "none" : "";
+
+  // 注意：play() 不在这里触发——startPlay 已显式调 playAllMedia()，跨段续播由 playTick 跨段分支调用。
+  // 若此处也调，会导致同一媒体被反复 play → AbortError（反复播/卡顿根因之一）。
+  renderMaskOverlay();   // 选中段有遮罩时画把手（拖拽用）
+}
+
+/* ---------- 播放 / 暂停 ---------- */
+function dbg(msg) { const el = $("mediaStatus"); if (el) el.textContent = msg; }
+function togglePlay() { if (isPlaying) pausePlay(); else startPlay(); }
+async function startPlay() {
+  const maxUs = totalDurationUs();
+  if (maxUs <= 0) { dbg("无内容可播放（时间轴为空）"); return; }
+  console.log("STARTPLAY", "in_us=", (Store.state.playheadUs / 1e6).toFixed(3), "max_us=", (maxUs / 1e6).toFixed(3), "willReset=", Store.state.playheadUs >= maxUs - 1000);
+  if (Store.state.playheadUs >= maxUs - 1000) Store.set({ playheadUs: 0 });
+  // 纯空隙 / 纯 text：跳到下一个有 video/audio 的段
+  if (!hasPlayableAt(Store.state.playheadUs)) {
+    let nextUs = maxUs;
+    forEachSeg(s => { if (s.start >= Store.state.playheadUs && s.start < nextUs) nextUs = s.start; });
+    if (nextUs < maxUs) Store.set({ playheadUs: nextUs });
+  }
+  isPlaying = true;
+  playStartWall = performance.now();
+  playStartUs = Store.state.playheadUs;
+  mediaClockReady = false;    // 视频/音频尚未 seek 到目标位置，playTick 先信任墙钟
+  _mcrWaitAt = 0;
+  $("playBtn").textContent = "⏸";
+  lastHitSig = resolveHits(Store.state.playheadUs).map(h => h.key).join("|");
+  renderPreview();            // 立即更新元素
+  const seeked = seekActiveMediaToPlayhead(Store.state.playheadUs);  // F1：新元素先 seek 到播放头，否则首次 play 从源素材 0 秒开始（根因 A：三段从头开始）
+  await Promise.all(seeked.map(_waitSeekSettled));   // Round D：等 seek 完成再播，消除「边 seek 边 play」的 AbortError/未启动竞态
+  playAllMedia();             // 在点击手势上下文内播放（含 autoplay 静音兜底 + 探针上报）
+  playTick();
+}
+function pausePlay() {
+  isPlaying = false;
+  if (playRAF) { cancelAnimationFrame(playRAF); playRAF = null; }
+  $("playBtn").textContent = "▶";
+  // 暂停所有 video / audio
+  for (const rec of previewState.visualEls.values()) {
+    const v = rec.el.firstElementChild;
+    if (v && v.pause) v.pause();
+  }
+  for (const rec of previewState.audioEls.values()) {
+    rec.el.pause();
+  }
+}
+function updateMuteBtn() {
+  const btn = $("muteBtn");
+  if (!btn) return;
+  btn.textContent = previewMuted ? "🔇" : "🔊";
+  btn.title = previewMuted ? "已静音，点击恢复声音" : "静音";
+  btn.classList.toggle("muted", previewMuted);
+}
+function toggleMute() {
+  // autoplay 兜底只静音了元素（el.muted=true），没有改全局 previewMuted。
+  // 此时用户点 🔊 应直接恢复有声，而不是先切到全局静音再切回来。
+  if (!previewMuted) {
+    let recovered = false;
+    for (const rec of previewState.visualEls.values()) {
+      const v = rec.el.firstElementChild;
+      if (v && v.tagName === "VIDEO" && v.muted) {
+        const layerKey = rec.key || "";
+        const trackMuted = layerKey.startsWith("video:") ? isTrackMuted("video", parseInt(layerKey.split(":")[1], 10)) : false;
+        if (!trackMuted) {
+          v.muted = false;
+          const p = v.play(); if (p && p.catch) p.catch(() => {});
+          recovered = true;
+        }
+      }
+    }
+    for (const rec of previewState.audioEls.values()) {
+      if (rec.el.muted) {
+        rec.el.muted = false;
+        const p = rec.el.play(); if (p && p.catch) p.catch(() => {});
+        recovered = true;
+      }
+    }
+    if (recovered) { clearAutoplayFatal(); return; }
+  }
+  previewMuted = !previewMuted;
+  // 同步所有现有 video / audio 元素
+  for (const rec of previewState.visualEls.values()) {
+    const v = rec.el.firstElementChild;
+    if (v && v.tagName === "VIDEO") {
+      // video 静音 = 全局静音 或 轨道静音
+      const layerKey = rec.key || "";
+      const trackMuted = layerKey.startsWith("video:") ? isTrackMuted("video", parseInt(layerKey.split(":")[1], 10)) : false;
+      v.muted = previewMuted || trackMuted;
+    }
+  }
+  for (const rec of previewState.audioEls.values()) {
+    rec.el.muted = previewMuted;
+  }
+  updateMuteBtn();
+  if (!previewMuted) clearAutoplayFatal();   // 用户主动恢复有声 → 消掉之前的 autoplay 软提醒红条
+}
+function playAllMedia() {
+  // 在 startPlay 的点击手势（或 sticky-activation 跨段）上下文内调用。
+  // 尝试播放所有可见 video/audio；autoplay 被拒则静音兜底（画面先动）并上报探针，避免“画面冻结/无声”静默发生。
+  const now = performance.now();
+  if (now - _lastPlayAll < 250) return;   // 防抖：250ms 内不重复整批 play，避免同一媒体被反复 play 引发 AbortError（反复播/卡顿根因）
+  _lastPlayAll = now;
+  const attempt = (el, label, seg) => {
+    if (!el || !el.paused) return;       // 已在播则跳过
+    console.log("PLAY", "key=", label, "ct=", (el.currentTime || 0).toFixed(3), "ph_us=", (Store.state.playheadUs / 1e6).toFixed(3));
+    const p = el.play();
+    if (p && p.catch) p.catch(err => {
+      const name = (err && err.name) || "Error";
+      // F3：按错误类型分流，禁止 blanket 静音（掩盖播放器内部 bug）。仅 NotAllowedError 走静音兜底。
+      if (name === "NotAllowedError") {
+        // 真·浏览器 autoplay 限制：保留静音兜底（产品期可用），画面先动
+        setTimeout(() => {
+          if (!isPlaying) return;            // 已暂停/已停止 → 不再兜底、不弹窗
+          if (!el.paused && el.currentTime > 0.001) {
+            if (el.muted && !previewMuted) {       // 浏览器自行静音但实际可播 → 尝试恢复有声
+              try { el.muted = false; el.play().catch(() => {}); } catch (e) {}
+            }
+            return;
+          }
+          if (!el.muted) {
+            el.muted = true;                  // 元素级静音兜底：不污染全局静音状态
+            if (seg) _seekMedia(el, seg, Store.state.playheadUs);  // 兜底前重新定位，避免从 0 反复/卡顿
+            const p2 = el.play();
+            if (p2 && p2.catch) p2.catch(() => {});
+            showFatal("⚠ autoplay 被拒(" + label + ")：" + name + " — 已静音当前媒体继续播放，点 🔊 恢复声音");
+          }
+        }, 250);
+      } else if (name === "AbortError") {
+        // 我们的 seek/play 竞态（切换段时多次 play / 边 seek 边 play），非致命：仅记日志并轻量重试一次
+        console.warn("[playAllMedia] AbortError (seek/play 竞态, 非致命):", label);
+        setTimeout(() => { if (isPlaying && el.paused) { const r = el.play(); if (r && r.catch) r.catch(() => {}); } }, 60);
+      } else {
+        // 播放器内部错误：暴露真实错误名，不静音、不掩，便于开发期排查
+        console.warn("[playAllMedia] 播放错误:", name, label, err);
+        showFatal("⚠ 播放错误(" + label + ")：" + name + " — 详见控制台");
+      }
+    });
+  };
+  for (const [, rec] of previewState.visualEls) {
+    if (rec.el.style.display === "none") continue;
+    const v = rec.el.firstElementChild;
+    if (v && v.tagName === "VIDEO") attempt(v, rec.key || "video", rec.seg);
+  }
+  for (const [, rec] of previewState.audioEls) {
+    attempt(rec.el, rec.key || "audio", rec.seg);
+  }
+}
+function _dominantMediaUs() {
+  // 播放头优先跟随「可见的最顶层 video」的真实播放进度；其次 audio；都没有（空隙/纯文字）返回 null。
+  // 关键：让播放头跟着媒体走，绝不强设 currentTime 去追墙钟 —— 否则缓冲稍慢会触发 seek→重缓冲→再 seek 的死循环（画面冻结/破音）。
+  let bestV = null, bestVTi = -1, bestVRec = null;
+  for (const [k, rec] of previewState.visualEls) {
+    if (rec.el.style.display === "none") continue;
+    const v = rec.el.firstElementChild;
+    if (v && !v.paused && !v.seeking) {   // Round C：跳过正在 seek 的元素，不读脏 currentTime，回落墙钟
+      const ti = parseInt(k.split(":")[1], 10);
+      if (ti >= bestVTi) { bestVTi = ti; bestV = v; bestVRec = rec; }
+    }
+  }
+  if (bestV && bestVRec) {
+    const s = bestVRec.seg;
+    const srcStartUs = s.src_start || 0;
+    const srcEndUs = s.src_end || (srcStartUs + s.duration);
+    const localRaw = bestV.currentTime * 1e6 - srcStartUs;
+    // Round D.2b: 媒体 currentTime 已跑出当前 rec.seg 源范围 → 映射过期，不返回冻结值，落入 audio 分支兜底
+    if (localRaw >= 0 && localRaw <= (srcEndUs - srcStartUs)) {
+      return s.start + Math.min(srcEndUs - srcStartUs, localRaw);   // F2：源时间→时间轴，必须减 src_start 偏移
+    }
+  }
+  for (const [, rec] of previewState.audioEls) {
+    const a = rec.el;
+    if (!(a && !a.paused && !a.seeking)) continue;   // Round C：跳过暂停/seek 中元素，不读脏 currentTime，回落墙钟
+    const s = rec.seg;
+    const srcStartUs = s.src_start || 0;
+    const srcEndUs = s.src_end || (srcStartUs + s.duration);
+    const localRaw = a.currentTime * 1e6 - srcStartUs;
+    if (localRaw < 0 || localRaw > (srcEndUs - srcStartUs)) continue;   // Round D.2b：映射过期，跳过本元素，不冻结播放头
+    return s.start + Math.min(srcEndUs - srcStartUs, localRaw);   // F2：源时间→时间轴，必须减 src_start 偏移
+  }
+  return null;
+}
+
+// Round B：跨段只 seek 已存在的媒体元素，绝不复建/改 src/重跑 render。
+// 仅当命中元素缺失（startPlay 未预建该段，例如音频首段在 t=10、起播在 t=0）才降级 renderPreview 一次，
+// 并用 previewState.isRepairing 防止「跨段→renderPreview→跨段」循环（新 GPT 保险建议）。
+function seekActiveMediaToPlayhead(us) {
+  const hits = resolveHits(us);
+  const seeked = [];   // Round D：收集本轮回实际 seek 的媒体元素，供 startPlay/跨段 await 屏障
+  // Round B1：未命中的媒体元素必须主动停车（pause+mute），否则空白区/旧段继续发声、
+  // 跨段时新旧元素抢播放状态 → 闪/卡/无声。原 renderPreview 重建的「被动停车」在 B 中已移除，这里主动补上。
+  // active 判断基于 resolveHits（绝不用媒体元素自身状态）；命中元素 muted 恢复为「轨道静音||全局静音」，不污染用户设置。
+  const activeVideoTis = new Set(hits.filter(h => h.type === "video").map(h => h.ti));
+  const activeAudioTis = new Set(hits.filter(h => h.type === "audio").map(h => h.ti));
+  for (const [layerKey, rec] of previewState.visualEls) {
+    const v = rec.el.firstElementChild;
+    if (!v) continue;
+    const ti = parseInt(layerKey.split(":")[1], 10);
+    const isVideo = v.tagName === "VIDEO";                            // visualEls 也可能存图片(<img>)，图片无 pause()/muted
+    if (!activeVideoTis.has(ti)) {
+      if (isVideo) { v.pause(); v.muted = true; }                     // 非活动视频：停车静音
+    } else if (isVideo) {
+      v.muted = isTrackMuted("video", ti) || previewMuted;            // 活动视频：恢复正确静音状态
+    }
+  }
+  for (const [layerKey, rec] of previewState.audioEls) {
+    const a = rec.el;
+    if (!a) continue;
+    const ti = parseInt(layerKey.split(":")[1], 10);
+    if (!activeAudioTis.has(ti)) { a.pause(); a.muted = true; }       // 非活动音频：停车静音
+    else a.muted = previewMuted || isTrackMuted("audio", ti);         // 活动音频：恢复正确静音状态
+  }
+  let allReady = true;
+  for (const h of hits) {
+    if (h.type !== "video" && h.type !== "audio") continue;
+    let el = null, rec = null;
+    if (h.type === "video") {
+      const v = previewState.visualEls.get("video:" + h.ti);
+      rec = v; el = v ? v.el.firstElementChild : null;   // video 元素在 wrap 内，firstElementChild 即 <video>
+    } else if (h.type === "audio") {
+      const a = previewState.audioEls.get("audio:" + h.ti);
+      rec = a; el = a ? a.el : null;   // audio 元素本身直接存于 audioEls.el
+    }
+    if (!el) { allReady = false; continue; }
+    console.log("SEEK", "key=", h.key, "segStart_us=", (h.seg.start / 1e6).toFixed(3), "srcStart_us=", (h.seg.src_start / 1e6).toFixed(3), "srcEnd_us=", h.seg.src_end != null ? (h.seg.src_end / 1e6).toFixed(3) : "n/a");
+    // B2-B：跨段只 seek 不复建元素，必须同步刷新 rec.seg/key，否则 _dominantMediaUs / playAllMedia 兜底仍用旧段元数据
+    // 算时间轴位置 → 播放头反复判定跨段 → 来回 seek → 闪/卡/反复播。仅跨段（seg/key 变化）才写，避免每 tick 无效写对象。
+    if (rec && (rec.seg !== h.seg || rec.key !== h.key)) { rec.seg = h.seg; rec.key = h.key; }
+    _seekMedia(el, h.seg, us);   // 唯一 seek 入口：timeline→source 换算在 _seekMedia 内部完成，禁第二套逻辑
+    seeked.push(el);            // Round D：记录待屏障元素
+    if (isPlaying) el.onseeked = () => { mediaClockReady = true; };
+  }
+  if (!allReady && !previewState.isRepairing) {
+    previewState.isRepairing = true;
+    renderPreview();   // 安全降级：仅缺失元素重建一次，不破坏媒体生命周期纪律
+    setTimeout(() => { previewState.isRepairing = false; }, 120);
+  }
+  return seeked;   // Round D：调用方凭此 await 屏障，确保 seek 完成后再 playAllMedia()
+}
+
+// Round D：跨段异步处理。playTick 是 RAF 同步循环，不能在回调里 await 阻塞下一帧，
+// 故抽出异步函数 —— await seek 屏障后再 playAllMedia；期间 mediaClockReady=false，playTick 走墙钟（不读脏 currentTime）。
+// crossSegmentPending 锁：防止 RAF 多帧重复进入（音频-only 高频跨段最易触发）导致重复 seek/双播（审核点 2）；
+// 若处理期间又跨段，用 crossSegmentQueuedUs 记录最新目标，处理完补一轮，绝不丢 clip。
+let crossSegmentPending = false;
+let crossSegmentQueuedUs = null;
+async function _handleCrossSegment(us) {
+  console.log("CROSS_ENTER", "target_us=", (us / 1e6).toFixed(3), "queued_us=", crossSegmentQueuedUs != null ? (crossSegmentQueuedUs / 1e6).toFixed(3) : null, "pending=", crossSegmentPending);
+  if (crossSegmentPending) { crossSegmentQueuedUs = us; return; }   // 已有跨段在跑：只记最新目标，处理完补一次
+  crossSegmentPending = true;
+  try {
+    let target = us;
+    while (target != null) {
+      mediaClockReady = false;   // 切源后等新的视频/音频 seeked 再跟随其时钟
+      _mcrWaitAt = 0;
+      const seeked = seekActiveMediaToPlayhead(target);   // Round B：跨段只 seek 已存在媒体，绝不复建/改 src/重跑 render
+      await Promise.all(seeked.map(_waitSeekSettled));    // Round D：等 seek 完成
+      if (isPlaying) playAllMedia();   // 跨段后续播（playAllMedia 内部防抖保证不与 startPlay 冲突）
+      target = crossSegmentQueuedUs;   // 处理期间又跨段？取最新再走一轮
+      crossSegmentQueuedUs = null;
+    }
+  } finally {
+    crossSegmentPending = false;
+  }
+}
+function playTick() {
+  if (!isPlaying) return;
+  const now = performance.now();
+  const maxUs = totalDurationUs();
+  // 播放头优先跟随真实媒体进度；媒体尚未 seek 到播放位置（mediaClockReady=false，避免读到脏 currentTime 跳回段起点）时信任墙钟；无可见媒体才回落墙钟
+  let mediaUs = _dominantMediaUs();
+  // Round D.2: media clock validity guard —— 当前媒体若映射不到有效时间轴段（seg 过期/已跨段未刷新），
+  // 说明 segment mapping 已过期，本帧降级到墙钟，避免媒体时钟冻结播放头；不改全局 mediaClockReady 状态。
+  if (mediaUs != null && !hasPlayableAt(mediaUs)) {
+    mediaUs = null;
+  }
+  const wallUs = playStartUs + (now - playStartWall) * 1000;
+  let us = (mediaClockReady && mediaUs != null) ? mediaUs : wallUs;
+  { const _h0 = resolveHits(us)[0]; console.log("TICK", "clock=", mediaClockReady ? "MEDIA" : "WALL", "mediaUs=", mediaUs != null ? (mediaUs / 1e6).toFixed(3) : null, "wallUs=", (wallUs / 1e6).toFixed(3), "us=", (us / 1e6).toFixed(3), "seg=", _h0 ? (_h0.seg.start / 1e6).toFixed(3) : null, "gap=", !hasPlayableAt(us)); }
+  // D: mediaClockReady 超时回退 —— 跨段/初次 seek 后若 800ms 内媒体仍未 playing，重试播放并回落墙钟，避免永久脱节
+  if (!mediaClockReady) {
+    if (!_mcrWaitAt) _mcrWaitAt = now;
+    else if (now - _mcrWaitAt > 800) {
+      playAllMedia();            // 重试播放（sticky-activation 下通常能成；被拒则 playAllMedia 内静音兜底）
+      _mcrWaitAt = now;          // 重置计时，避免每帧重试；只等下一次 800ms 窗口
+      // 不强制 mediaClockReady=true：只有元素真正 onplaying（renderPreview 里 onplaying 已置 true）才跟随媒体时钟，
+      // 否则播放头一直走墙钟兜底，避免“切到 audio.currentTime≈0 跳回段起点”造成的反复播。
+    }
+  } else { _mcrWaitAt = 0; }
+  if (us >= maxUs) { Store.state.playheadUs = maxUs; positionPlayhead(); renderTimecode(); pausePlay(); return; }
+  // 纯空隙：不再运行时瞬移播放头（Round D.1 —— NLE 行为：播放头沿当前时钟自然穿过空白，静音滑到下一素材）
+  // 仅当播放头处于空隙且后面没有任何可播素材时，才在末尾收尾暂停。
+  if (!hasPlayableAt(us)) {
+    let nextUs = maxUs;
+    forEachSeg(s => { if (s.start >= us && s.start < nextUs) nextUs = s.start; });
+    if (nextUs >= maxUs) {   // 后面没有可播段了 → 正常收尾
+      Store.state.playheadUs = maxUs;
+      positionPlayhead();
+      renderTimecode();
+      pausePlay();
+      return;
+    }
+    // 否则：不修改 us / playStartUs / playStartWall，播放头沿当前时钟自然推进（空白区无声音）
+  }
+  // 播放时绕开 Store.set 的整树重绘：直接写 state + 仅动红线与时间码
+  Store.state.playheadUs = us;
+  positionPlayhead();
+  renderTimecode();
+  applyKfLiveAll();   // 每帧刷新关键帧动画（位移/缩放/旋转/透明度）
+  // 仅「跨段换源」才重建预览并 seek 一次；同段内靠浏览器自然播放，绝不每帧 seek（这是流畅的关键）
+  const hits = resolveHits(us);
+  const keySig = hits.map(h => h.key).join("|");
+  if (keySig !== lastHitSig) {
+    console.log("CROSS", "us=", (us / 1e6).toFixed(3), "mediaClockReady=", mediaClockReady, "keySig=", keySig);
+    lastHitSig = keySig;
+    _handleCrossSegment(us);   // Round D：抽异步，await 屏障后 playAllMedia；fire-and-forget，不阻塞 RAF 下一帧
+  }
+  playRAF = requestAnimationFrame(playTick);
+}
+
+/* ---------- 渲染：Skill 区（只读 Store） ---------- */
+function renderSkill(s) {
+  const body = $("skillModalBody");
+  if (!s.selectedKey) { body.innerHTML = '<div class="empty">暂未接入 Skill<br>选中素材后这里显示可执行的剪辑 Skill</div>'; return; }
+  body.innerHTML =
+    '<div class="skill-item"><div class="t">口播精剪</div><div class="d">自动去停顿/口水词，保留语义</div></div>' +
+    '<div class="skill-item"><div class="t">字幕生成</div><div class="d">识别语音生成字幕片段</div></div>' +
+    '<div class="skill-item"><div class="t">转场建议</div><div class="d">根据前后片段推荐转场</div></div>';
+}
+
+/* ---------- 渲染：MCP 状态 ---------- */
+function renderMcp(s) {
+  const m = s.meta.mcp;
+  $("mcpDot").classList.toggle("on", !!m.connected);
+  $("mcpName").textContent = m.connected ? ("已连接 · " + (m.agent || "agent")) : "未连接";
+}
+
+/* ===================== 遮罩 masks（对齐 OpenCut masks 数据模型） ===================== */
+const SVGNS = "http://www.w3.org/2000/svg";
+// 形状 + 支持的把手（pos 位置 / rot 旋转 / scale 缩放 / edges 边 / corners 角）
+const MASK_SHAPES = [
+  { type: "rectangle", name: "矩形", feats: { pos: 1, rot: 1, scale: 1, edges: 1 } },
+  { type: "ellipse", name: "椭圆", feats: { pos: 1, rot: 1, scale: 1, edges: 1 } },
+  { type: "star", name: "星形", feats: { pos: 1, rot: 1, scale: 1, edges: 1 } },
+  { type: "heart", name: "爱心", feats: { pos: 1, rot: 1, scale: 1, edges: 1 } },
+  { type: "diamond", name: "菱形", feats: { pos: 1, rot: 1, scale: 1, edges: 1 } },
+  { type: "split", name: "线性", feats: { pos: 1, rot: 1, scale: 0, edges: 0 } },
+  { type: "cinematic-bars", name: "电影黑边", feats: { pos: 1, rot: 1, scale: 0, edges: 1 } },
+];
+const MASK_EXPORTABLE = { rectangle: 1, ellipse: 1, star: 1, heart: 1, split: 1 };
+
+// 把归一化参数换算成 0..1 objectBoundingBox 几何（未旋转；旋转交给 clipPathTransform）
+function maskGeom(p) {
+  const scale = p.scale || 1;
+  return {
+    cx: 0.5 + (p.centerX || 0),
+    cy: 0.5 + (p.centerY || 0),
+    w: Math.max(0.001, (p.width || 0.6) * scale),
+    h: Math.max(0.001, (p.height || 0.6) * scale),
+  };
+}
+// 形状本体路径（不含外框；反转时由 maskClipPathD 拼外框）
+function maskShapePathD(type, g) {
+  const { cx, cy, w, h } = g; const rx = w / 2, ry = h / 2;
+  if (type === "rectangle") return `M ${cx - rx},${cy - ry} H ${cx + rx} V ${cy + ry} H ${cx - rx} Z`;
+  if (type === "ellipse") return `M ${cx},${cy - ry} A ${rx},${ry} 0 1,1 ${cx},${cy + ry} A ${rx},${ry} 0 1,1 ${cx},${cy - ry} Z`;
+  if (type === "diamond") return `M ${cx},${cy - ry} L ${cx + rx},${cy} L ${cx},${cy + ry} L ${cx - rx},${cy} Z`;
+  if (type === "star") {
+    const N = 10, inner = 0.45; let d = "";
+    for (let i = 0; i < N; i++) {
+      const outer = i % 2 === 0; const rX = outer ? rx : rx * inner; const rY = outer ? ry : ry * inner;
+      const a = i * Math.PI / 5 - Math.PI / 2;
+      const x = cx + rX * Math.cos(a), y = cy + rY * Math.sin(a);
+      d += (i === 0 ? "M" : "L") + ` ${x.toFixed(4)},${y.toFixed(4)} `;
+    }
+    return d + "Z";
+  }
+  if (type === "heart") {
+    let d = ""; const steps = 40;
+    for (let i = 0; i <= steps; i++) {
+      const t = i / steps * Math.PI * 2;
+      const hx = 16 * Math.sin(t) ** 3;
+      const hy = 13 * Math.cos(t) - 5 * Math.cos(2 * t) - 2 * Math.cos(3 * t) - Math.cos(4 * t);
+      const x = cx + (hx / 17) * rx, y = cy - (hy / 17) * ry;
+      d += (i === 0 ? "M" : "L") + ` ${x.toFixed(4)},${y.toFixed(4)} `;
+    }
+    return d + "Z";
+  }
+  if (type === "split") return `M 0,0 H 1 V ${cy} H 0 Z`;              // 上半平面（默认遮挡下方）
+  if (type === "cinematic-bars") return `M 0,${cy - ry} H 1 V ${cy + ry} H 0 Z`; // 横向带
+  return "";
+}
+function maskClipPathD(type, g, inverted) {
+  const shape = maskShapePathD(type, g);
+  if (!inverted) return shape;
+  return `M 0,0 H 1 V 1 H 0 Z ` + shape;   // 外框 - 形状 → evenodd 反转
+}
+// 给某段的预览媒体层挂 clip-path（剪映草稿每段单遮罩）
+function applySegMask(seg, key, recEl) {
+  recEl.style.clipPath = ""; recEl.style.webkitClipPath = "";
+  const ms = seg.masks || [];
+  if (!ms.length) return;
+  const m = ms[0]; const p = m.params; const g = maskGeom(p);
+  const d = maskClipPathD(m.type, g, p.inverted);
+  const clipId = "cp-" + key;
+  const defs = $("maskDefsDefs"); if (!defs) return;
+  // key 可能含 '.' (如 video-0.0)，#cp-video-0.0 不是合法 CSS selector；用 getElementById 取
+  const old = document.getElementById(clipId); if (old) old.remove();
+  const cp = document.createElementNS(SVGNS, "clipPath");
+  cp.setAttribute("id", clipId);
+  cp.setAttribute("clipPathUnits", "objectBoundingBox");
+  cp.setAttribute("clipPathTransform", `rotate(${p.rotation || 0} 0.5 0.5)`);
+  const path = document.createElementNS(SVGNS, "path");
+  path.setAttribute("d", d);
+  path.setAttribute("clip-rule", p.inverted ? "evenodd" : "nonzero");
+  cp.appendChild(path); defs.appendChild(cp);
+  recEl.style.clipPath = `url(#${clipId})`;
+  recEl.style.webkitClipPath = `url(#${clipId})`;
+}
+
+// 遮罩属性面板（选中单段时显示）
+function renderMaskPanel() {
+  const nameEl = $("maskSegName"), shapesEl = $("maskShapes"), ctrlsEl = $("maskCtrls"),
+        emptyEl = $("maskEmpty");
+  const s = selectedSeg();
+  const ok = s && (s.type === "video" || s.type === "image");
+  if (!ok) { emptyEl.style.display = ""; shapesEl.style.display = "none"; ctrlsEl.style.display = "none"; nameEl.textContent = ""; return; }
+  emptyEl.style.display = "none"; shapesEl.style.display = "flex"; nameEl.textContent = s.name || "";
+  const cur = (s.masks && s.masks[0]) || null;
+  // 形状按钮（已选高亮）
+  shapesEl.innerHTML = MASK_SHAPES.map(sh =>
+    `<button data-type="${sh.type}" class="${cur && cur.type === sh.type ? "on" : ""}">${sh.name}</button>`).join("");
+  if (!cur) { ctrlsEl.style.display = "none"; ctrlsEl.innerHTML = ""; return; }
+  ctrlsEl.style.display = "";
+  const p = cur.params; const feats = MASK_SHAPES.find(x => x.type === cur.type).feats;
+  const slider = (key, lab, min, max, step) =>
+    `<div class="row"><label>${lab}</label><input type="range" data-k="${key}" min="${min}" max="${max}" step="${step}" value="${p[key] || 0}"><span class="val">${Math.round((p[key] || 0) * 100) / 100}</span></div>`;
+  let html = "";
+  if (feats.pos) { html += slider("centerX", "X", -2, 2, 0.01) + slider("centerY", "Y", -2, 2, 0.01); }
+  if (feats.edges) { html += slider("width", "宽", 0.01, 2, 0.01) + slider("height", "高", 0.01, 2, 0.01); }
+  if (feats.scale) { html += slider("scale", "缩放", 0.05, 5, 0.01); }
+  html += slider("rotation", "旋转", 0, 360, 1) + slider("feather", "羽化", 0, 100, 1);
+  html += `<div class="chk"><input type="checkbox" id="maskInv" ${p.inverted ? "checked" : ""}><label for="maskInv">反转遮罩（保留外部）</label></div>`;
+  const exp = MASK_EXPORTABLE[cur.type]
+    ? "导出剪映：支持（矩形/椭圆/星形/爱心/线性）。"
+    : "导出剪映：该形状剪映基础遮罩无对应，仅本软件预览。";
+  html += `<div class="expnote">${exp}</div>`;
+  html += `<button class="rm" data-act="remove">删除遮罩</button>`;
+  ctrlsEl.innerHTML = html;
+}
+
+// 字幕来源：优先选中段（视频/音频），否则项目主视频轨/音频轨第一段
+function getAsrSource() {
+  const s = selectedSeg();
+  if (s && (s.type === "video" || s.type === "audio") && s.path) return { path: s.path, name: s.name };
+  const d = Store.state.draft || {};
+  for (const tr of (d.video || [])) for (const seg of tr) if (seg.path) return { path: seg.path, name: seg.name };
+  for (const tr of (d.audio || [])) for (const seg of tr) if (seg.path) return { path: seg.path, name: seg.name };
+  return null;
+}
+
+function renderSubtitlePanel() {
+  const emptyEl = $("subEmpty"), ctrlsEl = $("subCtrls"), srcEl = $("subSource"), nameEl = $("subSegName");
+  const src = getAsrSource();
+  if (!src) { emptyEl.style.display = ""; ctrlsEl.style.display = "none"; nameEl.textContent = ""; return; }
+  emptyEl.style.display = "none"; ctrlsEl.style.display = "";
+  srcEl.textContent = src.name || src.path; srcEl.title = src.path || "";
+  nameEl.textContent = "";
+}
+
+// 贴纸面板：① 添加控件（新建轨 / 选图 / 添加到播放头）② 选中贴纸段时显示变换滑块
+let stPickPath = null;   // 当前选中的本地贴纸图片路径（来自原生对话框）
+function renderStickerPanel() {
+  const emptyEl = $("stickerEmpty"), ctrlsEl = $("stickerCtrls");
+  const s = selectedSeg();
+  const isSticker = s && s.type === "sticker";
+  // 有任意贴纸轨 / 已选贴纸 → 显示控件；否则显示空提示
+  const hasStickerTrack = (Store.state.draft.sticker || []).some(t => t && t.length > 0);
+  if (!hasStickerTrack && !isSticker) { emptyEl.style.display = ""; ctrlsEl.style.display = "none"; return; }
+  emptyEl.style.display = "none"; ctrlsEl.style.display = "";
+  // 选中贴纸 → 回填变换滑块
+  const tf = isSticker ? (s.transform || {}) : {};
+  const selName = $("stSelName"), tfBox = $("stTf");
+  if (isSticker) {
+    selName.style.display = ""; selName.textContent = s.name || "贴纸";
+    tfBox.style.display = "";
+    const setR = (id, vid, v, dig) => { $(id).value = v; $(vid).textContent = (dig ? Math.round(v * 100) / 100 : v); };
+    setR("stX", "stXV", tf.x || 0, true);
+    setR("stY", "stYV", tf.y || 0, true);
+    setR("stScale", "stScaleV", tf.scale || 1, true);
+    setR("stRot", "stRotV", tf.rotation || 0, false);
+    setR("stOp", "stOpV", tf.opacity != null ? tf.opacity : 1, true);
+    $("stFlipH").checked = !!tf.flipH;
+    $("stFlipV").checked = !!tf.flipV;
+  } else {
+    selName.style.display = "none"; tfBox.style.display = "none";
+  }
+}
+
+let maskDrag = null;
+function renderMaskOverlay() {
+  const ov = $("maskOverlay"); if (!ov) return;
+  const W = ov.clientWidth || 1, H = ov.clientHeight || 1;
+  ov.setAttribute("viewBox", `0 0 ${W} ${H}`);
+  ov.innerHTML = "";
+  const s = selectedSeg();
+  if (!s || !s.masks || !s.masks.length) return;
+  if (s.type !== "video" && s.type !== "image") return;
+  const k = Store.state.selectedKey; if (!k) return;
+  const [, tti] = k.split(":");
+  const rec = previewState.visualEls.get("video:" + tti);
+  if (!rec || !rec.el) return;
+  const media = rec.el.querySelector("video,img"); if (!media) return;
+  const stack = $("previewStack"); const sr = stack.getBoundingClientRect(); const mr = media.getBoundingClientRect();
+  const ox = mr.left - sr.left, oy = mr.top - sr.top, mw = mr.width, mh = mr.height;
+  if (mw < 1 || mh < 1) return;
+  const m = s.masks[0]; const p = m.params; const g = maskGeom(p);
+  const cxs = ox + g.cx * mw, cys = oy + g.cy * mh;
+  const hw = g.w * mw / 2, hh = g.h * mh / 2;
+  const rot = (p.rotation || 0) * Math.PI / 180;
+  const rp = (dx, dy) => [dx * Math.cos(rot) - dy * Math.sin(rot), dx * Math.sin(rot) + dy * Math.cos(rot)];
+  const feats = MASK_SHAPES.find(x => x.type === m.type).feats;
+  // 包围盒（轴对齐，便于看清；旋转时把手会旋转）
+  const box = document.createElementNS(SVGNS, "rect");
+  box.setAttribute("class", "mbox");
+  box.setAttribute("x", cxs - hw); box.setAttribute("y", cys - hh);
+  box.setAttribute("width", hw * 2); box.setAttribute("height", hh * 2);
+  box.setAttribute("transform", `rotate(${p.rotation || 0} ${cxs} ${cys})`);
+  ov.appendChild(box);
+  const handle = (kind, x, y, cls) => {
+    const c = document.createElementNS(SVGNS, "circle");
+    c.setAttribute("class", "mhandle " + (cls || "")); c.setAttribute("data-h", kind);
+    c.setAttribute("cx", x); c.setAttribute("cy", y); c.setAttribute("r", 6);
+    ov.appendChild(c);
+  };
+  if (feats.pos) handle("pos", cxs, cys, "");
+  if (feats.rot) {
+    const [rx, ry] = rp(0, -(hh + 24));
+    const line = document.createElementNS(SVGNS, "line");
+    line.setAttribute("class", "mrotline"); line.setAttribute("x1", cxs); line.setAttribute("y1", cys);
+    line.setAttribute("x2", cxs + rx); line.setAttribute("y2", cys + ry); ov.appendChild(line);
+    handle("rot", cxs + rx, cys + ry, "rot");
+  }
+  if (feats.edges) {
+    const [elx, ely] = rp(-hw, 0); handle("edge-l", cxs + elx, cys + ely, "");
+    const [erx, ery] = rp(hw, 0); handle("edge-r", cxs + erx, cys + ery, "");
+    const [etx, ety] = rp(0, -hh); handle("edge-t", cxs + etx, cys + ety, "");
+    const [ebx, eby] = rp(0, hh); handle("edge-b", cxs + ebx, cys + eby, "");
+  }
+  if (feats.scale) { const [sx, sy] = rp(hw, hh); handle("scale", cxs + sx, cys + sy, "scale"); }
+}
+
+// 把手拖拽：实时改 Store seg 预览，松手提交后端（单次 undo）
+function onMaskHandleDown(e) {
+  const h = e.target.getAttribute("data-h"); if (!h) return;
+  e.stopPropagation(); e.preventDefault();
+  const s = selectedSeg(); if (!s || !s.masks || !s.masks.length) return;
+  const k = Store.state.selectedKey; if (!k) return;
+  const [type, ti, idx] = k.split(":");
+  const m = s.masks[0];
+  const rec = previewState.visualEls.get("video:" + ti);
+  if (!rec || !rec.el) return;
+  const media = rec.el.querySelector("video,img");
+  const stack = $("previewStack"); const sr = stack.getBoundingClientRect(); const mr = media.getBoundingClientRect();
+  const mw = mr.width, mh = mr.height;
+  const start = JSON.parse(JSON.stringify(m.params));
+  const startX = e.clientX, startY = e.clientY;
+  const cx0 = mr.left - sr.left + (0.5 + start.centerX) * mw;
+  const cy0 = mr.top - sr.top + (0.5 + start.centerY) * mh;
+  const startAng = Math.atan2(startY - cy0, startX - cx0) * 180 / Math.PI;
+  maskDrag = { type, ti, idx, maskId: m.id, h, start, startX, startY, mw, mh, startAng, cx0, cy0, seg: s };
+  window.addEventListener("pointermove", onMaskHandleMove);
+  window.addEventListener("pointerup", onMaskHandleUp);
+}
+function onMaskHandleMove(e) {
+  if (!maskDrag) return;
+  const d = maskDrag; const dx = e.clientX - d.startX, dy = e.clientY - d.startY;
+  const p = d.seg.masks[0].params;   // 实时改同一对象（预览用）
+  if (d.h === "pos") {
+    p.centerX = d.start.centerX + dx / d.mw;
+    p.centerY = d.start.centerY + dy / d.mh;
+  } else if (d.h === "rot") {
+    const ang = Math.atan2(e.clientY - d.cy0, e.clientX - d.cx0) * 180 / Math.PI;
+    let nr = d.start.rotation + (ang - d.startAng);
+    nr = ((nr % 360) + 360) % 360; p.rotation = nr;
+  } else if (d.h === "scale") {
+    const dist = Math.hypot(dx, dy); const base = Math.hypot(d.start.width * d.mw / 2, d.start.height * d.mh / 2) || 1;
+    const sc = Math.max(0.05, Math.min(5, d.start.scale * (1 + dist / base)));
+    p.scale = sc;
+  } else if (d.h.startsWith("edge-")) {
+    if (d.h === "edge-l" || d.h === "edge-r") {
+      const sign = d.h === "edge-r" ? 1 : -1;
+      p.width = Math.max(0.01, d.start.width + sign * dx * 2 / d.mw);
+    } else {
+      const sign = d.h === "edge-b" ? 1 : -1;
+      p.height = Math.max(0.01, d.start.height + sign * dy * 2 / d.mh);
+    }
+  }
+  renderPreview(); renderMaskOverlay();
+}
+function onMaskHandleUp() {
+  if (!maskDrag) return;
+  const d = maskDrag; maskDrag = null;
+  window.removeEventListener("pointermove", onMaskHandleMove);
+  window.removeEventListener("pointerup", onMaskHandleUp);
+  const finalParams = JSON.parse(JSON.stringify(d.seg.masks[0].params));
+  call("update_mask", d.type, +d.ti, +d.idx, d.maskId, finalParams).then(refresh);
+}
+
+/* ---------- 整树渲染（订阅 Store，state 变即重绘） ---------- */
+function renderPreviewMaybe(s) {
+  // 播放中预览由 playTick 驱动（仅在跨段换源时重建一次），轮询/其它状态变更不要重建，
+  // 否则每 0.5s 重跑 renderPreview → 音频被拽回播放头 → 卡顿+反复播同段，并扰动播放头时钟
+  if (isPlaying) return;
+  renderPreview(s);
+}
+function renderAll(s) {
+  renderMedia(s);
+  if (!isPlaying) renderTimeline(s);   // 播放中冻结时间轴重建：OpenCut 播放时绝不重建 timeline DOM，否则每 0.5s 拆建导致闪/双播放头撕裂
+  renderPreviewMaybe(s);
+  renderTimecode(s);
+  renderSkill(s);
+  renderMcp(s);
+  renderMaskPanel();
+  renderSubtitlePanel();
+  renderStickerPanel();
+  showToolTab(activeToolTab);
+}
+Store.subscribe(renderAll);
+
+let activeToolTab = "kf";
+// 右侧工具栏：竖排图标页签切换（对齐 OpenCut PropertiesPanel 的 tab rail）
+function showToolTab(tab) {
+  activeToolTab = tab;
+  document.querySelectorAll("#toolsRail .rail-btn").forEach(b => b.classList.toggle("active", b.dataset.tab === tab));
+  const map = { kf: "kfPanel", mask: "maskPanel", sub: "subPanel", sticker: "stickerPanel" };
+  ["kfPanel", "maskPanel", "subPanel", "stickerPanel"].forEach(id => {
+    $(id).classList.toggle("panel-active", id === map[tab]);
+  });
+}
+
+/* =====================================================================
+ * 交互层：只产生意图，绝不直接改 DOM 位置
+ * ===================================================================== */
+
+/* 选中：改 Store，自动重绘（含高亮与把手） */
+function selectKey(key) {
+  if (key == null) Store.set({ selectedKey: null, selectedKeys: [], selectedMaterialUid: null });
+  else Store.set({ selectedKey: key, selectedKeys: [key], selectedMaterialUid: null });
+  updateToolbarState();
+  renderKfPanel();
+}
+function selectMaterial(uid) { Store.set({ selectedMaterialUid: uid, selectedKey: null, selectedKeys: [] }); }
+
+/* ===================== 关键帧 / 动画（对齐 OpenCut 属性面板 keyframe 轨道） ===================== */
+const KF_PATHS = [
+  ["transform.positionX", "位置 X", 10, 0],
+  ["transform.positionY", "位置 Y", 10, 0],
+  ["transform.scaleX", "缩放 X", 0.1, 1],
+  ["transform.scaleY", "缩放 Y", 0.1, 1],
+  ["transform.rotate", "旋转", 5, 0],
+  ["transform.opacity", "不透明度", 0.1, 1],
+];
+let selectedKf = { path: null, id: null };
+
+function round2(v) { return Math.round(v * 100) / 100; }
+function kfSegArgs() {
+  const k = Store.state.selectedKey;
+  if (!k) return [null, null, null];
+  const p = k.split(":");
+  return [p[0], +p[1], +p[2]];
+}
+// 设计画布像素尺寸（与后端 CANVAS_PRESETS 对齐：较长边 = 1080）
+function canvasPxJS() {
+  const r = (Store.state.draft.canvas || {}).ratio || "16:9";
+  const P = { "16:9": [16, 9], "9:16": [9, 16], "1:1": [1, 1], "4:3": [4, 3], "3:4": [3, 4], "21:9": [21, 9] };
+  const p = P[r] || P["16:9"]; const BASE = 1080; let W, H;
+  if (p[0] >= p[1]) { W = BASE; H = Math.round(BASE * p[1] / p[0]); }
+  else { H = BASE; W = Math.round(BASE * p[0] / p[1]); }
+  return { W, H };
+}
+// 段内局部时间 localUs 处的插值（线性/hold），与后端 _kf_interp 一致
+function kfVal(anims, path, localUs) {
+  if (!anims || !anims[path] || !anims[path].keys || !anims[path].keys.length) return null;
+  const ks = anims[path].keys.slice().sort((a, b) => a.t - b.t);
+  if (localUs <= ks[0].t) return ks[0].v;
+  if (localUs >= ks[ks.length - 1].t) return ks[ks.length - 1].v;
+  for (let i = 0; i < ks.length - 1; i++) {
+    const a = ks[i], b = ks[i + 1];
+    if (a.t <= localUs && localUs <= b.t) {
+      if (a.seg === "hold") return a.v;
+      const span = (b.t - a.t) || 1; const pr = (localUs - a.t) / span;
+      return a.v + (b.v - a.v) * pr;
+    }
+  }
+  return ks[ks.length - 1].v;
+}
+
+function renderKfPanel() {
+  const nameEl = $("kfSegName"), rowsEl = $("kfRows"), graphEl = $("kfGraph"),
+        selEl = $("kfSel"), emptyEl = $("kfEmpty"), hintEl = $("kfHint");
+  const s = selectedSeg();
+  if (!s || (s.type !== "video" && s.type !== "audio")) {
+    emptyEl.style.display = ""; rowsEl.style.display = "none"; graphEl.style.display = "none";
+    selEl.style.display = "none"; hintEl.style.display = "none"; nameEl.textContent = "";
+    selectedKf = { path: null, id: null }; return;
+  }
+  emptyEl.style.display = "none"; rowsEl.style.display = ""; graphEl.style.display = "";
+  hintEl.style.display = ""; nameEl.textContent = s.name || "";
+  const anims = s.animations || {};
+  const local = Math.max(0, Math.min(Store.state.playheadUs - s.start, s.duration));
+  let html = "";
+  for (const [path, lab] of KF_PATHS) {
+    const on = !!(anims[path] && anims[path].keys && anims[path].keys.length);
+    const cur = kfVal(anims, path, local);
+    const def = KF_PATHS.find(p => p[0] === path)[3];
+    const shown = cur == null ? def : cur;
+    html += '<div class="kf-row" data-path="' + path + '">'
+      + '<button class="tog' + (on ? ' on' : '') + '" data-act="tog" title="开/关该属性动画">◆</button>'
+      + '<span class="lab">' + lab + '</span>'
+      + '<input class="val" data-act="val" value="' + round2(shown) + '" step="0.1">'
+      + '<button class="add" data-act="add" title="在播放头处添加关键帧">＋关键帧</button>'
+      + '</div>';
+  }
+  rowsEl.innerHTML = html;
+  rowsEl.querySelectorAll(".kf-row").forEach(row => {
+    const path = row.dataset.path;
+    row.querySelector('[data-act="tog"]').addEventListener("click", () => toggleKf(path));
+    row.querySelector('[data-act="add"]').addEventListener("click", () => {
+      const v = row.querySelector('[data-act="val"]').value;
+      addKfAtPlayhead(path, v);
+    });
+  });
+  renderKfGraph(s);
+  if (selectedKf.path && selectedKf.id && anims[selectedKf.path] && anims[selectedKf.path].keys
+      && anims[selectedKf.path].keys.some(k => k.id === selectedKf.id)) {
+    renderKfSel(s);
+  } else { selEl.style.display = "none"; selectedKf = { path: null, id: null }; }
+}
+
+function renderKfGraph(s) {
+  const graphEl = $("kfGraph");
+  graphEl.querySelectorAll(".kf-diamond").forEach(d => d.remove());
+  const anims = s.animations || {};
+  const dur = s.duration || 1;
+  KF_PATHS.forEach(([path], lane) => {
+    const ch = anims[path]; if (!ch || !ch.keys) return;
+    for (const k of ch.keys) {
+      const x = (k.t / dur) * 100;
+      const d = document.createElement("div");
+      d.className = "kf-diamond" + (selectedKf.path === path && selectedKf.id === k.id ? " sel" : "");
+      d.style.left = x + "%";
+      d.style.top = ((lane + 0.5) / KF_PATHS.length * 100) + "%";
+      d.dataset.path = path; d.dataset.id = k.id;
+      d.title = path + " @ " + (k.t / 1e6).toFixed(2) + "s = " + round2(k.v);
+      d.addEventListener("mousedown", e => onKfDiamondDown(e, path, k.id, dur));
+      graphEl.appendChild(d);
+    }
+  });
+}
+
+function renderKfSel(s) {
+  const selEl = $("kfSel");
+  const anims = s.animations || {};
+  const ch = anims[selectedKf.path];
+  const k = ch && ch.keys ? ch.keys.find(x => x.id === selectedKf.id) : null;
+  if (!k) { selEl.style.display = "none"; return; }
+  const lab = KF_PATHS.find(p => p[0] === selectedKf.path)[1];
+  selEl.style.display = "";
+  selEl.innerHTML = '<div class="hd">' + lab + ' 关键帧</div>'
+    + '<div class="row"><span>时间</span><input data-f="t" value="' + Math.round(k.t) + '"> μs</div>'
+    + '<div class="row"><span>值</span><input data-f="v" value="' + round2(k.v) + '"></div>'
+    + '<div class="row"><span>插值</span><select data-f="seg"><option value="linear"' + (k.seg !== 'hold' ? ' selected' : '') + '>线性</option><option value="hold"' + (k.seg === 'hold' ? ' selected' : '') + '>台阶</option></select></div>'
+    + '<div class="row"><button class="del" data-act="delkf">删除关键帧</button></div>';
+  selEl.querySelector('[data-f="t"]').addEventListener("change", e =>
+    call("update_keyframe", ...kfSegArgs(), selectedKf.path, selectedKf.id, null, Math.round(+e.target.value), null).then(() => refresh()));
+  selEl.querySelector('[data-f="v"]').addEventListener("change", e =>
+    call("update_keyframe", ...kfSegArgs(), selectedKf.path, selectedKf.id, +e.target.value, null, null).then(() => refresh()));
+  selEl.querySelector('[data-f="seg"]').addEventListener("change", e =>
+    call("update_keyframe", ...kfSegArgs(), selectedKf.path, selectedKf.id, null, null, e.target.value).then(() => refresh()));
+  selEl.querySelector('[data-act="delkf"]').addEventListener("click", () => {
+    call("remove_keyframe", ...kfSegArgs(), selectedKf.path, selectedKf.id).then(() => { selectedKf = { path: null, id: null }; refresh(); });
+  });
+}
+
+function onKfDiamondDown(e, path, id, dur) {
+  e.preventDefault(); e.stopPropagation();
+  selectedKf = { path, id };
+  renderKfPanel();
+  const graphEl = $("kfGraph");
+  const diamond = graphEl.querySelector('.kf-diamond[data-id="' + id + '"]');
+  const move = ev => {
+    const rect = graphEl.getBoundingClientRect();
+    let x = (ev.clientX - rect.left) / rect.width; x = Math.max(0, Math.min(1, x));
+    if (diamond) diamond.style.left = (x * 100) + "%";
+  };
+  const up = ev => {
+    document.removeEventListener("mousemove", move);
+    document.removeEventListener("mouseup", up);
+    const rect = graphEl.getBoundingClientRect();
+    let x = (ev.clientX - rect.left) / rect.width; x = Math.max(0, Math.min(1, x));
+    const t = Math.round(x * dur);
+    call("update_keyframe", ...kfSegArgs(), path, id, null, t, null).then(() => refresh());
+  };
+  document.addEventListener("mousemove", move);
+  document.addEventListener("mouseup", up);
+}
+
+function toggleKf(path) {
+  const s = selectedSeg(); if (!s) return;
+  const anims = s.animations || {};
+  const has = anims[path] && anims[path].keys && anims[path].keys.length;
+  if (has) {
+    call("clear_keyframes", ...kfSegArgs(), path).then(() => { selectedKf = { path: null, id: null }; refresh(); });
+  } else {
+    const local = Math.max(0, Math.min(Store.state.playheadUs - s.start, s.duration));
+    const def = KF_PATHS.find(p => p[0] === path)[3];
+    call("add_keyframe", ...kfSegArgs(), path, local, def, "linear").then(() => refresh());
+  }
+}
+
+function addKfAtPlayhead(path, valStr) {
+  const s = selectedSeg(); if (!s) return;
+  const local = Math.max(0, Math.min(Store.state.playheadUs - s.start, s.duration));
+  let v = parseFloat(valStr); if (isNaN(v)) v = KF_PATHS.find(p => p[0] === path)[3];
+  call("add_keyframe", ...kfSegArgs(), path, local, v, "linear").then(() => refresh());
+}
+
+function updateKfLiveValues() {
+  const s = selectedSeg(); if (!s || (s.type !== "video" && s.type !== "audio")) return;
+  const anims = s.animations || {};
+  const rowsEl = $("kfRows"); if (!rowsEl || rowsEl.style.display === "none") return;
+  const local = Math.max(0, Math.min(Store.state.playheadUs - s.start, s.duration));
+  rowsEl.querySelectorAll(".kf-row").forEach(row => {
+    const path = row.dataset.path;
+    const cur = kfVal(anims, path, local);
+    const def = KF_PATHS.find(p => p[0] === path)[3];
+    const inp = row.querySelector('[data-act="val"]');
+    if (inp && document.activeElement !== inp) inp.value = round2(cur == null ? def : cur);
+  });
+}
+
+// 把段的关键帧动画实时应用到预览元素（translate/scale/rotate/opacity）
+function applyKfTransform(el, seg, localUs) {
+  const anims = seg.animations || {};
+  const X = kfVal(anims, "transform.positionX", localUs);
+  const Y = kfVal(anims, "transform.positionY", localUs);
+  const SX = kfVal(anims, "transform.scaleX", localUs);
+  const SY = kfVal(anims, "transform.scaleY", localUs);
+  const R = kfVal(anims, "transform.rotate", localUs);
+  const O = kfVal(anims, "transform.opacity", localUs);
+  const x = X == null ? 0 : X, y = Y == null ? 0 : Y, sx = SX == null ? 1 : SX,
+        sy = SY == null ? 1 : SY, r = R == null ? 0 : R, o = O == null ? 1 : O;
+  const stack = $("previewStack"); const rect = stack ? stack.getBoundingClientRect() : null;
+  const cp = canvasPxJS();
+  const sc = (rect && rect.width) ? rect.width / cp.W : 1;
+  el.style.transform = "translate(" + (x * sc) + "px," + (y * sc) + "px) scale(" + sx + "," + sy + ") rotate(" + r + "deg)";
+  el.style.opacity = o;
+}
+
+// 每帧把当前播放头处的关键帧动画应用到所有可见预览元素（播放/拖动时实时动画）。
+// renderPreview 只在跨段切源时重建，同段播放不重跑 applyKfTransform，故需独立每帧调用。
+function applyKfLiveAll() {
+  const us = Store.state.playheadUs;
+  for (const rec of previewState.visualEls.values()) {
+    if (!rec.seg || rec.el.style.display === "none") continue;
+    const local = Math.max(0, Math.min(us - rec.seg.start, rec.seg.duration));
+    applyKfTransform(rec.el, rec.seg, local);
+  }
+}
+
+/* 选中态 → 工具栏按钮可用性（对齐 OpenCut canToggleSelectedSourceAudio）。
+   提取原声按钮：仅当选中「视频段」且（已知含音轨 / 旧段未知时乐观允许）时启用；
+   已提取过的视频段显示「还原音频」。其余（无选中 / 非视频 / 已知无音轨）禁用。 */
+function selectedSeg() {
+  const k = Store.state.selectedKey;
+  if (!k) return null;
+  const [type, ti, idx] = k.split(":");
+  const tracks = Store.state.draft[type];
+  if (!tracks || !tracks[ti] || !tracks[ti][idx]) return null;
+  return tracks[ti][idx];
+}
+function updateToolbarState() {
+  const srcBtn = $("srcAudioBtn");
+  const speedBtn = $("speedBtn");
+  if (!srcBtn || !speedBtn) return;
+  const s = selectedSeg();
+  const canSrc = !!s && s.type === "video" && s.has_audio !== false;
+  srcBtn.disabled = !canSrc;
+  srcBtn.title = (s && s.source_audio_extracted) ? "还原音频" : "提取原声";
+  const canSpeed = !!s && (s.type === "video" || s.type === "audio");
+  speedBtn.disabled = !canSpeed;
+  speedBtn.title = canSpeed ? ("变速" + (s.speed && s.speed !== 1 ? " (当前 " + s.speed + "x)" : "")) : "变速";
+}
+
+/* 提取原声 / 还原：选中视频段 → 后端用 ffmpeg 抽音轨并静音原视频（对齐 OpenCut toggle-source-audio） */
+function doToggleSourceAudio() {
+  if (!Store.state.selectedKey) return;
+  const [type, ti, idx] = Store.state.selectedKey.split(":");
+  if (type !== "video") return;
+  call("toggle_source_audio", type, +ti, +idx)
+    .then(r => {
+      if (!r || !r.ok) { if (r && r.error) alert("提取原声失败：" + r.error); return; }
+      refresh();
+    });
+}
+
+/* 变速 / 重定时：选中 video/audio 段 → 后端按 speed 重算 duration（对齐 OpenCut updateElementRetime） */
+function doSetSpeed() {
+  if (!Store.state.selectedKey) return;
+  const s = selectedSeg();
+  if (!s || (s.type !== "video" && s.type !== "audio")) return;
+  const cur = s.speed || 1;
+  const input = prompt("设置播放速度（0.01 ~ 5.0，默认 1.0）：", cur);
+  if (input === null) return;
+  const speed = parseFloat(input);
+  if (Number.isNaN(speed)) { alert("请输入数字"); return; }
+  const changePitch = !confirm("保持原音调？\n\n确定=保持原音调；取消=随速度变调");
+  const [type, ti, idx] = Store.state.selectedKey.split(":");
+  call("set_segment_speed", type, +ti, +idx, speed, changePitch)
+    .then(r => {
+      if (!r || !r.ok) { if (r && r.error) alert("变速失败：" + r.error); return; }
+      refresh();
+    });
+}
+
+/* ---------- 吸附（对齐 OpenCut snapping/{build,resolve,threshold}.ts） ---------- */
+// 收集吸附点：所有段的 start/end + 播放头位置（微秒）。excludeKey 排除正在拖的段，避免吸到自己。
+function buildSnapPoints(excludeKey, excludePlayhead) {
+  const pts = [];
+  for (const type of ["video", "audio", "text", "sticker"]) {
+    const tracks = Store.state.draft[type] || [];
+    tracks.forEach((segs, ti) => segs.forEach((s, idx) => {
+      const k = type + ":" + ti + ":" + idx;
+      if (excludeKey && k === excludeKey) return;
+      pts.push({ time: s.start, type: "element-start" });
+      pts.push({ time: s.start + s.duration, type: "element-end" });
+    }));
+  }
+  (Store.state.bookmarks || []).forEach(b => pts.push({ time: b.us, type: "bookmark" }));
+  if (!excludePlayhead) pts.push({ time: Store.state.playheadUs, type: "playhead" });
+  return pts;
+}
+// 阈值：OpenCut 默认 10px → 微秒（随缩放变化，pixelPerSec = pps()）
+function snapThresholdUs() { return (10 / pps()) * 1e6; }
+// 解析：给定目标时间，找最近吸附点；距离 ≤ 阈值则吸附，返回 {snapped, point}
+function resolveSnap(targetUs, points) {
+  const maxD = snapThresholdUs();
+  let best = null, bestD = Infinity;
+  for (const p of points) {
+    const d = Math.abs(targetUs - p.time);
+    if (d <= maxD && d < bestD) { bestD = d; best = p; }
+  }
+  return best ? { snapped: best.time, point: best } : { snapped: targetUs, point: null };
+}
+function showSnapGuide(timeUs) {
+  const g = $("snapGuide");
+  g.style.left = (timeUs / 1e6 * pps()) + "px";
+  g.style.display = "block";   // 注意：.snap-guide class 含 display:none，必须用明确值覆盖，空串 "" 会被 stylesheet 盖掉导致不显示（之前的 bug）
+}
+function hideSnapGuide() { $("snapGuide").style.display = "none"; }
+function toggleSnap() {
+  const on = !Store.state.snapOn;
+  Store.set({ snapOn: on });
+  $("snapBtn").classList.toggle("active", on);
+  if (!on) hideSnapGuide();
+}
+function toggleRipple() {
+  const on = !Store.state.rippleOn;
+  Store.set({ rippleOn: on });
+  $("rippleBtn").classList.toggle("active", on);
+}
+function deleteMaterial(uid) {
+  if (!uid) return;
+  call("delete_material", uid).then(() => { Store.set({ selectedMaterialUid: null }); refresh(); });
+}
+
+/* 拖拽 / 裁剪：mousedown 只记 pending；mousemove 超阈值才真进入 drag；mouseup 没动则纯选中 */
+function startPointer(e, seg, mode, side) {
+  if (e.button !== 0) return;
+  const key = seg.dataset.key;
+  const [type, ti, idx] = key.split(":");
+  const s0 = findSeg(type, +ti, idx);
+  if (!s0) return;
+  // 选中语义（对齐 OpenCut selectable-surface.tsx handleItemClick）：
+  //   Ctrl/Cmd+点击 = 切换该段进/出多选集合；普通点击 = 单选替换。
+  //   已在多选集合内（且集合>1）→ 直接整组拖动，锚点=本段，保持选区（对齐 OpenCut group move）。
+  const inSel = Store.state.selectedKeys.includes(key);
+  const multi = Store.state.selectedKeys.length > 1;
+  if (e.ctrlKey || e.metaKey) {
+    const set = new Set(Store.state.selectedKeys);
+    if (set.has(key)) set.delete(key); else set.add(key);
+    const arr = [...set];
+    Store.set({ selectedKeys: arr, selectedKey: arr.length ? key : null, selectedMaterialUid: null });
+  } else if (inSel && multi) {
+    Store.set({ selectedKey: key }); // 保持多选集合，仅把本段设为焦点（锚点）
+  } else {
+    selectKey(key);
+  }
+  e.preventDefault();
+  Store.set({
+    pendingDrag: {
+      key, mode, side: side || null, type, ti: +ti, idx: +idx,
+      isGroup: !!(inSel && multi && !e.ctrlKey && !e.metaKey && mode === "move"),
+      anchorKey: key,
+      startMouseX: e.clientX, s0,
+      curLeftUs: s0.start, curRightUs: s0.start + s0.duration,
+      groupDeltaUs: 0,
+      targetType: type, targetTi: +ti, newAboveMain: false,   // 跨轨：默认目标=源轨，移动中实时更新
+    },
+    drag: null,
+  });
+  window.addEventListener("mousemove", onPointerMove);
+  window.addEventListener("mouseup", onPointerUp);
+}
+function hitTrack(e) {
+  const el = document.elementFromPoint(e.clientX, e.clientY);
+  const tr = el && el.closest(".track");
+  if (tr) return { type: tr.dataset.type, ti: +tr.dataset.ti };
+  return null; // 轨道区下方空白 → 新建同类型轨
+}
+function onPointerMove(e) {
+  let d = Store.state.drag;
+  const pd = Store.state.pendingDrag;
+  if (!d && !pd) return;
+  if (!d) {
+    // pending 阶段：超过阈值才升入真实 drag
+    const dx = e.clientX - pd.startMouseX;
+    if (pd.mode === "move" && Math.abs(dx) < THRESHOLD) return;
+    d = Object.assign({}, pd, { moved: true });
+    Store.set({ drag: d, pendingDrag: null });
+  }
+  const dx = e.clientX - d.startMouseX;
+  if (!d.moved) { d.moved = true; }
+  const dUs = dx / pps() * 1e6;
+  if (d.mode === "move") {
+    let left = Math.max(0, d.s0.start + dUs);
+    if (Store.state.snapOn) {
+      const r = resolveSnap(left, buildSnapPoints(d.key, false));
+      left = r.snapped;
+      r.point ? showSnapGuide(r.point.time) : hideSnapGuide();
+    } else hideSnapGuide();
+    d.curLeftUs = left;
+    d.groupDeltaUs = dUs;   // 整组移动预览用：非锚点段横向跟随量
+    // 跨轨解析（对齐 OpenCut resolveTrackPlacement）：
+    // 命中同类型已有轨 → 落到该轨；视频拖到空白/异类型 → 一律新建覆盖轨(显示在 main 上方)；
+    // 音频/文本拖到空白 → 新建轨(追加到末尾)。
+    const ht = hitTrack(e);
+    if (ht && ht.type === d.type) { d.targetType = ht.type; d.targetTi = ht.ti; d.newAboveMain = false; }
+    else if (d.type === "video") { d.targetType = "video"; d.targetTi = -1; d.newAboveMain = true; }
+    else { d.targetType = d.type; d.targetTi = -1; d.newAboveMain = false; }
+  } else if (d.side === "left") {
+    const right = d.s0.start + d.s0.duration;
+    let left = Math.max(0, Math.min(right - 0.2e6, d.s0.start + dUs));
+    if (Store.state.snapOn) {
+      const r = resolveSnap(left, buildSnapPoints(d.key, false));
+      left = Math.max(0, Math.min(right - 0.2e6, r.snapped));
+      r.point ? showSnapGuide(r.point.time) : hideSnapGuide();
+    } else hideSnapGuide();
+    d.curLeftUs = left;
+  } else {
+    const right = d.s0.start + d.s0.duration;
+    let r2 = Math.max(d.s0.start + 0.2e6, right + dUs);
+    if (Store.state.snapOn) {
+      const r = resolveSnap(r2, buildSnapPoints(d.key, false));
+      r2 = Math.max(d.s0.start + 0.2e6, r.snapped);
+      r.point ? showSnapGuide(r.point.time) : hideSnapGuide();
+    } else hideSnapGuide();
+    d.curRightUs = r2;
+  }
+  Store._emit(); // 临时态 → 自动重绘（被拖片段位置由 render 绘制，非手动改）
+}
+function onPointerUp() {
+  const d = Store.state.drag;
+  const pd = Store.state.pendingDrag;
+  window.removeEventListener("mousemove", onPointerMove);
+  window.removeEventListener("mouseup", onPointerUp);
+  $("dropLine").style.display = "none";   // 移动结束：隐藏蓝色落点线
+  hideSnapGuide();              // 吸附参考线一并隐藏
+  if (pd) {
+    // 纯单击：保留 selectedKey，清空 pending
+    Store.set({ pendingDrag: null });
+    return;
+  }
+  Store.set({ drag: null });   // 退出临时态 → 回到真实草稿位置
+  if (d && d.moved) {
+    if (d.mode === "move") {
+      if (d.isGroup) {
+        // 整组移动：锚点 d.key 的 delta 同步到所有选中段，保持相对时间/轨道布局（对齐 OpenCut resolveGroupMove）
+        const anchorNewTi = (d.targetTi >= 0) ? d.targetTi : d.ti;   // 整组不新建轨，落点回退到原轨
+        const deltaTrack = anchorNewTi - d.ti;
+        const dUs = d.curLeftUs - d.s0.start;
+        const members = Store.state.selectedKeys.map(k => {
+          const [t, ti, ix] = k.split(":");
+          const s = findSeg(t, +ti, +ix);
+          let toTi;
+          if (k === d.key) toTi = anchorNewTi;
+          else { const cand = (+ti) + deltaTrack; toTi = Math.max(0, Math.min(cand, (Store.state.draft[t] || []).length - 1)); }
+          return { track_type: t, track_index: +ti, index: +ix, to_track: toTi, at_time_us: Math.round((s ? s.start : 0) + dUs) };
+        });
+        call("move_group", members).then(r => {
+          if (r && r.ok && r.moved) {
+            const ai = members.findIndex(m => (m.track_type + ":" + m.track_index + ":" + m.index) === d.key);
+            const na = r.moved[ai] || r.moved[0];
+            const nk = r.moved.map(m => m.track_type + ":" + m.track_index + ":" + m.index);
+            const nAnchor = na.track_type + ":" + na.track_index + ":" + na.index;
+            Store.set({ selectedKeys: nk, selectedKey: nAnchor, selectedMaterialUid: null });
+          }
+          refresh();
+        });
+      } else {
+        const crossTrack = (d.targetType !== d.type || d.targetTi !== d.ti);
+        if (d.targetTi === -1 && d.newAboveMain) {
+          // 视频拖到主轨上方 → 在数据索引 1 处(主轨之上)新建覆盖轨接住（对齐 OpenCut insert_index 保护）
+          call("relocate_segment", d.type, d.ti, d.idx, -1, Math.round(d.curLeftUs), 1)
+            .then(() => { selectKey(null); refresh(); });
+        } else if (d.targetTi === -1) {
+          // 音频/文本拖到空白 → 追加新建轨
+          call("relocate_segment", d.type, d.ti, d.idx, -1, Math.round(d.curLeftUs), null)
+            .then(() => { selectKey(null); refresh(); });
+        } else if (crossTrack) {
+          call("relocate_segment", d.type, d.ti, d.idx, d.targetTi, Math.round(d.curLeftUs), null)
+            .then(() => { selectKey(null); refresh(); });
+        } else {
+          call("move_segment", d.type, d.ti, d.idx, Math.round(d.curLeftUs), Store.state.rippleOn).then(refresh);
+        }
+      }
+    } else {
+      const val = d.side === "left" ? Math.round(d.curLeftUs) : Math.round(d.curRightUs);
+      call("trim_segment", d.type, d.ti, d.idx, d.side, val, Store.state.rippleOn).then(refresh);
+    }
+  }
+}
+
+/* 时间轴 mousedown：把手=裁剪，片段体=移动/选中，空白=框选/取消选中 */
+function onTimelineDown(e) {
+  const handle = e.target.closest(".handle");
+  const seg = e.target.closest(".seg");
+  if (handle && seg) { startPointer(e, seg, "resize", handle.classList.contains("l") ? "left" : "right"); return; }
+  if (seg) { startPointer(e, seg, "move", null); return; }
+  if (e.target.closest(".ruler")) return;            // 标尺定位交给 onRulerDown
+  // 轨道或内容区空白 → 起框选（拖出矩形选段；纯点空白在 onBoxUp 取消选中）
+  if (e.target.closest(".track") || e.target.closest(".tl-content")) {
+    startBoxSelect(e); return;
+  }
+  // 滚动容器空白（轨道下方/右侧留白）→ 直接取消选中
+  if (e.target.closest(".tl-scroll")) { selectKey(null); return; }
+}
+/* 框选：拖出矩形，松手把相交片段并入 selectedKeys（Shift 增选） */
+function startBoxSelect(e) {
+  if (e.button !== 0) return;
+  e.preventDefault();
+  Store.set({ pendingBox: { x0: e.clientX, y0: e.clientY, shift: e.shiftKey } });
+  window.addEventListener("mousemove", onBoxMove);
+  window.addEventListener("mouseup", onBoxUp);
+}
+function onBoxMove(e) {
+  const b = Store.state.pendingBox; if (!b) return;
+  const rect = $("tlContent").getBoundingClientRect();
+  const x = Math.min(b.x0, e.clientX), x2 = Math.max(b.x0, e.clientX);
+  const y = Math.min(b.y0, e.clientY), y2 = Math.max(b.y0, e.clientY);
+  const box = $("selBox");
+  box.style.display = "block";
+  box.style.left = (x - rect.left) + "px";
+  box.style.top = (y - rect.top) + "px";
+  box.style.width = (x2 - x) + "px";
+  box.style.height = (y2 - y) + "px";
+}
+function onBoxUp(e) {
+  window.removeEventListener("mousemove", onBoxMove);
+  window.removeEventListener("mouseup", onBoxUp);
+  const b = Store.state.pendingBox;
+  Store.set({ pendingBox: null });
+  const box = $("selBox");
+  const moved = b && (Math.abs(e.clientX - b.x0) > THRESHOLD || Math.abs(e.clientY - b.y0) > THRESHOLD);
+  box.style.display = "none";
+  if (!moved) { if (!b || !b.shift) selectKey(null); return; }  // 纯点空白 → 取消选中
+  const r = box.getBoundingClientRect();
+  const keys = [];
+  $("tlContent").querySelectorAll(".seg").forEach(seg => {
+    const sr = seg.getBoundingClientRect();
+    if (sr.left < r.right && sr.right > r.left && sr.top < r.bottom && sr.bottom > r.top) keys.push(seg.dataset.key);
+  });
+  if (keys.length === 0) { if (!b.shift) selectKey(null); return; }
+  if (b.shift) {
+    const set = new Set(Store.state.selectedKeys); keys.forEach(k => set.add(k));
+    const arr = [...set];
+    Store.set({ selectedKeys: arr, selectedKey: arr[arr.length - 1], selectedMaterialUid: null });
+  } else {
+    Store.set({ selectedKeys: keys, selectedKey: keys[keys.length - 1], selectedMaterialUid: null });
+  }
+}
+/* 整组缩放：拖 group-box 左右把手 → 整组时间跨度按 factor 拉伸/压缩（对齐 OpenCut group-resize 缩放）。
+   以不动边为 pivot：右把手 pivot=组左缘；左把手 pivot=组右缘。 */
+function onGroupHandleDown(e, side) {
+  e.preventDefault(); e.stopPropagation();
+  const keys = Store.state.selectedKeys; if (!keys.length) return;
+  let gStart = Infinity, gEnd = -Infinity;
+  keys.forEach(k => {
+    const [t, ti, idx] = k.split(":"); const s = findSeg(t, +ti, +idx);
+    if (s) { gStart = Math.min(gStart, s.start); gEnd = Math.max(gEnd, s.start + s.duration); }
+  });
+  if (!isFinite(gStart)) return;
+  Store.set({ groupScale: { factor: 1, pivot: side === "right" ? gStart : gEnd, side, startX: e.clientX, gStart, gEnd } });
+  window.addEventListener("mousemove", onGroupMove);
+  window.addEventListener("mouseup", onGroupUp);
+}
+function onGroupMove(e) {
+  const g = Store.state.groupScale; if (!g) return;
+  const dUs = (e.clientX - g.startX) / pps() * 1e6;
+  const span = (g.gEnd - g.gStart) || 1;
+  let factor;
+  if (g.side === "right") factor = (g.gEnd + dUs - g.gStart) / span;
+  else factor = (g.gEnd - (g.gStart + dUs)) / span;   // 左把手：右缘不动，左缘随鼠标移动
+  factor = Math.max(0.05, Math.min(20, factor));
+  const pivot = g.side === "right" ? g.gStart : g.gEnd;
+  Store.set({ groupScale: { factor, pivot, side: g.side, startX: g.startX, gStart: g.gStart, gEnd: g.gEnd } });
+}
+function onGroupUp() {
+  window.removeEventListener("mousemove", onGroupMove);
+  window.removeEventListener("mouseup", onGroupUp);
+  const g = Store.state.groupScale;
+  Store.set({ groupScale: null });
+  if (!g) return;
+  const members = Store.state.selectedKeys.map(k => {
+    const [t, ti, idx] = k.split(":");
+    const s = findSeg(t, +ti, +idx);
+    const newStart = g.pivot + (s.start - g.pivot) * g.factor;
+    return { track_type: t, track_index: +ti, index: +idx, factor: g.factor, new_start_us: Math.round(newStart) };
+  });
+  call("scale_group", members).then(refresh);
+}
+/* 整组缩放包围盒：完全由选中段真实 DOM 矩形推导（自动跟随移动/缩放预览，且不受标尺/标签/滚动偏移干扰） */
+function renderGroupBox() {
+  const gb = $("groupBox");
+  const keys = Store.state.selectedKeys;
+  const d = Store.state.drag;
+  if (!keys || keys.length === 0 || (d && d.moved && !d.isGroup)) { gb.style.display = "none"; return; }
+  const cRect = $("tlContent").getBoundingClientRect();
+  let minL = Infinity, maxR = -Infinity, minT = Infinity, maxB = -Infinity, any = false;
+  keys.forEach(k => {
+    const el = document.querySelector('[data-key="' + k + '"]');
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    any = true;
+    minL = Math.min(minL, r.left); maxR = Math.max(maxR, r.right);
+    minT = Math.min(minT, r.top); maxB = Math.max(maxB, r.bottom);
+  });
+  if (!any) { gb.style.display = "none"; return; }
+  gb.style.display = "block";
+  gb.style.left = (minL - cRect.left) + "px";
+  gb.style.top = (minT - cRect.top) + "px";
+  gb.style.width = (maxR - minL) + "px";
+  gb.style.height = (maxB - minT) + "px";
+}
+/* ---------- 播放头定位 / 拖拽（对齐 OpenCut TimelinePlayhead） ---------- */
+/* 屏幕 X → 微秒：ruler 与 playhead 同在 tlContent 坐标系，ruler 的 rect.left 已随横向滚动偏移，
+   所以 (clientX - rect.left) 就是相对 tlContent 左的位置，无需再加减 scrollLeft。 */
+function clientXToUs(clientX) {
+  const rect = $("ruler").getBoundingClientRect();
+  return Math.max(0, (clientX - rect.left) / pps() * 1e6);
+}
+let _phScrub = false;
+function onPlayheadDown(e) {
+  e.preventDefault();
+  e.stopPropagation();           // 别冒泡到 tlContent 的 onTimelineDown
+  pausePlay();                   // 拖动播放头时先暂停，避免 playTick 每帧覆盖
+  _phScrub = true;
+  $("playheadHandle").classList.add("dragging");
+  Store.set({ playheadUs: clientXToUs(e.clientX) });
+  window.addEventListener("mousemove", onPhMove);
+  window.addEventListener("mouseup", onPhUp);
+}
+function onRulerDown(e) {
+  if (e.button !== 0) return;
+  e.preventDefault();
+  e.stopPropagation();           // 别冒泡到 tlContent 的 onTimelineDown / 框选
+  pausePlay();                   // 标尺拖动定位时也暂停播放
+  _phScrub = true;
+  $("playheadHandle").classList.add("dragging");
+  Store.set({ playheadUs: clientXToUs(e.clientX) });
+  window.addEventListener("mousemove", onPhMove);
+  window.addEventListener("mouseup", onPhUp);
+}
+function onPhMove(e) {
+  if (!_phScrub) return;
+  let us = clientXToUs(e.clientX);
+  if (Store.state.snapOn) {
+    const r = resolveSnap(us, buildSnapPoints(null, true));  // 播放头吸附排除自身，避免吸到自己
+    us = r.snapped;
+    r.point ? showSnapGuide(r.point.time) : hideSnapGuide();
+  } else hideSnapGuide();
+  Store.set({ playheadUs: us });
+}
+function onPhUp() {
+  if (!_phScrub) return;
+  _phScrub = false;
+  $("playheadHandle").classList.remove("dragging");
+  hideSnapGuide();              // 播放头拖拽结束：隐藏吸附参考线
+  window.removeEventListener("mousemove", onPhMove);
+  window.removeEventListener("mouseup", onPhUp);
+}
+/* 播放头出视野时自动滚回（播放/拖拽到边界时调用） */
+let _userScrollUntil = 0;   // 用户手动滚动时间轴后，短时间内不自动追播放头
+function ensurePlayheadVisible() {
+  const scroll = $("tlScroll");
+  if (!scroll) return;
+  // 用户正在手动滚动时（或刚滚动完 3s 内），不抢滚动条控制权，避免播放时拖不动水平滚动条
+  if (performance.now() < _userScrollUntil) return;
+  const phX = Store.state.playheadUs / 1e6 * pps();   // 相对 tlContent 左
+  const viewLeft = scroll.scrollLeft, viewW = scroll.clientWidth;
+  if (phX < viewLeft + 12) scroll.scrollLeft = Math.max(0, phX - 40);
+  else if (phX > viewLeft + viewW - 12) scroll.scrollLeft = phX - viewW + 40;
+}
+
+/* 素材拖入时间轴进轨（提交后端 → get_state 回填 Store，无双控） */
+function onTimelineDrop(e) {
+  e.preventDefault(); hideDropPreview();
+  // 只处理轨道区域（tlMain）内的 drop，工具栏上方忽略
+  const tlMainRect = $("tlMain").getBoundingClientRect();
+  if (e.clientY < tlMainRect.top) return;
+  let data;
+  try { data = JSON.parse(e.dataTransfer.getData("text/plain") || "{}"); } catch (_) {}
+  if (!data || !data.path) {
+    // 兜底：部分 webview 在 drop 时 getData 取不到，用拖拽时缓存的 payload
+    try { data = JSON.parse(dragGhostData && dragGhostData.payload || "{}"); } catch (_) {}
+  }
+  if (!data || !data.path) return;
+  const wantType = data.type === "audio" ? "audio" : (data.type === "text" ? "text" : "video");
+  const rect = $("tlScroll").getBoundingClientRect();
+  const atTimeUs = Math.max(0, Math.round((e.clientX - rect.left + $("tlScroll").scrollLeft) / pps() * 1e6));
+  const tr = trackUnderY(e.clientY, wantType);
+  // 拖到不兼容轨道/空白 → track_index=-1 让后端新建一条该类型轨接住（OpenCut 兼容行为）
+  const ti = tr ? tr.ti : -1;
+  call("add_to_timeline", data.name, data.path, data.type, ti, atTimeUs).then(refresh);
+}
+/* 当前被拖素材对应的轨道类型（OpenCut 兼容表：audio→audio, text→text, video/image→video） */
+function dragTrackType() {
+  if (!dragGhostData || !dragGhostData.payload) return "video";
+  try { const d = JSON.parse(dragGhostData.payload); return d.type === "audio" ? "audio" : (d.type === "text" ? "text" : "video"); }
+  catch (_) { return "video"; }
+}
+function trackUnderY(y, wantType) {
+  const tracks = [...$("tlContent").querySelectorAll(".track")];
+  for (const t of tracks) {
+    if (wantType && t.dataset.type !== wantType) continue; // 类型不匹配直接跳过
+    const r = t.getBoundingClientRect();
+    if (y >= r.top && y <= r.bottom) return { el: t, ti: +t.dataset.ti, type: t.dataset.type };
+  }
+  // 所有轨道下方空白：返回 null 表示「新建同类型轨」
+  return null;
+}
+function showDropPreview(trackEl, clientX, isNewTrack) {
+  const line = $("dropLine"), hint = $("dropNewTrackHint");
+  // 清除旧高亮
+  $("tlContent").querySelectorAll(".track").forEach(t => t.classList.remove("drop-target"));
+  if (!trackEl) {
+    line.style.display = "none";
+    if (isNewTrack) {
+      hint.style.display = "";
+      // 放在最后一条轨道下方中央
+      const last = $("tlContent").querySelector(".track:last-child");
+      const contentRect = $("tlContent").getBoundingClientRect();
+      if (last) {
+        const r = last.getBoundingClientRect();
+        hint.style.top = (r.bottom - contentRect.top + 16) + "px";
+      } else {
+        hint.style.top = "60px";
+      }
+      hint.style.left = (clientX - contentRect.left) + "px";
+      hint.style.transform = "translateX(-50%)";
+    } else {
+      hint.style.display = "none";
+    }
+    return;
+  }
+  hint.style.display = "none";
+  trackEl.classList.add("drop-target");
+  const contentRect = $("tlContent").getBoundingClientRect();
+  line.style.display = "";
+  line.style.left = (clientX - contentRect.left) + "px";
+}
+function hideDropPreview() {
+  $("dropLine").style.display = "none";
+  $("dropNewTrackHint").style.display = "none";
+  $("tlContent").querySelectorAll(".track").forEach(t => t.classList.remove("drop-target"));
+}
+
+/* 工具栏动作 */
+function doSplit() {
+  // 在播放头处把选中片段切成两段，保留左右（OpenCut split，快捷键 S / Ctrl+B / 工具栏 ✂）。
+  if (!Store.state.selectedKey) return;
+  const [type, ti, idx] = Store.state.selectedKey.split(":");
+  call("split_segment", type, +ti, +idx, Math.round(Store.state.playheadUs)).then(refresh);
+}
+function doSplitLeft() {
+  // 在播放头处分割并删除右侧，保留左侧（OpenCut split-left，快捷键 Q / 工具栏 ◀✂）。
+  if (!Store.state.selectedKey) return;
+  const [type, ti, idx] = Store.state.selectedKey.split(":");
+  call("split_segment_left", type, +ti, +idx, Math.round(Store.state.playheadUs), Store.state.rippleOn).then(r => {
+    if (r && r.ok && Store.state.rippleOn) seekPlayhead(r.at);  // 波纹删右半后，播放头跳到收拢后的切点
+    refresh();
+  });
+}
+function doSplitRight() {
+  // 在播放头处分割并删除左侧，保留右侧（OpenCut split-right，快捷键 W / 工具栏 ✂▶）。
+  if (!Store.state.selectedKey) return;
+  const [type, ti, idx] = Store.state.selectedKey.split(":");
+  call("split_segment_right", type, +ti, +idx, Math.round(Store.state.playheadUs)).then(refresh);
+}
+function doDelete() {
+  // 多选优先：selectedKeys 非空则整批删；否则退化为单选 selectedKey；都无则删素材
+  const keys = (Store.state.selectedKeys && Store.state.selectedKeys.length)
+    ? Store.state.selectedKeys
+    : (Store.state.selectedKey ? [Store.state.selectedKey] : []);
+  if (keys.length) { call("remove_segments", keys, Store.state.rippleOn).then(() => { selectKey(null); refresh(); }); return; }
+  if (Store.state.selectedMaterialUid) deleteMaterial(Store.state.selectedMaterialUid);
+}
+function selectAll() {
+  const keys = [];
+  for (const type of ["video", "audio", "text"]) {
+    const tracks = Store.state.draft[type] || [];
+    tracks.forEach((segs, ti) => segs.forEach((s, idx) => keys.push(type + ":" + ti + ":" + idx)));
+  }
+  Store.set({ selectedKeys: keys, selectedKey: keys.length ? keys[keys.length - 1] : null, selectedMaterialUid: null });
+}
+function clearSelection() {
+  if (Store.state.selectedKey || Store.state.selectedKeys.length || Store.state.selectedMaterialUid)
+    Store.set({ selectedKey: null, selectedKeys: [], selectedMaterialUid: null });
+}
+
+function doCopy() {
+  // Ctrl+C：复制选中段到内存剪贴板（不改草稿、不刷新）。对齐 OpenCut copy-selected
+  const keys = (Store.state.selectedKeys && Store.state.selectedKeys.length)
+    ? Store.state.selectedKeys
+    : (Store.state.selectedKey ? [Store.state.selectedKey] : []);
+  if (!keys.length) return;
+  call("copy_to_buffer", keys);
+}
+function doPaste() {
+  // Ctrl+V：从内存剪贴板粘贴到播放头位置。对齐 OpenCut paste-copied
+  call("paste_from_buffer", Math.round(Store.state.playheadUs)).then(refresh);
+}
+function doDuplicate() {
+  // Ctrl+D：复制选中段到同轨紧接其后（对齐 OpenCut duplicate-selected）
+  const keys = (Store.state.selectedKeys && Store.state.selectedKeys.length)
+    ? Store.state.selectedKeys
+    : (Store.state.selectedKey ? [Store.state.selectedKey] : []);
+  if (!keys.length) return;
+  // 按 (track_type, track_index) 分组，每组 index 从大到小处理，避免插入导致同轨后续段 index 偏移
+  const groups = {};
+  keys.forEach(k => {
+    const [t, ti, idx] = k.split(":");
+    const gk = t + ":" + ti;
+    (groups[gk] = groups[gk] || []).push(+idx);
+  });
+  let chain = Promise.resolve();
+  Object.keys(groups).forEach(gk => {
+    const [t, ti] = gk.split(":");
+    [...groups[gk]].sort((a, b) => b - a).forEach(idx => {
+      chain = chain.then(() => call("duplicate_segment", t, +ti, idx));
+    });
+  });
+  chain.then(refresh);
+}
+
+function doTrimToPlayhead(edge) {
+  // [ / ]：把选中片段的左/右边缘裁到当前播放头位置（左边缘 [，右边缘 ]）。
+  // trim_segment 内部已 clamp（最短 0.2s、不超素材末尾、src_start≥0），传播放头绝对微秒即可。
+  const k = Store.state.selectedKey;
+  if (!k) return;
+  const [type, ti, idx] = k.split(":");
+  const ph = Store.state.playheadUs;
+  call("trim_segment", type, +ti, +idx, edge, ph, Store.state.rippleOn).then(refresh);
+}
+
+/* ---------- 素材面板拖入（OS 文件 → base64 → 后端 drop_files） ---------- */
+function readFileB64(file) {
+  return new Promise(res => {
+    const r = new FileReader();
+    r.onload = () => res({ name: file.name, data: r.result });
+    r.readAsDataURL(file);
+  });
+}
+function setupAssetDrop() {
+  const zone = document.querySelector(".assets");
+  if (!zone) return;
+  let counter = 0;
+  zone.addEventListener("dragenter", e => {
+    if (!e.dataTransfer || !e.dataTransfer.types.includes("Files")) return;
+    e.preventDefault(); counter++; zone.classList.add("drag-over");
+  });
+  zone.addEventListener("dragover", e => {
+    if (!e.dataTransfer || !e.dataTransfer.types.includes("Files")) return;
+    e.preventDefault(); e.dataTransfer.dropEffect = "copy";
+  });
+  zone.addEventListener("dragleave", e => {
+    if (!e.dataTransfer || !e.dataTransfer.types.includes("Files")) return;
+    counter--; if (counter <= 0) { counter = 0; zone.classList.remove("drag-over"); }
+  });
+  zone.addEventListener("drop", e => {
+    if (!e.dataTransfer || !e.dataTransfer.types.includes("Files")) return;  // 内部素材拖拽(text/plain)交给时间轴，不在这里处理
+    e.preventDefault(); counter = 0; zone.classList.remove("drag-over");
+    const files = [];
+    for (const item of (e.dataTransfer.items || [])) {
+      if (item.kind === "file") { const f = item.getAsFile(); if (f) files.push(f); }
+    }
+    if (!files.length) return;
+    const MAX = 30 * 1024 * 1024;  // 大文件(视频/音频)走「导入素材」按钮更稳，避免 base64 大桥阻塞
+    const big = files.filter(f => f.size > MAX && !f.type.startsWith("image/"));
+    if (big.length) { alert("大文件请点「导入素材」按钮：" + big.map(f => f.name).join(", ")); return; }
+    Promise.all(files.map(readFileB64)).then(arr => call("drop_files", arr).then(refresh));
+  });
+}
+
+function showImportLoading() {
+  let el = $("importLoading");
+  if (!el) {
+    el = document.createElement("div");
+    el.id = "importLoading";
+    el.style.cssText = "position:fixed;inset:0;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;z-index:9999;color:#fff;font-size:15px;flex-direction:column;gap:8px;text-align:center;";
+    el.innerHTML = '<div>⏳ 正在导入并转码预览…</div><div style="font-size:12px;opacity:.7">HEVC/MOV 等格式需转成 MP4 才能预览，首次较慢请稍候</div>';
+    document.body.appendChild(el);
+  }
+  el.style.display = "flex";
+}
+function hideImportLoading() { const el = $("importLoading"); if (el) el.style.display = "none"; }
+
+/* ---------- 事件绑定（一次性） ---------- */
+function bindEvents() {
+  $("importBtn").addEventListener("click", () => call("import_media").then(refresh));
+  $("importJyBtn").addEventListener("click", () => {
+    const def = "E:\\草稿\\JianyingPro Drafts\\5月2日\\draft_content.json";
+    const p = prompt("粘贴剪映草稿 draft_content.json 的完整路径：", def);
+    if (!p) return;
+    showImportLoading();
+    call("import_jianying_project", p.trim()).then(r => {
+      hideImportLoading();
+      if (r && r.ok) {
+        alert("导入成功 ✅\n视频轨 " + r.video_tracks + " · 音频轨 " + r.audio_tracks +
+              " · 文本轨 " + r.text_tracks + " · 贴纸轨 " + r.sticker_tracks + " · 特效轨 " + r.effect_tracks +
+              "\n已复制素材 " + r.assets_copied + " 个（素材缺失的段留空，播放器显示黑底）");
+        refresh();
+      } else {
+        alert("导入失败：" + (r && r.error ? r.error : "未知错误"));
+      }
+    }).catch(e => { hideImportLoading(); alert("导入异常：" + e); });
+  });
+  setupAssetDrop();
+  // 媒体底层事件诊断：previewStack 内的 video/audio 动态创建，用事件委托捕获错误
+  $("previewStack").addEventListener("error", e => {
+    const t = e.target;
+    if (t.tagName === "VIDEO" || t.tagName === "AUDIO") {
+      const err = t.error;
+      dbg((t.tagName === "AUDIO" ? "音频" : "视频") + "加载/解码错误 ❌ code=" + (err ? err.code : "?") + " (" + (err ? err.message : "无信息") + ") src=" + t.currentSrc);
+    }
+  }, true);
+  $("previewStack").addEventListener("canplay", e => {
+    // play() 已收归 playAllMedia() 唯一入口（Step1 Round A）；此处不再主动 play，
+    // 避免与 playTick 跨段重建竞态 → 同元素两次 play 后者 abort 前者（AbortError）
+  }, true);
+  $("mediaTabs").querySelectorAll(".tab").forEach(tab => {
+    tab.addEventListener("click", () => {
+      $("mediaTabs").querySelectorAll(".tab").forEach(t => t.classList.remove("active"));
+      tab.classList.add("active");
+      Store.set({ filter: tab.dataset.f }); // → 自动重绘素材面板
+    });
+  });
+  $("tlContent").addEventListener("mousedown", onTimelineDown);
+  // 整组缩放把手（pointer-events 仅 .gh 可点；mousedown 已 stopPropagation 不冒泡到 tlContent）
+  $("groupHandleL").addEventListener("mousedown", e => onGroupHandleDown(e, "left"));
+  $("groupHandleR").addEventListener("mousedown", e => onGroupHandleDown(e, "right"));
+  // 遮罩面板：形状选择
+  $("maskShapes").addEventListener("click", e => {
+    const b = e.target.closest("button[data-type]"); if (!b) return;
+    const k = Store.state.selectedKey; if (!k) return;
+    const [type, ti, idx] = k.split(":");
+    call("set_mask", type, +ti, +idx, b.dataset.type, {}).then(refresh);
+  });
+  // 遮罩面板：滑块（input 实时预览，change 提交后端）/ 反转 / 删除
+  const maskCtrls = $("maskCtrls");
+  maskCtrls.addEventListener("input", e => {
+    const r = e.target.closest("input[type=range][data-k]"); if (!r) return;
+    const s = selectedSeg(); if (!s || !s.masks || !s.masks.length) return;
+    const k = Store.state.selectedKey; if (!k) return;
+    const [type, ti, idx] = k.split(":");
+    const key = r.dataset.k; const val = parseFloat(r.value);
+    s.masks[0].params[key] = val;                  // 实时预览（改 Store seg）
+    const vEl = r.parentElement.querySelector(".val"); if (vEl) vEl.textContent = Math.round(val * 100) / 100;
+    renderPreview(); renderMaskOverlay();
+    clearTimeout(maskCtrls._t);
+    maskCtrls._t = setTimeout(() => {
+      call("update_mask_param", type, +ti, +idx, s.masks[0].id, key, val).then(refresh);
+    }, 250);
+  });
+  maskCtrls.addEventListener("change", e => {
+    const r = e.target.closest("input[type=range][data-k]"); if (!r) return;
+    const s = selectedSeg(); if (!s || !s.masks || !s.masks.length) return;
+    const k = Store.state.selectedKey; if (!k) return;
+    const [type, ti, idx] = k.split(":");
+    call("update_mask_param", type, +ti, +idx, s.masks[0].id, r.dataset.k, parseFloat(r.value)).then(refresh);
+  });
+  maskCtrls.addEventListener("click", e => {
+    const cb = e.target.closest("#maskInv"); if (cb) {
+      const s = selectedSeg(); if (!s || !s.masks || !s.masks.length) return;
+      const k = Store.state.selectedKey; if (!k) return;
+      const [type, ti, idx] = k.split(":");
+      call("toggle_mask_inverted", type, +ti, +idx, s.masks[0].id).then(refresh); return;
+    }
+    const rm = e.target.closest("button[data-act=remove]"); if (rm) {
+      const s = selectedSeg(); if (!s || !s.masks || !s.masks.length) return;
+      const k = Store.state.selectedKey; if (!k) return;
+      const [type, ti, idx] = k.split(":");
+      call("remove_mask", type, +ti, +idx, s.masks[0].id).then(refresh); return;
+    }
+  });
+  // 遮罩把手拖拽（预览叠加层）
+  $("maskOverlay").addEventListener("pointerdown", onMaskHandleDown);
+
+  // ---- 字幕面板：生成（本地 Whisper）/ 导入SRT / 样式 ----
+  const subGen = $("subGen");
+  subGen.addEventListener("click", () => {
+    const src = getAsrSource(); if (!src) return;
+    const lang = $("subLang").value, model = $("subModel").value;
+    const status = $("subStatus");
+    const ov = document.createElement("div"); ov.className = "asr-loading";
+    ov.innerHTML = `<div class="box">🎙️ 正在本地识别字幕…<br>首次需联网下载模型（几十~几百 MB），长视频 CPU 推理可能数分钟，请稍候。</div>`;
+    document.body.appendChild(ov);
+    subGen.disabled = true; status.textContent = "识别中…（窗口可能短暂卡顿）";
+    // 先让遮罩绘制，再发起阻塞式 Python 调用（pywebview 主线程执行会冻结 UI）
+    setTimeout(() => {
+      call("transcribe_media", src.path, lang, model, Store.subStyle || null).then(r => {
+        ov.remove(); subGen.disabled = false;
+        if (r && r.ok) status.textContent = `✅ 已生成 ${r.count} 条字幕（语言：${r.language || "auto"}）`;
+        else status.textContent = "❌ " + ((r && r.error) || "识别失败");
+        refresh();
+      }).catch(e => { ov.remove(); subGen.disabled = false; status.textContent = "❌ " + e; });
+    }, 60);
+  });
+  $("subSrtFile").addEventListener("change", e => {
+    const f = e.target.files && e.target.files[0]; if (!f) return;
+    const status = $("subStatus");
+    const reader = new FileReader();
+    reader.onload = () => {
+      call("import_srt", 0, reader.result, Store.subStyle || null).then(r => {
+        if (r && r.ok) status.textContent = `✅ 已导入 ${r.count} 条字幕`;
+        else status.textContent = "❌ " + ((r && r.error) || "导入失败");
+        refresh();
+      }).catch(err => status.textContent = "❌ " + err);
+    };
+    reader.readAsText(f, "utf-8");
+    e.target.value = "";
+  });
+  const subFont = $("subFont");
+  subFont.addEventListener("input", () => { $("subFontVal").textContent = subFont.value; Store.subStyle = Store.subStyle || {}; Store.subStyle.font_size = +subFont.value; });
+  subFont.addEventListener("change", () => { Store.subStyle = Store.subStyle || {}; Store.subStyle.font_size = +subFont.value; });
+  $("subBg").addEventListener("change", e => { Store.subStyle = Store.subStyle || {}; Store.subStyle.bg = e.target.checked; });
+
+  // ---- 右侧工具栏：竖排图标页签切换 ----
+  document.querySelectorAll("#toolsRail .rail-btn").forEach(b => b.addEventListener("click", () => showToolTab(b.dataset.tab)));
+  // ---- Skill 弹窗（顶栏按钮触发） ----
+  const skillModal = $("skillModal");
+  $("skillBtn").addEventListener("click", () => { skillModal.style.display = "flex"; });
+  $("skillClose").addEventListener("click", () => { skillModal.style.display = "none"; });
+  skillModal.addEventListener("click", e => { if (e.target === skillModal) skillModal.style.display = "none"; });
+
+  // ---- 贴纸面板：新建轨 / 选图 / 添加到播放头 ----
+  $("stAddTrack").addEventListener("click", () => call("add_sticker_track").then(r => { if (r && r.ok) refresh(); }));
+  $("stPick").addEventListener("click", () => {
+    call("pick_sticker_file").then(p => {
+      if (!p) return;
+      stPickPath = p;
+      $("stPickName").textContent = p.split(/[\\/]/).pop();
+      $("stStatus").textContent = "已选图片，点「添加到播放头」";
+    }).catch(e => { $("stStatus").textContent = "❌ " + e; });
+  });
+  $("stAddAtPlayhead").addEventListener("click", () => {
+    const status = $("stStatus");
+    if (!stPickPath) { status.textContent = "请先点「选择图片…」选一张本地透明图"; return; }
+    const dur = Math.max(0.1, parseFloat($("stDur").value) || 3) * 1e6;
+    const start = Store.state.playheadUs || 0;
+    status.textContent = "添加中…";
+    call("add_sticker", 0, stPickPath, start, dur, null).then(r => {
+      if (r && r.ok) { status.textContent = "✅ 已添加贴纸到贴纸轨" + (r.track_index + 1); refresh(); }
+      else status.textContent = "❌ " + ((r && r.error) || "添加失败");
+    }).catch(e => status.textContent = "❌ " + e);
+  });
+  // 选中贴纸段的变换滑块：input 实时预览，change 提交后端（单次 undo）
+  const stCommit = (patch) => {
+    const s = selectedSeg();
+    if (!s || s.type !== "sticker") return;
+    const k = Store.state.selectedKey; if (!k) return;
+    const [type, ti, idx] = k.split(":");
+    call("update_sticker", type, +ti, +idx, patch).then(refresh);
+  };
+  const stLive = (key, val) => {
+    const s = selectedSeg();
+    if (!s || s.type !== "sticker") return;
+    s.transform = s.transform || {};
+    s.transform[key] = val;
+    renderPreview();
+  };
+  const stBind = (id, vid, key, dig) => {
+    const el = $(id);
+    el.addEventListener("input", () => {
+      const v = parseFloat(el.value);
+      $(vid).textContent = dig ? Math.round(v * 100) / 100 : v;
+      stLive(key, v);
+    });
+    el.addEventListener("change", () => stCommit({ [key]: parseFloat(el.value) }));
+  };
+  stBind("stX", "stXV", "x", true);
+  stBind("stY", "stYV", "y", true);
+  stBind("stScale", "stScaleV", "scale", true);
+  stBind("stRot", "stRotV", "rotation", false);
+  stBind("stOp", "stOpV", "opacity", true);
+  $("stFlipH").addEventListener("change", e => { stLive("flipH", e.target.checked); stCommit({ flipH: e.target.checked }); });
+  $("stFlipV").addEventListener("change", e => { stLive("flipV", e.target.checked); stCommit({ flipV: e.target.checked }); });
+  $("ruler").addEventListener("mousedown", onRulerDown);
+  // 标尺双击任意处：该位置切换书签；点击书签标记：跳转播放头；右键书签：删除
+  $("ruler").addEventListener("dblclick", e => {
+    const us = Math.round(clientXToUs(e.clientX));
+    call("toggle_bookmark", us).then(r => { if (r && r.ok) { Store.set({ bookmarks: r.bookmarks }); renderTimeline(); } });
+  });
+  $("ruler").addEventListener("click", e => {
+    const bm = e.target.closest(".bm-mark");
+    if (bm) seekPlayhead(+bm.dataset.us);   // 点书签 = 跳到该处
+  });
+  $("ruler").addEventListener("contextmenu", e => {
+    const bm = e.target.closest(".bm-mark");
+    if (!bm) return;
+    e.preventDefault();
+    call("remove_bookmark", +bm.dataset.us).then(r => { if (r && r.ok) { Store.set({ bookmarks: r.bookmarks }); renderTimeline(); } });
+  });
+  $("playhead").addEventListener("mousedown", onPlayheadDown);   // 整条红线可拖（含透明命中区），对齐 OpenCut 整线命中
+  // 右侧时间轴滚动时，左侧轨道头部标签必须实时跟随，否则垂直方向错开。
+  // 同时标记用户手动滚动时间，ensurePlayheadVisible 据此暂停自动追播放头 3s，避免播放时拖不动水平滚动条。
+  $("tlScroll").addEventListener("scroll", () => {
+    $("tlLabels").scrollTop = $("tlScroll").scrollTop;
+    _userScrollUntil = performance.now() + 3000;
+  });
+  // 用户鼠标/手指按在时间轴区域（包括滚动条 thumb）即进入手动滚动保护，3s 内不自动追播放头
+  $("tlScroll").addEventListener("pointerdown", () => {
+    _userScrollUntil = performance.now() + 3000;
+  });
+  // 轨道头部按钮：静音 / 隐藏 / 锁定（先实现 mute/hide，lock 占位）
+  $("tlLabels").addEventListener("click", e => {
+    const icon = e.target.closest(".icon[data-act]");
+    if (!icon) return;
+    const label = icon.closest(".track-label");
+    if (!label) return;
+    const type = label.dataset.type;
+    const ti = parseInt(label.dataset.ti, 10);
+    const act = icon.dataset.act;
+    if (act === "mute") {
+      call("toggle_track_mute", type, ti).then(r => { if (r && r.ok) refresh(); });
+    } else if (act === "hide") {
+      call("toggle_track_visibility", type, ti).then(r => { if (r && r.ok) refresh(); });
+    } else if (act === "lock") {
+      // TODO: 轨道锁定（防止误编辑），当前占位
+      showMediaStatus("轨道锁定功能暂未实现");
+    }
+  });
+  // 垂直滚动：右侧时间轴内容与左侧轨道标签必须锁定同步
+  $("tlScroll").addEventListener("scroll", () => {
+    $("tlLabels").scrollTop = $("tlScroll").scrollTop;
+    _userScrollUntil = performance.now() + 3000;
+  });
+  /* 滚轮：Ctrl+滚轮缩放，Shift+滚轮横向滚动 */
+  $("tlScroll").addEventListener("wheel", e => {
+    if (e.ctrlKey) {
+      e.preventDefault();
+      const step = e.deltaY > 0 ? -30 : 30;
+      setZoom(pps() + step);
+    } else if (e.shiftKey) {
+      e.preventDefault();
+      $("tlScroll").scrollLeft += e.deltaY;
+    }
+  }, { passive: false });
+  /* 时间轴拖放：绑在最外层 #timeline，只在轨道区域（tlMain 内）接 */
+  let tlDragEnterCount = 0;
+  $("timeline").addEventListener("dragenter", e => {
+    e.preventDefault();
+    tlDragEnterCount++;
+  });
+  $("timeline").addEventListener("dragover", e => {
+    const tlMainRect = $("tlMain").getBoundingClientRect();
+    // 工具栏上方：不阻止默认行为，显示系统禁止图标
+    if (e.clientY < tlMainRect.top) { hideDropPreview(); return; }
+    e.preventDefault(); e.dataTransfer.dropEffect = "copy";
+    const wantType = dragTrackType();
+    const tr = trackUnderY(e.clientY, wantType);
+    const contentRect = $("tlContent").getBoundingClientRect();
+    // 轨道区内任意位置都接：无兼容轨道时提示「松开：新建轨道」
+    const isNewTrack = !tr;
+    showDropPreview(tr ? tr.el : null, e.clientX - contentRect.left, isNewTrack);
+  });
+  $("timeline").addEventListener("dragleave", e => {
+    if (tlDragEnterCount === 0) return;
+    tlDragEnterCount--;
+    if (tlDragEnterCount === 0) hideDropPreview();
+  });
+  $("timeline").addEventListener("drop", e => { tlDragEnterCount = 0; onTimelineDrop(e); });
+  $("playBtn").addEventListener("click", togglePlay);
+  $("muteBtn").addEventListener("click", toggleMute);
+  $("zoomRange").addEventListener("input", e => setZoom(+e.target.value));
+  $("zoomIn").addEventListener("click", () => setZoom(pps() + 40));
+  $("zoomOut").addEventListener("click", () => setZoom(pps() - 40));
+  $("splitBtn").addEventListener("click", doSplit);
+  $("splitLeftBtn").addEventListener("click", doSplitLeft);
+  $("splitRightBtn").addEventListener("click", doSplitRight);
+  $("delBtn").addEventListener("click", doDelete);
+  $("dupBtn").addEventListener("click", doDuplicate);   // 复制选中段（对齐 OpenCut Ctrl+D）
+  $("srcAudioBtn").addEventListener("click", doToggleSourceAudio);   // 提取原声 / 还原（对齐 OpenCut toggle-source-audio）
+  $("speedBtn").addEventListener("click", doSetSpeed);   // 变速 / 重定时（对齐 OpenCut updateElementRetime）
+  $("snapBtn").addEventListener("click", toggleSnap);   // 吸附开关（对齐 OpenCut N 键）
+  $("rippleBtn").addEventListener("click", toggleRipple);   // 波纹开关（对齐 OpenCut R 键）
+  $("exportBtn").addEventListener("click", () =>
+    call("export_draft", "我的剪辑", "").then(r => alert(r && r.ok ? "已导出剪映草稿" : "导出失败：" + (r && r.error))));
+  $("undoBtn").addEventListener("click", () => call("undo").then(refresh));
+  $("redoBtn").addEventListener("click", () => call("redo").then(refresh));
+  document.addEventListener("dragover", e => { moveDragGhost(e.clientX, e.clientY); });
+  document.addEventListener("drop", () => removeDragGhost());
+  window.addEventListener("keydown", e => {
+    if (e.target.tagName === "INPUT") return;
+    // 撤销 / 重做：先于其它分支拦截，避免 Ctrl 组合键误触。Ctrl+Z 撤销；Ctrl+Shift+Z 或 Ctrl+Y 重做
+    if (e.ctrlKey || e.metaKey) {
+      if (e.key === "z" || e.key === "Z") { e.preventDefault(); call(e.shiftKey ? "redo" : "undo").then(refresh); return; }
+      if (e.key === "y" || e.key === "Y") { e.preventDefault(); call("redo").then(refresh); return; }
+      if (e.key === "b" || e.key === "B") { e.preventDefault(); doSplit(); return; }
+      if (e.key === "a" || e.key === "A") { e.preventDefault(); selectAll(); return; }
+      if (e.key === "c" || e.key === "C") { e.preventDefault(); doCopy(); return; }
+      if (e.key === "v" || e.key === "V") { e.preventDefault(); doPaste(); return; }
+      if (e.key === "d" || e.key === "D") { e.preventDefault(); doDuplicate(); return; }
+      return; // 其余 Ctrl 组合键（如 Ctrl+S 保存）不拦截，交浏览器默认行为
+    }
+    if (e.key === " ") { e.preventDefault(); togglePlay(); return; }
+    if (e.key === "Delete" || e.key === "Backspace") {
+      if (Store.state.selectedKey) doDelete();                          // 时间轴片段优先
+      else if (Store.state.selectedMaterialUid) deleteMaterial(Store.state.selectedMaterialUid); // 否则删素材
+    }
+    else if (e.key === "s" || e.key === "S") doSplit();
+    else if (e.key === "q" || e.key === "Q") doSplitLeft();   // 分割保留左侧（OpenCut split-left）
+    else if (e.key === "w" || e.key === "W") doSplitRight();  // 分割保留右侧（OpenCut split-right）
+    else if (e.key === "[" || e.key === "]") doTrimToPlayhead(e.key === "[" ? "left" : "right"); // [ 裁左 / ] 裁右
+    else if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+      e.preventDefault();
+      pausePlay();               // 播放时按方向键先暂停，再步进
+      const dir = e.key === "ArrowRight" ? 1 : -1;
+      if (e.shiftKey) {
+        seekPlayhead(Store.state.playheadUs + dir * 5e6);   // Shift+方向：跳 5 秒（对齐 OpenCut jump-forward/backward）
+      } else {
+        const fps = (Store.state.meta && Store.state.meta.fps) || 30;   // 剪映默认 30fps
+        const frameUs = 1e6 / fps;
+        seekPlayhead(Store.state.playheadUs + dir * frameUs);   // 帧步进（对齐 OpenCut frame-step-forward/backward）
+      }
+    }
+    else if (e.key === "Escape") { clearSelection(); return; }              // 取消全选/单选（对齐 OpenCut Esc）
+    else if (e.key === "k" || e.key === "K") { togglePlay(); return; }     // 播放/暂停（对齐 OpenCut K）
+    else if (e.key === "n" || e.key === "N") { toggleSnap(); return; }     // 吸附开关（对齐 OpenCut N）
+    else if (e.key === "b" || e.key === "B") { e.preventDefault(); call("toggle_bookmark", Math.round(Store.state.playheadUs)).then(r => { if (r && r.ok) { Store.set({ bookmarks: r.bookmarks }); renderTimeline(); } }); return; }  // 播放头处切换书签（对齐 OpenCut toggle-bookmark）
+    else if (e.key === "r" || e.key === "R") { toggleRipple(); return; }    // 波纹编辑开关（对齐 OpenCut ripple）
+    else if (e.key === "j" || e.key === "J") { e.preventDefault(); pausePlay(); seekPlayhead(Store.state.playheadUs - 1e6); return; }   // 后退 1 秒（OpenCut seek-backward）
+    else if (e.key === "l" || e.key === "L") { e.preventDefault(); pausePlay(); seekPlayhead(Store.state.playheadUs + 1e6); return; }   // 前进 1 秒（OpenCut seek-forward）
+    else if (e.key === "Home") { e.preventDefault(); seekPlayhead(0); return; }                                   // 到起点（OpenCut goto-start）
+    else if (e.key === "End") { e.preventDefault(); seekPlayhead(totalDurationUs()); return; }                   // 到终点（OpenCut goto-end）
+  });
+}
+
+/* ---------- 从后端拉取最新状态填入 Store ---------- */
+function refresh() {
+  return call("get_state").then(st => {
+    if (!st) return;
+    const m = {};
+    const wm = {};
+    (st.materials || []).forEach(x => { if (x.thumbnail) m[x.path] = x.thumbnail; else if (x.type === "image") m[x.path] = x.path; if (x.peaks) wm[x.path] = x.peaks; });
+    const draft = st.draft || { video: [[]], audio: [[]], text: [[]], canvas: { ratio: "16:9", locked: false } };
+    // 选中的片段若已被删，清空选中，避免悬空
+    let selOk = false;
+    if (Store.state.selectedKey) {
+      const [type, ti, idx] = Store.state.selectedKey.split(":");
+      if ((draft[type] || [])[ti] && (draft[type][ti][idx])) selOk = true;
+    }
+    Store.set({
+      draft,
+      materials: st.materials || [],
+      thumbMap: m,
+      waveMap: wm,
+      meta: st.meta || Store.state.meta,
+      selectedKey: selOk ? Store.state.selectedKey : null,
+      bookmarks: st.bookmarks || [],
+    });
+    updateToolbarState();
+    renderKfPanel();   // 选中态/状态刷新后同步关键帧面板
+  });
+}
+
+/* ---------- 启动 ---------- */
+let booted = false;
+function boot() {
+  if (booted) return;
+  if (!api()) return;            // pywebview 未注入就等，绝不缓存 null
+  booted = true;
+  // 先拿本地 HTTP 服务器地址，素材才能走 http（WebView2 下 video/audio 不能读 file://）
+  call("get_server_url").then(url => {
+    if (url) window.MEDIA_BASE = url;
+    try { bindEvents(); initSplit(); refresh(); }
+    catch (e) { showFatal("init: " + (e && e.stack || e)); }
+  }).catch(() => {
+    try { bindEvents(); initSplit(); refresh(); }
+    catch (e) { showFatal("init(fallback): " + (e && e.stack || e)); }
+  });
+}
+if (document.readyState !== "loading") boot();
+else document.addEventListener("DOMContentLoaded", boot);
+if (window.pywebview && window.pywebview.api) boot();
+window.addEventListener("pywebviewready", boot);
+let _w = setInterval(() => { if (api()) { clearInterval(_w); boot(); } }, 120);
+// 人和 AI 实时互看：每 0.5s 拉取后端状态
+setInterval(() => { if (booted && !Store.state.drag) refresh(); }, 500);
+</script>
+</body>
+</html>
