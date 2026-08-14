@@ -1250,18 +1250,18 @@ const PlayerManager = {
     const session = createSession(targets);
     this.start(session);
   },
-  // Step A：静音起播（仅 PlayerManager 动 el）。逐 target 绑定真实 playing 事件 + restore/onPlaying 两阶段解锁。
+  // Step A：静音起播（仅 PlayerManager 动 el）。逐 target 绑定真实 playing 事件 + onPlaying 两阶段解锁。
+  // 关键纪律：play() promise 的 reject（AbortError 等）不再触发解静音；只有真实 playing 事件或兜底超时才解锁。
   start(session) {
     session.state = PLAY_SESSION_STATE.STARTING;
     for (const t of session.targets) {
       const { el, rec, type, ti } = t;
       if (!el || !el.paused) continue;        // 已在播则跳过（静音状态由 seekActiveMediaToPlayhead 维护）
-      el.muted = true;                         // (A) 静音起播，解锁后再解
+      el.muted = true;                         // (A) 静音起播，等真实 playing 事件再解
       el.addEventListener("playing", () => this.onPlaying(session, t), { once: true });
-      const restore = () => this.restore(session, t);
       const p = el.play();
-      if (p && p.then) p.then(restore, restore);
-      setTimeout(restore, 80);
+      // 兜底：若 playing 事件迟迟不来（某些浏览器/文件），120ms 后仍尝试一次解锁
+      setTimeout(() => this.onPlaying(session, t), 120);
       if (p && p.catch) p.catch(err => {
         const name = (err && err.name) || "Error";
         if (name === "AbortError") {
@@ -1279,22 +1279,17 @@ const PlayerManager = {
     session.state = PLAY_SESSION_STATE.MUTED_PLAYING;
     console.log("[PlaySession]", session.id, session.state, session.targets.length, session.autoplayUnlockPending);
   },
-  // Step A：restore 阶段一（请求解静音）。条件去掉「播放头实时命中」(stillActive)，只查事务/用户意图（GPT v2.1 必改；修「没声家族」根因）。
-  // 阶段二（清 autoplayUnlockPending + 置 PLAYING）由 onPlaying（真实 playing 事件）执行，不靠 play() promise 是否 resolve。
-  restore(session, t) {
-    if (!session.isCurrent() || session.userPaused || previewMuted) return;
-    if (!session.autoplayUnlockPending) return;   // 幂等：已解锁则跳过（promise+定时器可能双触发）
-    t.el.muted = !t.want;                          // want=false（静音轨/用户静音）保持静音，否则解静音
-    session.autoplayUnlockPending = false;
-    session.state = PLAY_SESSION_STATE.PLAYING;
-    console.log("[PlaySession]", session.id, session.state, session.targets.length, session.autoplayUnlockPending);
-  },
-  // Step A：真实 playing 事件 = 媒体真的在播；幂等清 (A) + 确保解静音（不依赖 play() promise resolve）
+  // Step A：真实 playing 事件 = 媒体真的在播。幂等清 (A) + 按 want 解静音 + 置 PLAYING。
+  // 这是唯一正确解锁点：play() promise resolve 不等于媒体已在播，reject/abort 更不能解锁。
   onPlaying(session, t) {
     if (!session.isCurrent()) return;
+    if (!session.autoplayUnlockPending) return;          // 幂等：已解锁则跳过
+    if (session.state === PLAY_SESSION_STATE.PAUSED ||
+        session.state === PLAY_SESSION_STATE.CANCELLED ||
+        session.state === PLAY_SESSION_STATE.ENDED) return;
     session.autoplayUnlockPending = false;
     session.state = PLAY_SESSION_STATE.PLAYING;
-    if (!previewMuted && t.want) t.el.muted = false;
+    t.el.muted = !(t.want && !previewMuted);             // want=true 且用户没静音才解
     console.log("[PlaySession]", session.id, session.state, session.targets.length, session.autoplayUnlockPending);
   },
   // 原 pausePlay()：暂停整个播放会话
