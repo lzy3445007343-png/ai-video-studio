@@ -2092,7 +2092,7 @@ async function startPlay() {
   const maxUs = totalDurationUs();
   if (maxUs <= 0) { dbg("无内容可播放（时间轴为空）"); return; }
   if (Store.state.playheadUs >= maxUs - 1000) Store.set({ playheadUs: 0 });
-  // B.5 音频解锁：必须在任何 await 之前、用户手势上下文还在时调用，否则 WebView2 下 <audio> 会被自动播放策略拒绝。
+  // B.5 音频解锁：必须在用户手势上下文内调用，否则 WebView2 下 <audio> 会被自动播放策略拒绝。
   unlockAudio();
   // Round E⑤：NLE 默认行为——播放头从当前位置沿墙钟推进，空白区静音自然穿过，绝不自动跳空隙（避免跳过空镜/转场缓冲）
   isPlaying = true;
@@ -2104,19 +2104,16 @@ async function startPlay() {
   lastHitSig = resolveHits(Store.state.playheadUs).map(h => h.key).join("|");
   renderPreview();            // 立即更新元素（新素材可能刚设置 src，还未加载完）
   const hits = resolveHits(Store.state.playheadUs);
-  await primeMediaPlayback(hits);   // B.5.4-2：手势内媒体权限预热（临时元素，先解锁文档级 autoplay，主流程再走）
-  // Round G1：必须等命中媒体元素加载到可 seek 状态，否则 seek 会静默失败，音频从头播。
-  // Round G3：外层再包 5 秒总超时，避免任何子 promise 漏网导致 startPlay 永久挂起、播放头不动。
-  const withTimeout = (p, ms, label) => Promise.race([p, new Promise(r => setTimeout(() => { console.warn("[startPlay] " + label + " 总超时，强制继续"); r(); }, ms))]);
-  const readyPromises = hits.map(h => {
-    const rec = h.type === "video" ? previewState.visualEls.get("video:" + h.ti) : previewState.audioEls.get("audio:" + h.ti);
-    const el = rec ? (h.type === "video" ? rec.el.firstElementChild : rec.el) : null;
-    return el ? _waitMediaReady(el) : Promise.resolve();
-  });
-  await withTimeout(Promise.all(readyPromises), 5000, "等待媒体就绪");
-  const seeked = seekActiveMediaToPlayhead(Store.state.playheadUs);  // 此时元素已可 seek，不会静默失败
-  await withTimeout(Promise.all(seeked.map(_waitSeekSettled)), 5000, "等待 seek 落位");   // Round D：等 seek 完成再播，消除「边 seek 边 play」竞态
-  playAllMedia();             // 在点击手势上下文内直接播放
+  // 止血（B.5.5-STAB，2026-08-15 拍板）：Timeline Clock 是 master，绝不被媒体 await 阻塞。
+  // 原实现 3 个 await 屏障（primeMediaPlayback / _waitMediaReady 最长5s / _waitSeekSettled 最长5s）
+  // 在 WebView2 媒体就绪慢或不触发时会阻塞 playTick → 播放头不动。改为：
+  //   - prime 只 fire-and-forget 拿文档级权限（不阻塞）；
+  //   - seekActiveMediaToPlayhead 同步调（元素未 ready 时静默失败，由 canplay 回调 + drift 兜底）；
+  //   - playAllMedia 立即调（_attemptPlay 内部 pre-ready gate 自己等就绪后起播）；
+  //   - playTick 立即启动墙钟。媒体是 follower，自己追上播放头；播放头永远不被媒体拖住。
+  primeMediaPlayback(hits).catch(() => {});
+  seekActiveMediaToPlayhead(Store.state.playheadUs);
+  playAllMedia();
   playTick();
 }
 function pausePlay() { return PlayerManager.pause(); }
