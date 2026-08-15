@@ -1,9 +1,15 @@
 # Step B.5.5 — Media Start Confirmation Gate（Heartbeat Confirm，媒体启动确认门）
 
-> 状态：**设计稿 v1.1（用户 sign-off ✅，按三 commit 分步落地）**。
+> 状态：**v1.2 —— 路线调整（2026-08-15 17:45 用户拍板）：本门暂停扩展，改为 STAB 止血 + B.5 收尾 + C.0 AudioEngine 迁移**。
 > 日期：2026-08-15
 > 上游：B.5.4 v1.1（commit `5f1d79b`）真机残留 3 问题 → GPT 黑盒评审（用户转达）→ 本稿吸收 + 适配。
 > 关系：B.5.5 是 B.5 的**自然延伸**，不重写 PlayerManager / 不重做 Runtime / 不改 renderPreview。
+
+> **v1.2 路线调整（用户拍板）**：OpenCut 对比审计（`docs/audits/opencut-vs-ours-playback.md`）确认根因——我们的播放建立在 HTMLMediaElement `play()/pause()/seek()` 之上（WebView2 最不可靠路径），OpenCut 用 Web Audio 调度 + canvas 渲染完全绕开。
+> **不再往 B.5 堆 activation gate**。改为：
+> 1. **STAB 止血（已完成，commit `fd763ad`）**：`startPlay` 撤掉 3 个 await 屏障（prime/ready/seek），Timeline Clock 是 master 立即启动，媒体作 follower 异步追上（恢复播放头动 + session running + 视频能播）。
+> 2. **B.5 收尾**：Commit 1（`d45fdcb` `_attemptPlay` 早返守卫）保留；其余 gate 不再扩展。
+> 3. **C.0 AudioEngine 迁移**（`docs/architecture/audio-engine-migration.md`）：音频迁 Web Audio（BufferSourceNode 精确调度），视频暂保持 element follower。
 
 > **命名与职责边界（用户拍板）**：本门叫 **Media Start Confirmation Gate（媒体启动确认门）**，别名 Heartbeat Confirm。
 > 它**不是健康检查、不是持续心跳监控**，职责只有一条：`play()` 发起后**确认一次**媒体真的进入播放 pipeline，给 session 一个启动事实，随后**不接管播放**。防止后续被误解扩展成"每秒检查媒体健康"的监控层（那会滑向播放器重构）。
