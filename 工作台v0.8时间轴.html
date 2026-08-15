@@ -1607,14 +1607,14 @@ const PlayerManager = {
       targets.push({ el: rec.el, rec, type: "audio", ti, key: rec.key, want: wantSound("audio", ti) });
     }
     if (hits.length > 0 && targets.length === 0) return false;   // 期望有媒体却无（元素可能已释放）→ 降级 startPlay
-    primeMediaPlayback(hits).catch(() => {});          // 手势内预热（WebView2 权限），不阻塞
+    primeMediaPlayback(hits).catch(() => {});          // 手势内预热（临时元素，fire-and-forget 安全，不碰真实元素）
     seekActiveMediaToPlayhead(Store.state.playheadUs); // 按当前播放头重定位（inactive-park + active seek，不再写 active muted）
     currentSession.targets = targets;                  // 复用既有 session，更新 target 列表（不重置 activation map）
     currentSession.state = PLAY_SESSION_STATE.STARTING;
+    currentSession.autoplayUnlockPending = true;        // 恢复也走 Session 门：全体激活后整批解 mute（原 false 会跳过整批解 mute，致元素停在 WAITING 永远静音）
     for (const t of targets) this._attemptPlay(currentSession, t);  // 已在播元素走 !el.paused 早返；paused 元素重起播+重新激活
     currentSession.state = PLAY_SESSION_STATE.MUTED_PLAYING;
-    currentSession.autoplayUnlockPending = false;       // 已处播放上下文，单元素增量解（Handoff Gate）即可
-    this._cleanupAllActivation(currentSession);
+    // 不在此提前 _cleanupAllActivation：让 _restoreSession 在 session 门通过后统一清理（提前清理会移除激活监听，致元素卡 WAITING）
     console.log("[PlaySession]", currentSession.id, "RESUME", targets.length, "token=" + currentSession.recoverToken);
     playTick();
     return true;
@@ -2048,21 +2048,35 @@ function togglePlay() {
   }
   startPlay();
 }
-// B.5.4-2：手势内媒体权限预热。仅在用户手势上下文调用（startPlay 冷启动 / resume）。
-// 仅 el.play()+立即 pause() 拿 WebView2/autoplay 权限，绝不改 currentTime/session/activation/timeline。
-// 必须 await play() 的 race(100ms) 后再 pause()，避免 WebView2 下 play promise 晚 resolve 产生幽灵状态。
+// B.5.4-2（修正版）：手势内媒体权限预热。
+// 用一个临时隐藏 <audio>（极短静音 WAV）拿「文档级」autoplay 权限，绝不碰真实时间轴元素。
+// 根因修正：原实现对真实元素 play()+pause() 且未 await，会与主流程 _attemptPlay 竞态，
+// 导致 _attemptPlay 早返 + prime 的 pause() 把元素暂停 → 首播卡死/无声。临时元素与真实元素互不干扰。
+let _silentPrimeUrl = null;
+function _getSilentPrimeUrl() {
+  if (_silentPrimeUrl) return _silentPrimeUrl;
+  const sampleRate = 8000, samples = 1600;              // 0.2s 静音
+  const buf = new ArrayBuffer(44 + samples);
+  const v = new DataView(buf);
+  const w = (o, s) => { for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); };
+  w(0, "RIFF"); v.setUint32(4, 36 + samples, true); w(8, "WAVE");
+  w(12, "fmt "); v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+  v.setUint32(24, sampleRate, true); v.setUint32(28, sampleRate, true);
+  v.setUint16(32, 1, true); v.setUint16(34, 8, true);
+  w(36, "data"); v.setUint32(40, samples, true);        // 数据全 0 = 静音
+  _silentPrimeUrl = URL.createObjectURL(new Blob([buf], { type: "audio/wav" }));
+  return _silentPrimeUrl;
+}
 async function primeMediaPlayback(hits) {
-  for (const h of hits) {
-    if (h.type !== "video" && h.type !== "audio") continue;
-    const rec = h.type === "video" ? previewState.visualEls.get("video:" + h.ti) : previewState.audioEls.get("audio:" + h.ti);
-    const el = rec ? (h.type === "video" ? rec.el.firstElementChild : rec.el) : null;
-    if (!el || el.error) continue;
-    setMediaMute(el, true, "prime", h.key);   // 预热期间静音，避免 100ms 出声
-    try {
-      await Promise.race([el.play(), new Promise(r => setTimeout(r, 100))]);
-    } catch (e) { /* 预热失败不致命，正式播放时再走激活门 */ }
-    el.pause();   // 保留 currentTime，不触发 seek，不改 state
-  }
+  const tmp = document.createElement("audio");
+  tmp.muted = true;
+  tmp.src = _getSilentPrimeUrl();
+  tmp.style.cssText = "position:absolute;width:1px;height:1px;opacity:0;pointer-events:none;";
+  document.body.appendChild(tmp);
+  try {
+    await Promise.race([tmp.play(), new Promise(r => setTimeout(r, 100))]);
+  } catch (e) { /* 预热失败不致命，正式播放仍走激活门 */ }
+  try { tmp.pause(); document.body.removeChild(tmp); } catch (e) {}
 }
 async function startPlay() {
   const maxUs = totalDurationUs();
@@ -2080,7 +2094,7 @@ async function startPlay() {
   lastHitSig = resolveHits(Store.state.playheadUs).map(h => h.key).join("|");
   renderPreview();            // 立即更新元素（新素材可能刚设置 src，还未加载完）
   const hits = resolveHits(Store.state.playheadUs);
-  primeMediaPlayback(hits).catch(() => {});   // B.5.4-2：手势内媒体权限预热（须在 await 之前、用户手势仍有效时调用）
+  await primeMediaPlayback(hits);   // B.5.4-2：手势内媒体权限预热（临时元素，先解锁文档级 autoplay，主流程再走）
   // Round G1：必须等命中媒体元素加载到可 seek 状态，否则 seek 会静默失败，音频从头播。
   // Round G3：外层再包 5 秒总超时，避免任何子 promise 漏网导致 startPlay 永久挂起、播放头不动。
   const withTimeout = (p, ms, label) => Promise.race([p, new Promise(r => setTimeout(() => { console.warn("[startPlay] " + label + " 总超时，强制继续"); r(); }, ms))]);
