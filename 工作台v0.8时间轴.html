@@ -1216,6 +1216,10 @@ function setMediaMute(el, value, reason, label) {
   console.log("[MUTE]", label || (el.tagName || "?"), "->", value, "reason=" + reason);
 }
 
+// B.5.5：seek 确认期间的 target key 集合。correctActiveMediaDrift 见 key 在此集合则跳过，
+// 避免"起播前等 seek 落位"期间 drift 又发 seek 打断（修 seek/play/drift 每帧自我震荡）。
+const _seekConfirmKeys = new Set();
+
 // 最终媒体是否应静音（单一计算点）：用户意图 / autoplay 待解锁 / 媒体暂 inactive 任一为真即静音。
 // 注：本函数供 Step D 收口 _applyMediaState 时使用；Step A 的 restore/onPlaying 直接按 want 解静音。
 function shouldMediaBeMuted(s) {
@@ -1414,13 +1418,26 @@ const PlayerManager = {
 
   // B.5.2 真正发起 play + 绑定激活信号（playing / canplaythrough / timeout）。
   // 从 _attemptPlay 拆出，保证等媒体 ready 后才进入。
-  _playWhenReady(session, t) {
+  // B.5.5 修复（用户拍板 2026-08-15）：改 async，起播前先确认 seek 落位（target 级，不全局 await）。
+  async _playWhenReady(session, t) {
     const { el } = t;
     if (!session.isCurrent()) return;
     if (!el || el.paused === undefined) return;
     if (!el.paused) {
       this._setActivation(session, t, MEDIA_ACTIVATION_STATE.PLAYING_CONFIRMED);
       return;
+    }
+    // 起播前 seek 确认：v1.4.1 是全局 await seek 再 play（媒体慢拖死播放头），
+    // 这里只对当前 target 确认（_waitSeekSettled 80ms 轮询 + 700ms 安全网），
+    // 确认期间挂 _seekConfirmKeys 让 drift 不打断（修"seek/play/drift 每帧自我震荡"）。
+    if (el._seekTarget != null) {
+      _seekConfirmKeys.add(t.key);
+      try { await _waitSeekSettled(el); } finally { _seekConfirmKeys.delete(t.key); }
+      if (!session.isCurrent()) return;                       // 等待期间 session 被换/取消
+      if (!el.paused) {                                       // 等待期间已被别的路径起播
+        this._setActivation(session, t, MEDIA_ACTIVATION_STATE.PLAYING_CONFIRMED);
+        return;
+      }
     }
     setMediaMute(el, true, "play-mute", t.key);   // (A) 静音起播，等激活门全部确认才解
     console.log("[playReq]", t.key, "muted=" + el.muted, "cur=" + (el.currentTime || 0).toFixed(3), "readyState=" + el.readyState);
@@ -2140,6 +2157,7 @@ function correctActiveMediaDrift(us) {
     if (!rec) return;
     const el = type === "video" ? rec.el.firstElementChild : rec.el;  // video 元素在 wrap 内；audio 元素本身
     if (!el || el.paused || el.seeking) return;   // 暂停/seek 中不打扰，避免与跨段 seek 抢
+    if (_seekConfirmKeys.has(rec.key)) return;    // B.5.5：起播前 seek 确认期间，drift 不打断（修 seek/play/drift 每帧自我震荡）
     const s = rec.seg; if (!s) return;
     const srcStartUs = s.src_start || 0;
     const srcEndUs = s.src_end || (srcStartUs + s.duration);
