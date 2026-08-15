@@ -1216,6 +1216,15 @@ function setMediaMute(el, value, reason, label) {
   console.log("[MUTE]", label || (el.tagName || "?"), "->", value, "reason=" + reason);
 }
 
+// B.5.5-SRC（GPT 拍板，诊断不改逻辑）：统一 src 写入日志打点。
+// 目的：回答"谁把 readyState 从 4 打回 0"——src 重新赋值 / load() / 元素替换都会归零。
+function setMediaSrc(el, src, reason, label) {
+  if (!el) return;
+  const old = el.currentSrc || el.src || "";
+  console.log("[SRC]", label || (el.tagName || "?"), reason, (old || "(empty)").slice(0, 60), "=>", (src || "(empty)").slice(0, 60));
+  el.src = src;
+}
+
 // B.5.5：seek 确认期间的 target key 集合。correctActiveMediaDrift 见 key 在此集合则跳过，
 // 避免"起播前等 seek 落位"期间 drift 又发 seek 打断（修 seek/play/drift 每帧自我震荡）。
 const _seekConfirmKeys = new Set();
@@ -1743,7 +1752,7 @@ function _setVisualContent(wrap, mtype, path, muted) {
   if (mtype === "video") {
     const layerKey = wrap.id || "video:?";
     const v = PlayerManager.create("video", wrap, layerKey);
-    v.src = fileURL(path);
+    setMediaSrc(v, fileURL(path), "render-visual", layerKey);
     // 轨道静音 或 全局预览静音 → 关闭该视频段的内嵌音频
     setMediaMute(v, !!muted || previewMuted, "render-visual", (path || "visual"));
     v.playsInline = true;
@@ -1851,7 +1860,8 @@ function _tryReloadMedia(el, type, layerKey) {
   // 先清 error 状态占位，避免立即再次触发
   const oldSrc = el.src;
   const oldCurrentSrc = el.currentSrc;
-  // 重新 load()：不重建元素、不改 src，只让浏览器重新拉取
+  // 重新 load()：不重建元素、不改 src，只让浏览器重新拉取（load() 同样会把 readyState 打回 0）
+  console.log("[SRC]", layerKey, "reload-load()", (oldCurrentSrc || oldSrc || "").slice(0, 60));
   try { el.load(); } catch (e) { console.warn("load() 失败:", e); }
   // load 完成后 seek 回当前播放头并继续播放
     const onLoaded = () => {
@@ -2063,7 +2073,7 @@ function renderPreview(s) {
     }
     const src = fileURL(h.seg.path);
     if (rec.el.src !== src) {
-      rec.el.src = src;
+      setMediaSrc(rec.el, src, "render-audio", layerKey);
       rec.el.dataset.pendingSeek = "1";
       rec.el._pendingSeg = h.seg;
       rec.el.oncanplay = () => {
