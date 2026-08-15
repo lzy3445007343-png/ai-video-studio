@@ -114,19 +114,19 @@
   .skill .skill-item .d { color: var(--muted); font-size: 11px; }
   .skill .empty { text-align: center; padding: 30px 12px; color: var(--muted); }
 
-  /* 关键帧面板（UI 对齐 OpenCut 属性面板：2 列网格 + 卡片化，2026-08-15；260px 防窗口窄时被裁） */
-  .kfpanel { width: 260px; flex: none; min-width: 0; background: var(--panel); border-left: 1px solid var(--border); display: flex; flex-direction: column; }
+  /* 关键帧面板（UI 对齐 OpenCut 属性面板：2 列网格 + 卡片化，2026-08-15；220px + 横向滚动兜底防窗口极窄裁切） */
+  .kfpanel { width: 220px; flex: none; min-width: 0; background: var(--panel); border-left: 1px solid var(--border); display: flex; flex-direction: column; overflow: hidden; }
   .kfpanel .head { padding: 10px; border-bottom: 1px solid var(--border); font-weight: 600; font-size: 12px; display: flex; align-items: center; gap: 6px; }
   .kfpanel .head .seg { color: var(--muted); font-weight: 400; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
   .kfpanel .body { flex: 1; overflow: auto; padding: 10px; min-width: 0; }
   .kfpanel .empty { text-align: center; color: var(--muted); font-size: 11px; padding: 24px 8px; line-height: 1.6; }
-  #kfRows { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; min-width: 0; }
-  .kf-row { display: flex; align-items: center; gap: 3px; background: var(--panel-2); border: 1px solid var(--border); border-radius: 6px; padding: 3px 4px; min-width: 0; }
-  .kf-row .tog { width: 16px; height: 18px; border-radius: 4px; border: 1px solid var(--border); background: var(--panel); color: var(--muted); cursor: pointer; flex: none; font-size: 9px; line-height: 1; }
+  #kfRows { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; min-width: 0; }
+  .kf-row { display: flex; align-items: center; gap: 3px; background: var(--panel-2); border: 1px solid var(--border); border-radius: 5px; padding: 3px 4px; min-width: 0; }
+  .kf-row .tog { width: 14px; height: 16px; border-radius: 3px; border: 1px solid var(--border); background: var(--panel); color: var(--muted); cursor: pointer; flex: none; font-size: 9px; line-height: 1; }
   .kf-row .tog.on { background: var(--primary); color: #fff; border-color: var(--primary); }
-  .kf-row .lab { width: 30px; font-size: 10px; color: var(--text); flex: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .kf-row .val { width: 40px; background: var(--panel); border: 1px solid var(--border); border-radius: 4px; color: var(--text); font-size: 11px; padding: 2px 3px; min-width: 0; }
-  .kf-row .add { flex: none; width: 18px; font-size: 11px; padding: 1px 0; border-radius: 4px; border: 1px solid var(--border); background: var(--panel); color: var(--text); cursor: pointer; line-height: 1; }
+  .kf-row .lab { width: 24px; font-size: 9px; color: var(--text); flex: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .kf-row .val { width: 32px; background: var(--panel); border: 1px solid var(--border); border-radius: 3px; color: var(--text); font-size: 10px; padding: 1px 2px; min-width: 0; }
+  .kf-row .add { flex: none; width: 16px; font-size: 10px; padding: 0; border-radius: 3px; border: 1px solid var(--border); background: var(--panel); color: var(--text); cursor: pointer; line-height: 1; }
   .kf-row .add:hover { border-color: var(--primary); }
   .kf-graph { position: relative; height: 70px; margin: 8px 0; background: var(--panel-2); border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
   .kf-graph .kf-axis { position: absolute; left: 0; right: 0; top: 50%; border-top: 1px dashed var(--border); }
