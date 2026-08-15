@@ -1189,6 +1189,15 @@ const MEDIA_ACTIVATION_STATE = Object.freeze({
   TIMEOUT_DEGRADED:  "TIMEOUT_DEGRADED",  // 超过 MEDIA_ACTIVATION_TIMEOUT 仍未激活，降级放行（防坏轨死锁）
 });
 
+// Step B.5 媒体激活契约：播放事务类型枚举（替代 play({handoff:true}) 布尔参数，避免第二套播放逻辑分支）。
+// START=用户/手势主动起播；RECOVER=启动失败恢复（经 _scheduleRecover→continueStart，当前不直传 play）；
+// HANDOFF=跨段交接（复用 session，不重建/不重静音全体，仅增量处理本段新增/失活媒体）。
+const _PLAY_REASON = Object.freeze({
+  START:   "start",
+  RECOVER: "recover",
+  HANDOFF: "handoff",
+});
+
 // 最终媒体是否应静音（单一计算点）：用户意图 / autoplay 待解锁 / 媒体暂 inactive 任一为真即静音。
 // 注：本函数供 Step D 收口 _applyMediaState 时使用；Step A 的 restore/onPlaying 直接按 want 解静音。
 function shouldMediaBeMuted(s) {
@@ -1255,7 +1264,7 @@ const PlayerManager = {
 
   // ---- 播放控制（Step 4：play/pause/全局静音逻辑已收口进 Player；顶层 playAllMedia/pausePlay/toggleMute 退化为薄包装）----
   // 原 playAllMedia()：播放所有命中媒体（点击手势 / sticky-activation 跨段上下文内调用）
-  play() {
+  play(reason = _PLAY_REASON.START) {
     const now = performance.now();
     if (now - _lastPlayAll < 250) return;   // 防抖：250ms 内不重复整批 play
     _lastPlayAll = now;
@@ -1285,7 +1294,16 @@ const PlayerManager = {
     // 但保留 isPlaying，让 playTick 沿墙钟自然穿过空白到下一段再建 session。
     if (targets.length === 0) return;
 
-    // ③ 取消旧事务 → id++ → 建新事务（Step A：PlaySession 状态层落地）
+    // ③ 跨段交接（HANDOFF）：复用当前 session，不 cancel+createSession 重建、不重静音全体，
+    // 仅对每个 target 调 _attemptPlay（其 !el.paused 早返守卫保证已在播元素不被重静音；src 被换导致
+    // reload 变 paused 的元素会被正确重起播）。详见 _handoff。
+    if (reason === _PLAY_REASON.HANDOFF && currentSession && currentSession.isCurrent()) {
+      this._handoff(currentSession, targets);
+      return;
+    }
+
+    // ④ 冷启动（START / 无当前事务）：取消旧事务 → id++ → 建新事务（Step A：PlaySession 状态层落地）
+    unlockAudio();   // B.5：冷启动首行补手势级音频解锁（startPlay 已调，这里兜底 playTick 800ms 重试路径）
     if (currentSession && currentSession.isCurrent()) currentSession.cancel();
     const session = createSession(targets);
     this.start(session);
@@ -1307,6 +1325,18 @@ const PlayerManager = {
     for (const t of session.targets) this._attemptPlay(session, t);
     session.state = PLAY_SESSION_STATE.MUTED_PLAYING;
     console.log("[PlaySession]", session.id, session.state, session.targets.length, session.autoplayUnlockPending, "token=" + session.recoverToken, "reason=continueStart");
+  },
+  // Step B.5 媒体激活契约：跨段交接（handoff 非 reboot）。
+  // 核心：复用 currentSession，不 cancel+createSession，不重静音已在播元素。
+  // 对每个 target 调 _attemptPlay —— 其 !el.paused 早返守卫保证「已在播元素不被重静音」（不会到 el.muted=true）；
+  // src 被换导致 reload 变 paused 的元素会被正确重起播 + 重新进入激活门。
+  // 失活元素已在 ① 选择阶段 pause+muted，这里仅更新 session.targets（activation map 保留既有元素状态）。
+  // 纪律：不碰 start / continueStart / _scheduleRecover / _onStartError（B 红线）。
+  _handoff(session, targets) {
+    for (const t of targets) this._attemptPlay(session, t);   // 增量：已在播的走早返不动，paused 的重起播
+    session.targets = targets;                                // 更新 target 列表（不重置 activation map 既有状态）
+    session.state = PLAY_SESSION_STATE.MUTED_PLAYING;
+    console.log("[PlaySession]", session.id, session.state, session.targets.length, session.autoplayUnlockPending, "token=" + session.recoverToken, "reason=handoff");
   },
   // 钉子3：唯一 el.play() 入口，纯媒体动作，不碰 state / 不写 restore / 不分类错误。
   // B.5：移除 120ms 裸兜底，改为「先等媒体 ready → 再 play → 再等 playing → 最后整批解 mute」。
@@ -1417,7 +1447,20 @@ const PlayerManager = {
     } else {
       console.log("[PlaySession]", session.id, "ACTIVATION", t.key, "state=" + newState, "token=" + session.recoverToken);
     }
-    this._checkAllActivated(session);
+    // 聚合门分流（不修改 _checkAllActivated 语义）：
+    // - 冷启动（Session Gate）：autoplayUnlockPending=true 时，等全体脱离 WAITING 才整批解 mute（语义不变）
+    // - 已解锁（Handoff Gate）：session 已解锁（autoplayUnlockPending=false）状态下，本 target 激活后
+    //   单独解 mute（增量，不打扰其它已在播元素）
+    if (session.autoplayUnlockPending) {
+      this._checkAllActivated(session);
+    } else if (newState === MEDIA_ACTIVATION_STATE.PLAYING_CONFIRMED ||
+               newState === MEDIA_ACTIVATION_STATE.READY_FALLBACK ||
+               newState === MEDIA_ACTIVATION_STATE.TIMEOUT_DEGRADED) {
+      if (t.el && t.el.muted) {
+        t.el.muted = !(t.want && !previewMuted);
+        console.log("[PlaySession]", session.id, "HANDOFF_UNMUTE", t.key, "state=" + newState, "token=" + session.recoverToken);
+      }
+    }
   },
   // 辅助信号：canplaythrough / readyState>=4（中可信度，可被 playing 升级）
   _onMediaReady(session, t) {
@@ -1973,7 +2016,7 @@ function updateMuteBtn() {
   btn.classList.toggle("muted", previewMuted);
 }
 function toggleMute() { return PlayerManager.setGlobalMute(); }
-function playAllMedia() { return PlayerManager.play(); }
+function playAllMedia(reason) { return PlayerManager.play(reason || _PLAY_REASON.START); }
 // Round E②：drift 检测辅助（替代原 _dominantMediaUs 的“媒体当 master”角色）。
 // 播放头是 master（墙钟）。这里只做被动收口：媒体若因缓冲/解码滞后偏离播放头 >100ms，
 // 才把它 seek 回正确时间轴位置；绝不反写 playheadUs，避免“谁在播谁是老大”导致的跳/双播/回弹。
@@ -2086,7 +2129,7 @@ async function _handleCrossSegment(us) {
         const seeked2 = seekActiveMediaToPlayhead(currentUs);
         await Promise.all(seeked2.map(_waitSeekSettled));
       }
-      if (isPlaying) { _lastPlayAll = 0; playAllMedia(); }   // 跨段必须强制起播，不受 250ms 防抖吞掉（短片段/gap极小场景）
+      if (isPlaying) { _lastPlayAll = 0; playAllMedia(_PLAY_REASON.HANDOFF); }   // 跨段强制起播，HANDOFF 交接（复用 session，不重建/不重静音全体）
       target = crossSegmentQueuedUs;   // 处理期间又跨段？取最新再走一轮
       crossSegmentQueuedUs = null;
     }
