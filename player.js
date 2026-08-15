@@ -9,6 +9,19 @@
  * 注：播放变量（isPlaying/playStartWall 等）仍在主 script（UI 也用），本文件函数运行时访问。
  * ===================================================================== */
 
+/* ---------- 播放状态（Step 2 播放隔离：从 HTML 收口到 player.js） ---------- */
+/* ---------- 播放控制（对齐 OpenCut clock-based 模型：一个时钟推进 playheadUs，预览订阅） ---------- */
+let isPlaying = false;
+let playRAF = null;
+let playStartWall = 0;        // 开始播放时的 performance.now()
+let playStartUs = 0;          // 开始播放时的 playheadUs
+let lastHitSig = "";          // 播放时命中段签名；跨段才重建预览，平时只动红线
+let previewMuted = false;     // 全局预览静音：false=有声，true=静音
+let mediaClockReady = true;   // 视频/音频已 seek 到播放位置：true 时播放头跟随媒体时钟，false 时信任墙钟（避免读到脏 currentTime 跳回段起点）
+let _mcrWaitAt = 0;           // mediaClockReady 看门狗计时起点（performance.now()），用于 D 超时回退
+let _lastPlayAll = 0;          // playAllMedia 防抖计时（performance.now()），避免同一媒体被反复 play 引发 AbortError
+
+
 const audioCtx = (typeof AudioContext !== "undefined") ? new AudioContext() :
                  (typeof webkitAudioContext !== "undefined") ? new webkitAudioContext() : null;
 function unlockAudio() {

@@ -709,16 +709,6 @@ function renderTimecode(s) {
   $("timecode").textContent = usToTime(Store.state.playheadUs) + " / " + usToTime(dur);
 }
 
-/* ---------- 播放控制（对齐 OpenCut clock-based 模型：一个时钟推进 playheadUs，预览订阅） ---------- */
-let isPlaying = false;
-let playRAF = null;
-let playStartWall = 0;        // 开始播放时的 performance.now()
-let playStartUs = 0;          // 开始播放时的 playheadUs
-let lastHitSig = "";          // 播放时命中段签名；跨段才重建预览，平时只动红线
-let previewMuted = false;     // 全局预览静音：false=有声，true=静音
-let mediaClockReady = true;   // 视频/音频已 seek 到播放位置：true 时播放头跟随媒体时钟，false 时信任墙钟（避免读到脏 currentTime 跳回段起点）
-let _mcrWaitAt = 0;           // mediaClockReady 看门狗计时起点（performance.now()），用于 D 超时回退
-let _lastPlayAll = 0;          // playAllMedia 防抖计时（performance.now()），避免同一媒体被反复 play 引发 AbortError
 
 // B.5 音频解锁：WebView2/CEF 对 <audio> 的自动播放策略比 <video> 更严，
 // 需要在用户手势内主动 resume AudioContext，才能解锁页面音频输出。
