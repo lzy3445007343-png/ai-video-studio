@@ -7,6 +7,7 @@
 - `roadmap.md`：架构收口路线 briefing（Phase0→Phase3，含验收基线与明确不做项）。
 - `player-session-v2-design.md`：PlaySession 状态层设计（v2.2）。
 - `player-session-stepB-continueStart.md`：Step B 冻结稿（v2.3，continueStart 契约 + 4 钉子）。
+- `implementation-manual-stepB-D.md`：实施手册（**自包含，给 GPT 参谋审阅**）——Step B 行号级改动清单 + B.5 草案（Media Activation Gate，待审）+ C/D 方向；含给 GPT 的待审问题汇总。
 - `operation-schema-sketch.md`：Operation Schema v1 草图（**概念模型，不锁字段**，ADR-001 §9 要求）。
 
 ## audits/（审计 / 核查类：描述“现状是什么”）
