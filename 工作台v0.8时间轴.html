@@ -1369,9 +1369,19 @@ const PlayerManager = {
     if (!el) return;
     this._initActivation(session, t);          // 确保 record 存在（并清理该 key 的旧监听/timer）
     if (!el.paused) {
-      // 已在播（如 continueStart 时未停的 target）：直接确认，避免 _checkAllActivated 卡在 WAITING
-      this._setActivation(session, t, MEDIA_ACTIVATION_STATE.PLAYING_CONFIRMED);
-      return;
+      // B.5.5-1：paused=false ≠ playing（WebView2 seek+play+pause+复用元素常见：paused=false 但 decoder 停摆）。
+      // 若元素 seek 未落位（_seekTarget 与 currentTime 偏差>50ms），说明跨段/重播复用、未真正进入播放 pipeline，
+      // 不信任早返，fallthrough 走 _playWhenReady 重新起播（re-activate）。
+      const seekTarget = el._seekTarget;
+      const seekPending = seekTarget != null && Math.abs((el.currentTime || 0) - seekTarget) > 0.05;
+      if (!seekPending) {
+        // 已在播（如 continueStart 时未停的 target）：直接确认，避免 _checkAllActivated 卡在 WAITING
+        this._setActivation(session, t, MEDIA_ACTIVATION_STATE.PLAYING_CONFIRMED);
+        console.log("[media-confirm]", t.key, "method=EARLY_RETURN");
+        return;
+      }
+      console.log("[media-confirm]", t.key, "method=REACTIVATE", "ct=" + (el.currentTime || 0).toFixed(3), "seekTarget=" + seekTarget.toFixed(3));
+      // fallthrough → B.5.1 预 ready gate → _playWhenReady 重新起播
     }
 
     // B.5.1 预 ready gate：等媒体至少有当前帧数据（HAVE_CURRENT_DATA，readyState>=2）再 play，
