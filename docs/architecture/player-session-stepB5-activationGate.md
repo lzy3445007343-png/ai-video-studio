@@ -1,6 +1,6 @@
 # PlayerManager v2.2 · Step B.5：Media Activation Gate 设计稿
 
-> **状态**：冻结版（基于 `implementation-manual-stepB-D.md` §3 与第五轮 GPT 评审结论，待 GPT 最终 sign-off 后落码）。
+> **状态**：v1.1 已落码（commit 待填），在 v1.0 基础上根据真机验收新增「预 ready gate」：等媒体 readyState>=2 再真正调用 `el.play()`，解决首次播放画面不动问题。
 > **上一篇**：`player-session-stepB-continueStart.md`（Step B v2.3 已落码，commit `9aac35a`）。
 > **定位**：Step B.5 只治「媒体未真正 ready 就解 mute」导致的无声，不动 Step B 已冻结的启动事务层（`_attemptPlay` / `start` / `continueStart` / `_scheduleRecover`）。
 
@@ -103,15 +103,18 @@ WAITING ──playing──► PLAYING_CONFIRMED
 - 幂等：收到低优先级信号时，若已是高优先级则忽略；同优先级也忽略。
 - 不降级：一旦 `PLAYING_CONFIRMED`，不会因为后续 seek 等变回 `WAITING`（session 生命周期内 target 不变时如此；跨段更新 targets 属 Step D）。
 
-### 4.4 三层信号定义
+### 4.4 四层信号定义
 
 | 信号 | 触发条件 | 可信度 | 备注 |
 |---|---|---|---|
+| `PRE_READY_GATE` | `el.readyState >= 2` 或收到 `canplay`/`canplaythrough`/`error` | 前置 | 在真正调用 `el.play()` 之前必须满足；防止 HAVE_NOTHING 阶段 play() pending/失败导致画面不动。 |
 | `PLAYING_CONFIRMED` | 元素 `playing` 事件 | 最高 | 浏览器确认媒体真正开始播放。 |
 | `READY_FALLBACK` | `canplaythrough` 事件或调用时 `readyState >= 4` | 中 | 数据已缓冲到可连续播放，但不等于音频输出已启动。 |
-| `TIMEOUT_DEGRADED` | 自 `_attemptPlay` 起超过 `MEDIA_ACTIVATION_TIMEOUT` | 兜底 | 保证不会永久等待；坏轨/损坏文件走此分支。 |
+| `TIMEOUT_DEGRADED` | 自 `_playWhenReady` 起超过 `MEDIA_ACTIVATION_TIMEOUT` | 兜底 | 保证不会永久等待；坏轨/损坏文件走此分支。 |
 
 **为什么不只用 `Promise.all` 等全部 playing**：单坏轨（损坏/纯静音/永不 playing）会死锁整体；Activation Tracker 允许单轨降级，不拖死整体。
+
+**为什么加 PRE_READY_GATE**：Step B.5 v1.0 落码后真机验收发现，首次播放时 `el.play()` 在 `readyState < 2` 时被调用，浏览器让 play() 长期处于 pending，画面迟迟不动。因此把 `_attemptPlay` 拆成两步：先等媒体 ready，再 play + 等 playing。
 
 ### 4.5 Session 聚合判断
 
@@ -221,54 +224,67 @@ _restoreSession(session) {
 }
 ```
 
-### 5.4 `_attemptPlay` 改造
+### 5.4 `_attemptPlay` / `_playWhenReady` 改造
 
-保留"唯一 el.play 出口 / 纯媒体动作"纪律，扩展激活追踪：
+保留"唯一 el.play 出口 / 纯媒体动作"纪律，但把原 `_attemptPlay` 拆成两步：
+
+1. **预 ready gate（`_attemptPlay`）**：若 `el.readyState < 2` 且无 error，先等 `canplay`/`canplaythrough`/`error`，避免在 HAVE_NOTHING/HAVE_METADATA 阶段就调用 `play()`。
+2. **真正起播 + 激活追踪（`_playWhenReady`）**：媒体 ready 后走原三层信号逻辑（playing / canplaythrough / timeout）。
 
 ```javascript
 _attemptPlay(session, t) {
   const { el } = t;
   if (!el) return;
+  this._initActivation(session, t);
+  if (!el.paused) {
+    this._setActivation(session, t, MEDIA_ACTIVATION_STATE.PLAYING_CONFIRMED);
+    return;
+  }
+  if (el.readyState >= 2 || el.error) {
+    this._playWhenReady(session, t);
+    return;
+  }
+  // 未 ready：等 canplay/canplaythrough/error；timeout 兜底仍尝试 play
+  let readyTimer = null;
+  const onReady = () => { clearTimeout(readyTimer); this._playWhenReady(session, t); };
+  const onError = () => { clearTimeout(readyTimer); this._playWhenReady(session, t); };
+  el.addEventListener("canplay", onReady, { once: true });
+  el.addEventListener("canplaythrough", onReady, { once: true });
+  el.addEventListener("error", onError, { once: true });
+  readyTimer = setTimeout(() => onReady(), MEDIA_ACTIVATION_TIMEOUT);
+}
+
+_playWhenReady(session, t) {
+  const { el } = t;
+  if (!session.isCurrent() || !el || el.paused === undefined) return;
   if (!el.paused) {
     this._setActivation(session, t, MEDIA_ACTIVATION_STATE.PLAYING_CONFIRMED);
     return;
   }
   el.muted = true;
-
-  // 初始化激活追踪
-  this._initActivation(session, t);
-
-  // 1. playing 事件
   const onPlaying = () => this._setActivation(session, t, MEDIA_ACTIVATION_STATE.PLAYING_CONFIRMED);
   el.addEventListener("playing", onPlaying, { once: true });
-
-  // 2. canplaythrough 辅助信号
   const onReady = () => this._setActivation(session, t, MEDIA_ACTIVATION_STATE.READY_FALLBACK);
   el.addEventListener("canplaythrough", onReady, { once: true });
-
-  // 3. timeout 兜底
   const timer = setTimeout(() => this._setActivation(session, t, MEDIA_ACTIVATION_STATE.TIMEOUT_DEGRADED), MEDIA_ACTIVATION_TIMEOUT);
-
-  // 记录 cleanup
-  const record = session.activation.get(t.key);
-  record.timer = timer;
-  record.cleanups.push(
-    () => el.removeEventListener("playing", onPlaying),
-    () => el.removeEventListener("canplaythrough", onReady),
-    () => clearTimeout(timer)
-  );
-
-  // 预检：已 readyState>=4 直接给 READY_FALLBACK（仍可能被后续 playing 升级）
+  const rec = session.activation.get(t.key);
+  if (rec) {
+    rec.timer = timer;
+    rec.cleanups.push(
+      () => el.removeEventListener("playing", onPlaying),
+      () => el.removeEventListener("canplaythrough", onReady),
+      () => clearTimeout(timer)
+    );
+  }
   if (el.readyState >= 4) {
     this._setActivation(session, t, MEDIA_ACTIVATION_STATE.READY_FALLBACK);
   }
-
   const p = el.play();
   if (p && p.catch) p.catch(err => this._onStartError(session, t, err));
 }
 ```
 
-**B 的 120ms 兜底移除**：B.5 用 Activation Gate 取代它。`_attemptPlay` 不再设置 120ms setTimeout。
+**B 的 120ms 兜底移除**：B.5 用 Activation Gate 取代它。`_playWhenReady` 不再设置 120ms setTimeout。
 
 ---
 
@@ -370,3 +386,4 @@ _attemptPlay(session, t) {
 ## 11. 修订记录
 
 - **v1.0（冻结版）**：基于实施手册 §3 与第五轮 GPT 评审，明确 Activation Tracker、activationState 枚举、三层信号优先级、与 Step B 接口边界、验收门禁。
+- **v1.1（落码后热修）**：根据真机验收发现"首次播放画面不动"，把 `_attemptPlay` 拆为「预 ready gate + `_playWhenReady`」，确保 `el.play()` 不在 `readyState < 2` 时调用。

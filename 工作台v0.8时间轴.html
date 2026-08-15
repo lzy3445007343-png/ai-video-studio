@@ -1298,13 +1298,52 @@ const PlayerManager = {
     console.log("[PlaySession]", session.id, session.state, session.targets.length, session.autoplayUnlockPending, "token=" + session.recoverToken, "reason=continueStart");
   },
   // 钉子3：唯一 el.play() 入口，纯媒体动作，不碰 state / 不写 restore / 不分类错误。
-  // B.5：移除 120ms 裸兜底，改为「playing → canplaythrough/readyState → timeout」三层激活信号（Activation Tracker）。
+  // B.5：移除 120ms 裸兜底，改为「先等媒体 ready → 再 play → 再等 playing → 最后整批解 mute」。
+  // 若 el.readyState < 2 就直接 play，浏览器可能因数据不足让 play() pending/失败，表现为首次播放画面不动。
   _attemptPlay(session, t) {
     const { el } = t;
     if (!el) return;
     this._initActivation(session, t);          // 确保 record 存在（并清理该 key 的旧监听/timer）
     if (!el.paused) {
       // 已在播（如 continueStart 时未停的 target）：直接确认，避免 _checkAllActivated 卡在 WAITING
+      this._setActivation(session, t, MEDIA_ACTIVATION_STATE.PLAYING_CONFIRMED);
+      return;
+    }
+
+    // B.5.1 预 ready gate：等媒体至少有当前帧数据（HAVE_CURRENT_DATA，readyState>=2）再 play，
+    // 否则 play() 可能在 HAVE_NOTHING/HAVE_METADATA 阶段就 pending，导致画面迟迟不动。
+    if (el.readyState >= 2 || el.error) {
+      this._playWhenReady(session, t);
+      return;
+    }
+
+    // 未 ready：监听 canplay/canplaythrough/error，就绪后再 play；timeout 兜底仍尝试 play（避免坏轨永远卡死）。
+    let readyTimer = null;
+    const onReady = () => {
+      if (readyTimer) { clearTimeout(readyTimer); readyTimer = null; }
+      this._playWhenReady(session, t);
+    };
+    const onError = () => {
+      if (readyTimer) { clearTimeout(readyTimer); readyTimer = null; }
+      // error 状态下 play() 通常也会失败，走 _onStartError 路径处理（含 _tryReloadMedia）
+      this._playWhenReady(session, t);
+    };
+    el.addEventListener("canplay", onReady, { once: true });
+    el.addEventListener("canplaythrough", onReady, { once: true });
+    el.addEventListener("error", onError, { once: true });
+    readyTimer = setTimeout(() => {
+      console.warn("[PlaySession]", session.id, "READY_GATE_TIMEOUT", t.key, "readyState=" + el.readyState, "token=" + session.recoverToken);
+      onReady();   // 超时仍尝试 play，激活门后续会走 TIMEOUT_DEGRADED 兜底
+    }, MEDIA_ACTIVATION_TIMEOUT);
+  },
+
+  // B.5.2 真正发起 play + 绑定激活信号（playing / canplaythrough / timeout）。
+  // 从 _attemptPlay 拆出，保证等媒体 ready 后才进入。
+  _playWhenReady(session, t) {
+    const { el } = t;
+    if (!session.isCurrent()) return;
+    if (!el || el.paused === undefined) return;
+    if (!el.paused) {
       this._setActivation(session, t, MEDIA_ACTIVATION_STATE.PLAYING_CONFIRMED);
       return;
     }
@@ -1318,12 +1357,14 @@ const PlayerManager = {
     // 3. timeout 兜底降级（防坏轨/损坏文件死锁整体）
     const timer = setTimeout(() => this._setActivation(session, t, MEDIA_ACTIVATION_STATE.TIMEOUT_DEGRADED), MEDIA_ACTIVATION_TIMEOUT);
     const rec = session.activation.get(t.key);
-    rec.timer = timer;
-    rec.cleanups.push(
-      () => el.removeEventListener("playing", onPlaying),
-      () => el.removeEventListener("canplaythrough", onReady),
-      () => clearTimeout(timer)
-    );
+    if (rec) {
+      rec.timer = timer;
+      rec.cleanups.push(
+        () => el.removeEventListener("playing", onPlaying),
+        () => el.removeEventListener("canplaythrough", onReady),
+        () => clearTimeout(timer)
+      );
+    }
     // 预检：已 readyState>=4（如已缓冲轨）直接给 READY_FALLBACK；后续 playing 仍可升级为 PLAYING_CONFIRMED
     if (el.readyState >= 4) {
       this._setActivation(session, t, MEDIA_ACTIVATION_STATE.READY_FALLBACK);
