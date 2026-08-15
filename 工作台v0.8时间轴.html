@@ -1169,6 +1169,15 @@ let currentSession = null;
 const RECOVER_CAP = 2;            // 单 session 窗口内恢复上限（防无限重试）
 const RECOVER_WINDOW_MS = 60000;  // 恢复配额窗口：超过该时长未恢复则配额自动清零（适配长时运行）
 
+// Step B.5：媒体激活门常量
+const MEDIA_ACTIVATION_TIMEOUT = 1000; // ms，媒体激活等待兜底（冷启动/seek 重定位可能需接近 1000ms；真机调优前勿改小）
+const MEDIA_ACTIVATION_STATE = Object.freeze({
+  WAITING:           "WAITING",           // 已发起 play，尚未收到任何激活信号
+  PLAYING_CONFIRMED: "PLAYING_CONFIRMED", // 收到真实 playing 事件（最高优先级）
+  READY_FALLBACK:    "READY_FALLBACK",    // 收到 canplaythrough / readyState>=4（辅助信号，非音频输出已启动）
+  TIMEOUT_DEGRADED:  "TIMEOUT_DEGRADED",  // 超过 MEDIA_ACTIVATION_TIMEOUT 仍未激活，降级放行（防坏轨死锁）
+});
+
 // 最终媒体是否应静音（单一计算点）：用户意图 / autoplay 待解锁 / 媒体暂 inactive 任一为真即静音。
 // 注：本函数供 Step D 收口 _applyMediaState 时使用；Step A 的 restore/onPlaying 直接按 want 解静音。
 function shouldMediaBeMuted(s) {
@@ -1183,6 +1192,7 @@ function createSession(targets) {
     userMuteIntent: previewMuted,               // (B) 用户意图快照
     autoplayUnlockPending: true,                // (A) 静音起播，等 onPlaying 清除
     mediaMuteReasons: new Set(),                // (C) 临时静音来源集合（gap/seek/crossSegment...）
+    activation: new Map(),                      // (B.5) key=t.key → ActivationRecord{state,timer,cleanups}
     userPaused: false,
     lastPlayhead: Store.state.playheadUs,
     // Step B：恢复纪律字段（防第二套播放逻辑 + 长时运行配额）
@@ -1288,27 +1298,110 @@ const PlayerManager = {
     console.log("[PlaySession]", session.id, session.state, session.targets.length, session.autoplayUnlockPending, "token=" + session.recoverToken, "reason=continueStart");
   },
   // 钉子3：唯一 el.play() 入口，纯媒体动作，不碰 state / 不写 restore / 不分类错误。
-  // 静音起播 + 绑 playing 监听（→ _onMediaPlaying seam）+ 120ms 兜底（B 红线保留，B.5 才替换）+ 分类错误（→ _onStartError）。
+  // B.5：移除 120ms 裸兜底，改为「playing → canplaythrough/readyState → timeout」三层激活信号（Activation Tracker）。
   _attemptPlay(session, t) {
-    const { el, rec, type, ti } = t;
-    if (!el || !el.paused) return;        // 已在播则跳过（静音状态由 seekActiveMediaToPlayhead 维护）
-    el.muted = true;                       // (A) 静音起播，等真实 playing 事件再解
-    el.addEventListener("playing", () => this._onMediaPlaying(session, t), { once: true });
-    setTimeout(() => this._onMediaPlaying(session, t), 120);   // 兜底：playing 事件迟迟不来（B 红线：保留）
+    const { el } = t;
+    if (!el) return;
+    this._initActivation(session, t);          // 确保 record 存在（并清理该 key 的旧监听/timer）
+    if (!el.paused) {
+      // 已在播（如 continueStart 时未停的 target）：直接确认，避免 _checkAllActivated 卡在 WAITING
+      this._setActivation(session, t, MEDIA_ACTIVATION_STATE.PLAYING_CONFIRMED);
+      return;
+    }
+    el.muted = true;                           // (A) 静音起播，等激活门全部确认才解
+    // 1. playing 事件（最高优先级）→ 经 _onMediaPlaying seam 标记确认
+    const onPlaying = () => this._onMediaPlaying(session, t);
+    el.addEventListener("playing", onPlaying, { once: true });
+    // 2. canplaythrough 辅助信号
+    const onReady = () => this._setActivation(session, t, MEDIA_ACTIVATION_STATE.READY_FALLBACK);
+    el.addEventListener("canplaythrough", onReady, { once: true });
+    // 3. timeout 兜底降级（防坏轨/损坏文件死锁整体）
+    const timer = setTimeout(() => this._setActivation(session, t, MEDIA_ACTIVATION_STATE.TIMEOUT_DEGRADED), MEDIA_ACTIVATION_TIMEOUT);
+    const rec = session.activation.get(t.key);
+    rec.timer = timer;
+    rec.cleanups.push(
+      () => el.removeEventListener("playing", onPlaying),
+      () => el.removeEventListener("canplaythrough", onReady),
+      () => clearTimeout(timer)
+    );
+    // 预检：已 readyState>=4（如已缓冲轨）直接给 READY_FALLBACK；后续 playing 仍可升级为 PLAYING_CONFIRMED
+    if (el.readyState >= 4) {
+      this._setActivation(session, t, MEDIA_ACTIVATION_STATE.READY_FALLBACK);
+    }
     const p = el.play();
     if (p && p.catch) p.catch(err => this._onStartError(session, t, err));
   },
-  // 钉子4 seam：B 阶段等同原 onPlaying 解锁逻辑；B.5 将升级为"等全部 target 激活才解 mute"，此处不动调用方。
+  // 钉子4 seam（B.5 升级）：不再立即解 mute，改为标记该 target 已激活，交给 _checkAllActivated 聚合判断。
   _onMediaPlaying(session, t) {
+    this._setActivation(session, t, MEDIA_ACTIVATION_STATE.PLAYING_CONFIRMED);
+  },
+  // ---- B.5 Activation Tracker：媒体激活门 ----
+  // 为每个 target 建立激活记录（清理旧 key 的监听/timer，防跨 start/continueStart 泄露）
+  _initActivation(session, t) {
+    const old = session.activation.get(t.key);
+    if (old) {
+      if (old.cleanups) old.cleanups.forEach(fn => { try { fn(); } catch (e) {} });
+      if (old.timer) clearTimeout(old.timer);
+    }
+    session.activation.set(t.key, { state: MEDIA_ACTIVATION_STATE.WAITING, timer: null, cleanups: [] });
+  },
+  // 核心状态 setter：按优先级幂等更新；确认/就绪即清 timer；每次变更触发聚合检查
+  _setActivation(session, t, newState) {
+    const rec = session.activation.get(t.key);
+    if (!rec) return;                                   // 防御性：无 record 不动作
+    const order = { WAITING: 0, TIMEOUT_DEGRADED: 1, READY_FALLBACK: 2, PLAYING_CONFIRMED: 3 };
+    if (order[rec.state] >= order[newState]) return;    // 已是更高/同优先级 → 忽略（不降级）
+    rec.state = newState;
+    if (newState === MEDIA_ACTIVATION_STATE.PLAYING_CONFIRMED ||
+        newState === MEDIA_ACTIVATION_STATE.READY_FALLBACK) {
+      if (rec.timer) { clearTimeout(rec.timer); rec.timer = null; }
+    }
+    if (newState === MEDIA_ACTIVATION_STATE.TIMEOUT_DEGRADED) {
+      console.warn("[PlaySession]", session.id, "ACTIVATION", t.key, "state=TIMEOUT_DEGRADED", "token=" + session.recoverToken);
+    } else {
+      console.log("[PlaySession]", session.id, "ACTIVATION", t.key, "state=" + newState, "token=" + session.recoverToken);
+    }
+    this._checkAllActivated(session);
+  },
+  // 辅助信号：canplaythrough / readyState>=4（中可信度，可被 playing 升级）
+  _onMediaReady(session, t) {
+    this._setActivation(session, t, MEDIA_ACTIVATION_STATE.READY_FALLBACK);
+  },
+  // 兜底信号：超时降级（保证不永久等待，坏轨不拖死整体）
+  _onActivationTimeout(session, t) {
+    this._setActivation(session, t, MEDIA_ACTIVATION_STATE.TIMEOUT_DEGRADED);
+  },
+  // 聚合判断：当且仅当所有 target 均已脱离 WAITING，才整批解 mute
+  _checkAllActivated(session) {
     if (!session.isCurrent()) return;
-    if (!session.autoplayUnlockPending) return;          // 幂等：已解锁则跳过
+    if (!session.autoplayUnlockPending) return;          // 已 restore，幂等
     if (session.state === PLAY_SESSION_STATE.PAUSED ||
         session.state === PLAY_SESSION_STATE.CANCELLED ||
         session.state === PLAY_SESSION_STATE.ENDED) return;
+    for (const t of session.targets) {
+      const rec = session.activation.get(t.key);
+      if (!rec || rec.state === MEDIA_ACTIVATION_STATE.WAITING) return;
+    }
+    this._restoreSession(session);
+  },
+  // 整批解 mute（替代 B 阶段逐 target 解）：所有 target 激活后才统一放开声音
+  _restoreSession(session) {
+    if (!session.isCurrent() || !session.autoplayUnlockPending) return;
     session.autoplayUnlockPending = false;
     session.state = PLAY_SESSION_STATE.PLAYING;
-    t.el.muted = !(t.want && !previewMuted);             // want=true 且用户没静音才解
-    console.log("[PlaySession]", session.id, session.state, session.targets.length, session.autoplayUnlockPending, "token=" + session.recoverToken);
+    for (const t of session.targets) {
+      t.el.muted = !(t.want && !previewMuted);           // want=true 且用户没静音才解
+    }
+    this._cleanupAllActivation(session);                 // 解 mute 后清理监听/timer，防泄露
+    console.log("[PlaySession]", session.id, session.state, session.targets.length, session.autoplayUnlockPending, "token=" + session.recoverToken, "reason=activationGate");
+  },
+  // 清理全部 target 的激活监听与 timer（restore/pause 时调用）
+  _cleanupAllActivation(session) {
+    if (!session.activation) return;
+    for (const rec of session.activation.values()) {
+      if (rec.cleanups) rec.cleanups.forEach(fn => { try { fn(); } catch (e) {} });
+      if (rec.timer) { clearTimeout(rec.timer); rec.timer = null; }
+    }
   },
   // Step B：play() promise 错误分类入口（集中收口，消灭 start 内散落 catch 第二套逻辑）。
   _onStartError(session, t, err) {
@@ -1351,6 +1444,7 @@ const PlayerManager = {
     if (currentSession && currentSession.isCurrent()) {   // Step A 验证：记录暂停态（pause 属 PlayerManager，可改 session 状态）
       currentSession.userPaused = true;
       currentSession.state = PLAY_SESSION_STATE.PAUSED;
+      this._cleanupAllActivation(currentSession);          // B.5：清理激活监听/timer，防暂停后旧回调误触发
       console.log("[PlaySession]", currentSession.id, currentSession.state, currentSession.targets.length, currentSession.autoplayUnlockPending, "token=" + currentSession.recoverToken, "reason=pause");
     }
     $("playBtn").textContent = "▶";
