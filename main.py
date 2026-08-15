@@ -493,14 +493,19 @@ class CommandManager:
         self.redo_stack.clear()
 
     def execute(self, api, cmd_id, args=None, meta=None):
-        """写操作统一入口（5b 起）。构造 Command → 执行现有方法 → 成功入栈 + 审计。"""
+        """写操作统一入口（5b 起）。构造 Command → 执行现有方法 → 成功入栈 + 审计。
+        双录防护：被调方法内部会调 save_state（5a 兜底自动压 snapshot），
+        此处执行后把多余的 snapshot 弹掉，由带语义的 cmd 统一代表本次操作。"""
         fn = getattr(api, cmd_id, None)
         if not callable(fn):
             return {"ok": False, "error": "未知命令 %s" % cmd_id}
         cmd = Command(cmd_id, cmd_id, meta)
         cmd.saved_state = copy.deepcopy(api.draft)
+        before = len(self.history)
         result = fn(**dict(args or {}))
         if result and result.get("ok"):
+            if len(self.history) > before:
+                self.history.pop()   # 弹掉被调方法内部 save_state 压的 snapshot
             self.history.append(cmd)
             if len(self.history) > self._cap:
                 self.history.pop(0)
@@ -1665,6 +1670,21 @@ class Api:
         历史 15 个调用点保留此空调用无害。
         """
         return
+
+    def execute(self, cmd_id, args=None, meta=None):
+        """Step 5b：写操作统一入口（UI / MCP / Agent 都走这里，自动审计）。
+        meta 示例：{"actor": "agent", "reason": "去掉口误", "confidence": 0.9, "source": "skill:口播精剪"}
+        返回与直接调用该方法一致。"""
+        if Api.cmd_mgr is None:
+            return {"ok": False, "error": "命令系统未就绪"}
+        self._reload()
+        return Api.cmd_mgr.execute(self, cmd_id, args, meta)
+
+    def audit_log(self, limit=100, actor=None):
+        """Step 5b：审计查询——谁做过什么（Agent 可审计）。"""
+        if Api.cmd_mgr is None:
+            return {"ok": False, "error": "命令系统未就绪"}
+        return Api.cmd_mgr.audit_log(limit=limit, actor=actor)
 
     def undo(self):
         """撤销上一步：Command 栈弹栈还原（人与 AI 的编辑都记录在同一份历史里）。"""

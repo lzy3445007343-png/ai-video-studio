@@ -204,6 +204,31 @@ def redo() -> str:
     return json.dumps(r, ensure_ascii=False, indent=2)
 
 
+@mcp.tool()
+def execute(cmd_id: str, args: str = "{}", meta: str = "{}") -> str:
+    """Step 5b：统一命令入口——以 Command 语义执行任意写操作并自动审计（可回退、可审计）。
+    cmd_id：操作名（split_segment / trim_segment / move_segment / remove_segment /
+            duplicate_segment / add_to_timeline / set_segment_speed / toggle_track_mute 等，与对应方法同名）。
+    args：参数 JSON 字符串（与对应方法同名参数，见各工具签名）。
+    meta：审计元信息 JSON——推荐带 actor（谁做的："agent"/"user"）、reason（为什么，如"去掉口误"）、
+          confidence（0~1 可信度）、source（来源，如"skill:口播精剪"）。Agent 调用务必填写，可审计可追责。
+    示例：execute("split_segment", '{"track_type":"video","track_index":0,"index":0,"at_time_us":5000000}',
+                   '{"actor":"agent","reason":"去掉口误","confidence":0.9,"source":"skill:口播精剪"}')
+    返回与该操作直接调用一致的 JSON。"""
+    api = main.Api()
+    r = api.execute(cmd_id, json.loads(args or "{}"), json.loads(meta or "{}"))
+    return json.dumps(r, ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
+def audit_log(limit: int = 100, actor: str = None) -> str:
+    """Step 5b：审计查询——最近的操作历史（谁做了什么）。actor 可选过滤（如 "agent"/"user"）。
+    返回 [{cmd_id, label, meta}]，meta 含 actor/reason/confidence/source。"""
+    api = main.Api()
+    r = api.audit_log(limit=limit, actor=actor)
+    return json.dumps(r, ensure_ascii=False, indent=2)
+
+
 # ---------------------------------------------------------------------------
 # 细粒度读取工具（让 agent "理解" 草稿，而非吞下全量 JSON 黑盒）
 # 对应 8-12「跳切读取铁律」：绝不直接把整份草稿丢给 agent，必须按需抽小数据。
