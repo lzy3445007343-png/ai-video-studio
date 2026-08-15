@@ -1269,7 +1269,7 @@ const PlayerManager = {
   _createElement(mtype, parent, layerKey) {
     const el = document.createElement(mtype === "video" ? "video" : "audio");
     // Round C：seek 中不打标，避免读到脏 currentTime 抢置媒体时钟
-    el.onplaying = () => { if (!el.seeking) mediaClockReady = true; };
+    el.onplaying = () => { if (!el.seeking) mediaClockReady = true; console.log("[mediaEvent]", layerKey, "playing"); };
     // Round F4：媒体元素 error 后尝试 reload 恢复（video/audio 共用同一恢复路径）
     el.addEventListener("error", () => _tryReloadMedia(el, mtype, layerKey), { once: true });
     parent.appendChild(el);
@@ -1368,6 +1368,7 @@ const PlayerManager = {
     const { el } = t;
     if (!el) return;
     this._initActivation(session, t);          // 确保 record 存在（并清理该 key 的旧监听/timer）
+    console.log("[attemptPlay]", t.key, "paused=" + el.paused, "readyState=" + el.readyState, "cur=" + (el.currentTime || 0).toFixed(3), "seekTarget=" + (el._seekTarget == null ? "-" : el._seekTarget.toFixed(3)));
     if (!el.paused) {
       // B.5.5-1：paused=false ≠ playing（WebView2 seek+play+pause+复用元素常见：paused=false 但 decoder 停摆）。
       // 若元素 seek 未落位（_seekTarget 与 currentTime 偏差>50ms），说明跨段/重播复用、未真正进入播放 pipeline，
@@ -1422,11 +1423,12 @@ const PlayerManager = {
       return;
     }
     setMediaMute(el, true, "play-mute", t.key);   // (A) 静音起播，等激活门全部确认才解
+    console.log("[playReq]", t.key, "muted=" + el.muted, "cur=" + (el.currentTime || 0).toFixed(3), "readyState=" + el.readyState);
     // 1. playing 事件（最高优先级）→ 经 _onMediaPlaying seam 标记确认
-    const onPlaying = () => this._onMediaPlaying(session, t);
+    const onPlaying = () => { console.log("[mediaEvent]", t.key, "playing"); this._onMediaPlaying(session, t); };
     el.addEventListener("playing", onPlaying, { once: true });
     // 2. canplaythrough / canplay / loadeddata 辅助信号（WebView2 下 <audio> 可能不 fire playing，多绑几个兜底）
-    const onReady = () => this._setActivation(session, t, MEDIA_ACTIVATION_STATE.READY_FALLBACK);
+    const onReady = () => { console.log("[mediaEvent]", t.key, "ready-fallback"); this._setActivation(session, t, MEDIA_ACTIVATION_STATE.READY_FALLBACK); };
     el.addEventListener("canplaythrough", onReady, { once: true });
     el.addEventListener("canplay", onReady, { once: true });
     el.addEventListener("loadeddata", onReady, { once: true });
@@ -1448,7 +1450,8 @@ const PlayerManager = {
       this._setActivation(session, t, MEDIA_ACTIVATION_STATE.READY_FALLBACK);
     }
     const p = el.play();
-    if (p && p.catch) p.catch(err => this._onStartError(session, t, err));
+    if (p && p.then) p.then(() => console.log("[playRes]", t.key, "resolved"));
+    if (p && p.catch) p.catch(err => { console.log("[playRej]", t.key, err && err.name, err && err.message); this._onStartError(session, t, err); });
   },
   // 钉子4 seam（B.5 升级）：不再立即解 mute，改为标记该 target 已激活，交给 _checkAllActivated 聚合判断。
   _onMediaPlaying(session, t) {
@@ -1660,6 +1663,7 @@ const PlayerManager = {
     const localUs = Math.max(0, us - seg.start);
     // B2-A：上界必须是源绝对结束 srcEndUs（而非段时长）。旧写法对 src_start>0 的右段会反复从切点重播。
     const t = Math.max(srcStartUs / 1e6, Math.min(srcEndUs / 1e6, (srcStartUs + localUs) / 1e6));
+    console.log("[seek]", el.tagName || "?", "to=" + t.toFixed(3), "cur=" + (el.currentTime || 0).toFixed(3), "ready=" + el.readyState);
     try {
       if (Math.abs((el.currentTime || 0) - t) > 0.05) el.currentTime = t;
     } catch (e) {}
