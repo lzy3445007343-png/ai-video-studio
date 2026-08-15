@@ -10,6 +10,7 @@
 - `player-session-stepB5-activationGate.md`：Step B.5 Media Activation Gate 设计（v1.0）。
 - `player-session-stepB5-mediaActivation-contract.md`：B.5 Media Activation Contract v1.1（逐元素持久激活契约，HANDOFF/RESUME 事务枚举，已落码）。
 - `player-session-stepB5_4-lifecycleOwnership.md`：**B.5.4 Media Lifecycle Ownership 收口**（muted 单一写者 setMediaMute + 手势预热 primeMediaPlayback + resume 复用 PAUSED session + MEDIA_TARGET_STATE 日志化；已落码待真机验收）。
+- `player-session-stepB5_5-heartbeatGate.md`：**B.5.5 Media Heartbeat Gate（待签设计稿）**——GPT 评审方案落地：`paused=false≠playing`，_attemptPlay 早返守卫加 seek 落位检查 + startPlay 墙钟延后到媒体确认后启动 + handoff 后 heartbeat 确认；三改均在播放路径内。
 - `implementation-manual-stepB-D.md`：实施手册（**自包含，给 GPT 参谋审阅**）——Step B 行号级改动清单 + B.5 草案（Media Activation Gate，待审）+ C/D 方向；含给 GPT 的待审问题汇总。
 - `operation-schema-sketch.md`：Operation Schema v1 草图（**概念模型，不锁字段**，ADR-001 §9 要求）。
 
