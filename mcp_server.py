@@ -25,6 +25,17 @@ from mcp.server.fastmcp import FastMCP
 import main
 import studio_read as sr  # 细粒度读取：按需抽小数据，避免把 103KB 草稿甩给 agent（黑盒）
 
+# Step 5b：MCP 写操作统一走 Command 审计（actor=agent，可回退可追责）。
+# Agent 调任何写工具都自动带 meta，无需显式传。
+_MCP_META = {"actor": "agent", "source": "mcp"}
+
+
+def _exec(cmd_id, args):
+    """以 Command 语义执行写操作并自动审计。cmd_id = Api 方法名，args = 关键字参数 dict。"""
+    api = main.Api()
+    r = api.execute(cmd_id, args, _MCP_META)
+    return json.dumps(r, ensure_ascii=False, indent=2)
+
 mcp = FastMCP("ai-video-studio")
 
 
@@ -49,9 +60,7 @@ def import_media_by_paths(paths: list) -> str:
 def add_clip(path: str) -> str:
     """一步到位：把指定路径的素材入库并直接进轨（视频/图片→视频轨，音频→音频轨）。
     用户给一个桌面路径，AI 全自动办完。返回进轨结果 JSON（含轨道/段数/时长）。"""
-    api = main.Api()
-    r = api.add_clip(path)
-    return json.dumps(r, ensure_ascii=False, indent=2)
+    return _exec("add_clip", {"path": path})
 
 
 @mcp.tool()
@@ -60,9 +69,7 @@ def add_to_timeline(name: str, path: str, mtype: str, track_index: int = 0, at_t
     mtype 取值：video/audio/image/text；track_index 是该类型内的轨道序号（0=主视频轨/第一条音频轨）。
     track_index=-1 表示自动新建一条该类型轨道（拖到空白处用）；insert_index 为在两条轨道中间的空隙新建轨的位置（拖到空隙用，优先级高于 track_index=-1）；at_time_us 为落点时间（微秒），省略则接到轨尾。
     同轨重叠会自动避让（推到最近空位）。返回结果 JSON（track_type/track_index/第几段/总段数/时长微秒）。"""
-    api = main.Api()
-    r = api.add_to_timeline(name, path, mtype, track_index=track_index, at_time_us=at_time_us, insert_index=insert_index)
-    return json.dumps(r, ensure_ascii=False, indent=2)
+    return _exec("add_to_timeline", {"name": name, "path": path, "mtype": mtype, "track_index": track_index, "at_time_us": at_time_us, "insert_index": insert_index})
 
 
 @mcp.tool()
@@ -80,9 +87,7 @@ def remove_segment(track_type: str, track_index: int, index: int) -> str:
     """删除指定轨道里的第 index 段，并自动重排该轨道后续片段时间。
     track_type: video / audio / text；track_index: 该类型内轨道序号（0=主视频轨/第一条音频轨）；index: 段序号。
     返回结果 JSON（被删除段信息 + 剩余段数）。"""
-    api = main.Api()
-    r = api.remove_segment(track_type, track_index, index)
-    return json.dumps(r, ensure_ascii=False, indent=2)
+    return _exec("remove_segment", {"track_type": track_type, "track_index": track_index, "index": index})
 
 
 @mcp.tool()
@@ -90,9 +95,7 @@ def move_segment(track_type: str, track_index: int, index: int, new_start_us: in
     """把指定轨道第 index 段移动到新起始时间（微秒，1秒=1000000）。
     track_type: video / audio / text；track_index: 该类型内轨道序号；index: 段序号。
     鼠标拖动片段后调用，AI 也能经此驱动。同一轨道内移动，重叠会自动避让。返回结果 JSON。"""
-    api = main.Api()
-    r = api.move_segment(track_type, track_index, index, new_start_us)
-    return json.dumps(r, ensure_ascii=False, indent=2)
+    return _exec("move_segment", {"track_type": track_type, "track_index": track_index, "index": index, "new_start_us": new_start_us})
 
 
 @mcp.tool()
@@ -100,9 +103,7 @@ def relocate_segment(track_type: str, from_track: int, index: int, to_track: int
     """把一个已有片段从 (track_type, from_track, index) 跨轨移动到目标轨道（拖拽跨轨用）。
     to_track 为同类型已有轨道序号；to_track=-1 表示自动新建一条该类型轨道接住；insert_index 为在两条轨道中间空隙新建轨的位置（拖到空隙用，优先级高于 to_track=-1）。
     at_time_us 为落点时间（微秒），省略则置 0；同轨重叠会自动避让。返回落地真实位置 JSON。"""
-    api = main.Api()
-    r = api.relocate_segment(track_type, from_track, index, to_track, at_time_us=at_time_us, insert_index=insert_index)
-    return json.dumps(r, ensure_ascii=False, indent=2)
+    return _exec("relocate_segment", {"track_type": track_type, "from_track": from_track, "index": index, "to_track": to_track, "at_time_us": at_time_us, "insert_index": insert_index})
 
 
 @mcp.tool()
@@ -110,9 +111,7 @@ def trim_segment(track_type: str, track_index: int, index: int, edge: str, new_e
     """片段双向裁剪。edge='left' 拖左把手裁/拉开头，edge='right' 拖右把手缩/拉尾。
     track_type: video/audio/text；track_index: 该类型内轨道序号；index: 段序号；edge: left/right；new_edge_us: 新边界时间轴位置（微秒）。
     约束：最短 0.2 秒；左把手拉回到 src_start=0；右把手最多拉到素材末尾。返回结果 JSON。"""
-    api = main.Api()
-    r = api.trim_segment(track_type, track_index, index, edge, new_edge_us)
-    return json.dumps(r, ensure_ascii=False, indent=2)
+    return _exec("trim_segment", {"track_type": track_type, "track_index": track_index, "index": index, "edge": edge, "new_edge_us": new_edge_us})
 
 
 @mcp.tool()
@@ -120,57 +119,43 @@ def split_segment(track_type: str, track_index: int, index: int, at_time_us: int
     """在指定位置把一段素材切成两段（对应前端 Ctrl+B / 工具栏「分割」）。
     track_type: video/audio/text；track_index: 该类型内轨道序号；index: 段序号；at_time_us: 切割点时间轴位置（微秒）。
     约束：切点距片段两端均须 >0.2 秒。返回结果 JSON（含 left/right 两段新参数）。"""
-    api = main.Api()
-    r = api.split_segment(track_type, track_index, index, at_time_us)
-    return json.dumps(r, ensure_ascii=False, indent=2)
+    return _exec("split_segment", {"track_type": track_type, "track_index": track_index, "index": index, "at_time_us": at_time_us})
 
 
 @mcp.tool()
 def add_video_track(insert_index: int = None) -> str:
     """新增一条视频覆盖轨（位于主视频轨之上）。insert_index 指定插入位置（省略则追加到最上）。返回新轨道索引。"""
-    api = main.Api()
-    r = api.add_video_track(insert_index=insert_index)
-    return json.dumps(r, ensure_ascii=False, indent=2)
+    return _exec("add_video_track", {"insert_index": insert_index})
 
 
 @mcp.tool()
 def delete_video_track(track_index: int) -> str:
     """删除一条视频覆盖轨。主视频轨（track_index=0）不可删除。"""
-    api = main.Api()
-    r = api.delete_video_track(track_index)
-    return json.dumps(r, ensure_ascii=False, indent=2)
+    return _exec("delete_video_track", {"track_index": track_index})
 
 
 @mcp.tool()
 def add_audio_track(insert_index: int = None) -> str:
     """新增一条音频轨。insert_index 指定插入位置（省略则追加到最下）。返回新轨道索引。"""
-    api = main.Api()
-    r = api.add_audio_track(insert_index=insert_index)
-    return json.dumps(r, ensure_ascii=False, indent=2)
+    return _exec("add_audio_track", {"insert_index": insert_index})
 
 
 @mcp.tool()
 def delete_audio_track(track_index: int) -> str:
     """删除一条音频轨。"""
-    api = main.Api()
-    r = api.delete_audio_track(track_index)
-    return json.dumps(r, ensure_ascii=False, indent=2)
+    return _exec("delete_audio_track", {"track_index": track_index})
 
 
 @mcp.tool()
 def add_text_track(insert_index: int = None) -> str:
     """新增一条文本轨（字幕/贴纸/画中画文字，支持多轨堆叠）。insert_index 指定插入位置（省略则追加到最下）。返回新轨道索引。"""
-    api = main.Api()
-    r = api.add_text_track(insert_index=insert_index)
-    return json.dumps(r, ensure_ascii=False, indent=2)
+    return _exec("add_text_track", {"insert_index": insert_index})
 
 
 @mcp.tool()
 def delete_text_track(track_index: int) -> str:
     """删除一条文本轨（字幕轨任意可删，无主锚点）。"""
-    api = main.Api()
-    r = api.delete_text_track(track_index)
-    return json.dumps(r, ensure_ascii=False, indent=2)
+    return _exec("delete_text_track", {"track_index": track_index})
 
 
 @mcp.tool()
@@ -183,9 +168,7 @@ def set_track_meta(track_type: str, track_index: int, field: str, value: bool) -
 
     仅影响前端预览显示，不参与剪映草稿导出，不改变剪辑语义。
     """
-    api = main.Api()
-    r = api.set_track_meta(track_type, track_index, field, value)
-    return json.dumps(r, ensure_ascii=False, indent=2)
+    return _exec("set_track_meta", {"track_type": track_type, "track_index": track_index, "field": field, "value": value})
 
 
 @mcp.tool()
