@@ -1712,10 +1712,10 @@ const PlayerManager = {
     el._seekTarget = t;
   },
 
-  // B.5.5-2（用户拍板）：内部 seek barrier（drift 同步专用）。
-  // drift 不再暴力 el.currentTime=t —— WebView2 audio 在 playing 状态下被高频 seek 会进入
-  // "decoder seek 无效/未提交"状态，drift 自激振荡（cur 恒 0 + playing 每帧 fire）。
-  // 改为元素级 pause → seek → wait seeked → resume。只动媒体元素，绝不碰 PlaySession/playhead。
+  // B.5.5-hotfix（GPT 拍板 2026-08-15）：seekBarrier = 事务 seek（元素级 pause→seek→wait→resume）。
+  // 仅允许在事务路径调用（startPlay 起播前 / handoff 跨段 / 用户拖动），**drift 禁用**——
+  // drift 是连续控制，每帧调用会让 pause() 同步副作用把播放重启成"咚咚咚"。
+  // drift 只用 PlayerManager.seek（纯软 seek，只设 currentTime）。
   // 防并发：_seekPending 期间 drift 跳过（见 correctActiveMediaDrift）。
   async seekBarrier(el, seg, us) {
     if (!el || !seg) return;
@@ -2203,7 +2203,14 @@ function playAllMedia(reason) { return PlayerManager.play(reason || _PLAY_REASON
 // Round E②：drift 检测辅助（替代原 _dominantMediaUs 的“媒体当 master”角色）。
 // 播放头是 master（墙钟）。这里只做被动收口：媒体若因缓冲/解码滞后偏离播放头 >100ms，
 // 才把它 seek 回正确时间轴位置；绝不反写 playheadUs，避免“谁在播谁是老大”导致的跳/双播/回弹。
+// B.5.5-hotfix（GPT 拍板 2026-08-15）：drift 是"连续控制"，只允许纯软 seek（PlayerManager.seek，只设 currentTime，
+// 不 pause/play/await）；带 pause/play 的 seekBarrier 属"事务操作"（startPlay/handoff/resume），drift 禁用。
+// 之前误把 seekBarrier 接入 drift → pause() 是同步副作用，每帧被调 → 播放被重启成"咚咚咚"。
+let _lastDriftAt = 0;
 function correctActiveMediaDrift(us) {
+  const now = performance.now();
+  if (now - _lastDriftAt < 200) return;   // hotfix：drift throttle 200ms（防高频设 currentTime 干扰解码器）
+  _lastDriftAt = now;
   if (crossSegmentPending) return;   // Step5：跨段期间由 _handleCrossSegment 独占媒体 seek，禁止每帧 drift 与跨段 seek 双系统互殴（修 Bug A）
   const hits = resolveHits(us);
   const consider = (rec, type) => {
@@ -2221,14 +2228,14 @@ function correctActiveMediaDrift(us) {
     // Round E-F2：核心修正。当 currentTime 明显落在当前段源区间之前（ct < ss - 100ms），
     // 说明跨段 seek 没有真正落位（WebView2 下 audio 常见：seeked 事件触发后 play() 又把 currentTime 冲回 0）。
     // 这种情况不能当成“映射过期”跳过，必须强制 seek 到正确位置，否则用户会一直听到素材头。
-    // B.5.5-2：不再暴力 seek，改内部 seek barrier（pause→seek→wait→resume）。
+    // B.5.5-hotfix：drift 用纯软 seek（PlayerManager.seek），禁止 seekBarrier（pause/play 会重启播放）。
     if (ct < ssSec - 0.1 || ct > endSec + 0.1) {
-      PlayerManager.seekBarrier(el, s, us).catch(() => {});
+      PlayerManager.seek(el, s, us);
       return;
     }
     const mapped = s.start + (ct * 1e6 - srcStartUs);  // 媒体当前位置映射回时间轴
     if (mapped < s.start || mapped > s.start + s.duration) return;  // 映射过期（跨段未刷新）→ 跳过，交给 _handleCrossSegment
-    if (Math.abs(mapped - us) > 100000) PlayerManager.seekBarrier(el, s, us).catch(() => {});      // 仅 >100ms 大漂移才纠正；绝不反写播放头
+    if (Math.abs(mapped - us) > 100000) PlayerManager.seek(el, s, us);      // 仅 >100ms 大漂移才纠正；绝不反写播放头
   };
   for (const h of hits) {
     if (h.type === "video") consider(previewState.visualEls.get("video:" + h.ti), "video");
