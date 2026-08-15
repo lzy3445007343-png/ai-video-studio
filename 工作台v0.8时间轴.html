@@ -1181,7 +1181,10 @@ const RECOVER_CAP = 2;            // 单 session 窗口内恢复上限（防无�
 const RECOVER_WINDOW_MS = 60000;  // 恢复配额窗口：超过该时长未恢复则配额自动清零（适配长时运行）
 
 // Step B.5：媒体激活门常量
-const MEDIA_ACTIVATION_TIMEOUT = 1000; // ms，媒体激活等待兜底（冷启动/seek 重定位可能需接近 1000ms；真机调优前勿改小）
+// 实验1（2026-08-15，GPT 拍板验证用）：冷启动 audio 数据加载可能 >1s，
+// 1s 内 play() 在 readyState=0 被调 → pending 无声；5s 对齐 v1.4.1 验证过的 _waitMediaReady 等待时长。
+// 目的：验证"冷启动等待时间是不是唯一变量"。若成功=B.5.5 收敛；若失败=回到 _playWhenReady 找真实断点，不再加补丁。
+const MEDIA_ACTIVATION_TIMEOUT = 5000; // ms，媒体激活等待兜底（实验1：1000→5000）
 const MEDIA_ACTIVATION_STATE = Object.freeze({
   WAITING:           "WAITING",           // 已发起 play，尚未收到任何激活信号
   PLAYING_CONFIRMED: "PLAYING_CONFIRMED", // 收到真实 playing 事件（最高优先级）
@@ -1475,9 +1478,21 @@ const PlayerManager = {
     if (el.readyState >= 4) {
       this._setActivation(session, t, MEDIA_ACTIVATION_STATE.READY_FALLBACK);
     }
+    // 实验2（2026-08-15，GPT 拍板）：play 前后完整状态打点——区分三 case：
+    //   Case A: before readyState=0 + play 不 resolve → 媒体太早 play（timeout 问题）
+    //   Case B: before readyState=4 + resolve + paused=false 但无声 → mute/session/target 问题
+    //   Case C: reject AbortError → src/seek/play 竞争
+    console.log("[playBEFORE]", t.key, "paused=" + el.paused, "readyState=" + el.readyState, "cur=" + (el.currentTime || 0).toFixed(3), "src=" + (el.currentSrc || el.src || "").slice(0, 50));
     const p = el.play();
-    if (p && p.then) p.then(() => console.log("[playRes]", t.key, "resolved"));
-    if (p && p.catch) p.catch(err => { console.log("[playRej]", t.key, err && err.name, err && err.message); this._onStartError(session, t, err); });
+    if (p && p.then) p.then(() => {
+      console.log("[playAFTER]", t.key, "resolve", "paused=" + el.paused, "readyState=" + el.readyState, "cur=" + (el.currentTime || 0).toFixed(3));
+      console.log("[playRes]", t.key, "resolved");
+    });
+    if (p && p.catch) p.catch(err => {
+      console.log("[playAFTER]", t.key, "reject", err && err.name, "paused=" + el.paused, "readyState=" + el.readyState, "cur=" + (el.currentTime || 0).toFixed(3));
+      console.log("[playRej]", t.key, err && err.name, err && err.message);
+      this._onStartError(session, t, err);
+    });
   },
   // 钉子4 seam（B.5 升级）：不再立即解 mute，改为标记该 target 已激活，交给 _checkAllActivated 聚合判断。
   _onMediaPlaying(session, t) {
