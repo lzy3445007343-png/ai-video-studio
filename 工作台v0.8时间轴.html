@@ -52,7 +52,7 @@
   .mcp-dot { width: 8px; height: 8px; border-radius: 50%; background: #888; }
   .mcp-dot.on { background: #4ade80; }
 
-  .assets { width: 250px; flex: none; background: var(--panel); border-right: 1px solid var(--border);
+  .assets { width: var(--assets-w, 250px); flex: none; background: var(--panel); border-right: 1px solid var(--border);
     display: flex; flex-direction: column; overflow: hidden; min-height: 0; }
   .assets .head { display: flex; align-items: center; gap: 8px; padding: 10px; border-bottom: 1px solid var(--border); }
   .assets .head .btn { background: var(--primary-dim); border: 1px solid var(--primary); padding: 5px 10px;
@@ -116,8 +116,11 @@
 
   /* PropertiesPanel（2026-08-15 重构：4 面板统一加宽 280px + 空状态/多选/占位面板样式） */
   .tools-content .kfpanel, .tools-content .maskpanel, .tools-content .subpanel, .tools-content .stickerpanel,
-  .tools-content .empty-panel, .tools-content .multi-panel, .tools-content .placeholder-panel { display:none; border-top:none; width: 280px; flex: none; min-width: 0; background: var(--panel); border-left: 1px solid var(--border); display: flex; flex-direction: column; overflow: hidden; }
-  .tools-content .panel-active { display: flex !important; }
+  .tools-content .empty-panel, .tools-content .multi-panel, .tools-content .placeholder-panel {
+    display: none; border-top: none; width: 100%; flex: none; min-width: 0;
+    background: var(--panel); border-left: 1px solid var(--border); overflow: hidden;
+  }
+  .tools-content .panel-active { display: flex !important; flex-direction: column; }
   .empty-panel { align-items: center; justify-content: center; text-align: center; color: var(--muted); font-size: 12px; padding: 32px 20px; line-height: 1.7; }
   .empty-panel .empty-icon { font-size: 36px; margin-bottom: 12px; opacity: .6; }
   .empty-panel .empty-title { font-size: 13px; font-weight: 500; color: var(--text); margin-bottom: 6px; }
@@ -171,6 +174,13 @@
     display: flex; align-items: center; justify-content: center; }
   .split::after { content: ""; width: 46px; height: 3px; border-radius: 2px; background: var(--border); transition: background .12s; }
   .split:hover::after, .split.dragging::after { background: var(--primary); }
+
+  /* 左右分隔条（2026-08-15：素材区 ↔ 预览、预览 ↔ 参数区，仿 OpenCut resizable） */
+  .hsplit { flex: none; width: 6px; cursor: col-resize; position: relative; z-index: 7;
+    background: var(--panel); border-left: 1px solid var(--border); border-right: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: center; }
+  .hsplit::after { content: ""; width: 3px; height: 46px; border-radius: 2px; background: var(--border); transition: background .12s; }
+  .hsplit:hover::after, .hsplit.dragging::after { background: var(--primary); }
 
   .tl-main { flex: 1; display: flex; overflow: hidden; }
   .tl-labels { width: var(--label-w); flex: none; background: var(--panel-2); border-right: 1px solid var(--border);
@@ -271,6 +281,7 @@
       </div>
     </div>
 
+    <div class="hsplit" id="hsplitL" title="拖动调整素材区宽度"></div>
     <div class="preview">
       <div class="stage" id="stage">
         <div id="previewStack" class="preview-stack">
@@ -287,6 +298,7 @@
       </div>
         </div>
 
+    <div class="hsplit" id="hsplitR" title="拖动调整参数区宽度"></div>
     <div class="tools" id="toolsPanel">
       <div class="tools-rail" id="toolsRail">
         <button class="rail-btn active" data-tab="kf" title="关键帧">🎞</button>
@@ -471,7 +483,7 @@
     .sticker-layer { position:absolute; left:50%; top:50%; transform-origin:center center; pointer-events:none; z-index:520; will-change:transform, opacity; }
     .sticker-layer img { width:100%; height:100%; display:block; }
     /* 右侧工具栏：单栏 + 竖排图标页签（对齐 OpenCut PropertiesPanel） */
-    .tools { width:268px; flex:none; display:flex; flex-direction:row; background:var(--panel); border-left:1px solid var(--border); overflow:hidden; min-height:0; }
+    .tools { width: var(--tools-w, 280px); flex:none; display:flex; flex-direction:row; background:var(--panel); border-left:1px solid var(--border); overflow:hidden; min-height:0; }
     .tools-rail { width:46px; flex:none; display:flex; flex-direction:column; gap:6px; padding:10px 5px; background:#181b21; border-right:1px solid var(--border); }
     .rail-btn { width:36px; height:36px; border-radius:8px; background:transparent; border:1px solid transparent; color:var(--muted); font-size:17px; cursor:pointer; display:flex; align-items:center; justify-content:center; }
     .rail-btn:hover { background:#262932; color:var(--fg); }
@@ -656,6 +668,49 @@ function initSplit() {
     bar.classList.remove("dragging");
     window.removeEventListener("mousemove", onSplitMove);
     window.removeEventListener("mouseup", onSplitEnd);
+  }
+}
+
+// 水平分隔条（2026-08-15）：左侧素材区 ↔ 预览、预览 ↔ 右侧参数区，仿 OpenCut resizable
+const ASSETSW_KEY = "aivs.assetsW";
+const TOOLSW_KEY  = "aivs.toolsW";
+function initHSplit(side) {
+  const isL = side === "L";
+  const KEY  = isL ? ASSETSW_KEY : TOOLSW_KEY;
+  const PROP = isL ? "--assets-w" : "--tools-w";
+  const defaultW = isL ? 250 : 280;
+  const minW = isL ? 180 : 220;
+  const maxW = isL ? 500 : 600;
+  function apply(w) {
+    const ww = Math.max(minW, Math.min(maxW, Math.round(w)));
+    document.documentElement.style.setProperty(PROP, ww + "px");
+    try { localStorage.setItem(KEY, String(ww)); } catch (e) {}
+  }
+  let saved = defaultW;
+  try { saved = parseInt(localStorage.getItem(KEY)) || defaultW; } catch (e) {}
+  apply(saved);
+  const bar = $(isL ? "hsplitL" : "hsplitR");
+  if (!bar) return;
+  let drag = null;
+  bar.addEventListener("mousedown", e => {
+    e.preventDefault(); e.stopPropagation();
+    const cur = getComputedStyle(document.documentElement).getPropertyValue(PROP);
+    drag = { startX: e.clientX, startW: parseInt(cur) || defaultW };
+    bar.classList.add("dragging");
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onEnd);
+  });
+  function onMove(e) {
+    if (!drag) return;
+    // 左分隔条：拖右 → 素材区加宽；右分隔条：拖左 → 参数区加宽（拖右 → 缩）
+    const dx = e.clientX - drag.startX;
+    apply(drag.startW + (isL ? dx : -dx));
+  }
+  function onEnd() {
+    drag = null;
+    bar.classList.remove("dragging");
+    window.removeEventListener("mousemove", onMove);
+    window.removeEventListener("mouseup", onEnd);
   }
 }
 
@@ -2077,10 +2132,10 @@ function boot() {
   // 先拿本地 HTTP 服务器地址，素材才能走 http（WebView2 下 video/audio 不能读 file://）
   call("get_server_url").then(url => {
     if (url) window.MEDIA_BASE = url;
-    try { bindEvents(); initSplit(); refresh(); }
+    try { bindEvents(); initSplit(); initHSplit("L"); initHSplit("R"); refresh(); }
     catch (e) { showFatal("init: " + (e && e.stack || e)); }
   }).catch(() => {
-    try { bindEvents(); initSplit(); refresh(); }
+    try { bindEvents(); initSplit(); initHSplit("L"); initHSplit("R"); refresh(); }
     catch (e) { showFatal("init(fallback): " + (e && e.stack || e)); }
   });
 }
