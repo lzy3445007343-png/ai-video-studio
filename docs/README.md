@@ -7,6 +7,9 @@
 - `roadmap.md`：架构收口路线 briefing（Phase0→Phase3，含验收基线与明确不做项）。
 - `player-session-v2-design.md`：PlaySession 状态层设计（v2.2）。
 - `player-session-stepB-continueStart.md`：Step B 冻结稿（v2.3，continueStart 契约 + 4 钉子）。
+- `player-session-stepB5-activationGate.md`：Step B.5 Media Activation Gate 设计（v1.0）。
+- `player-session-stepB5-mediaActivation-contract.md`：B.5 Media Activation Contract v1.1（逐元素持久激活契约，HANDOFF/RESUME 事务枚举，已落码）。
+- `player-session-stepB5_4-lifecycleOwnership.md`：**B.5.4 Media Lifecycle Ownership 收口**（muted 单一写者 setMediaMute + 手势预热 primeMediaPlayback + resume 复用 PAUSED session + MEDIA_TARGET_STATE 日志化；已落码待真机验收）。
 - `implementation-manual-stepB-D.md`：实施手册（**自包含，给 GPT 参谋审阅**）——Step B 行号级改动清单 + B.5 草案（Media Activation Gate，待审）+ C/D 方向；含给 GPT 的待审问题汇总。
 - `operation-schema-sketch.md`：Operation Schema v1 草图（**概念模型，不锁字段**，ADR-001 §9 要求）。
 

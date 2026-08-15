@@ -1196,7 +1196,25 @@ const _PLAY_REASON = Object.freeze({
   START:   "start",
   RECOVER: "recover",
   HANDOFF: "handoff",
+  RESUME:  "resume",   // B.5.4-3：暂停→恢复（复用 PAUSED session，非跨段 handoff）
 });
+
+// B.5.4-4：MediaTarget 生命周期状态（仅日志显式化，不反向控制行为——防未来回归）。
+const MEDIA_TARGET_STATE = Object.freeze({
+  UNKNOWN:   "UNKNOWN",
+  ACTIVE:    "ACTIVE",     // 本段活跃、参与播放
+  PARKED:    "PARKED",     // 失活、停车静音（inactive-park）
+  ENTERING:  "ENTERING",   // 新进入（reload/新段，需重新激活）
+  LEAVING:   "LEAVING",    // 离开（失活，将停车）
+});
+
+// B.5.4-0：统一 muted 写入口（单一日志来源）。所有播放/渲染生命周期内的 muted 修改必须走这里，
+// 根绝「谁最后碰了 muted」不可追溯。reason 标注来源：inactive-park/play-mute/activation-*/reload-*/render-*/pool-create/release/prime。
+function setMediaMute(el, value, reason, label) {
+  if (!el) return;
+  el.muted = value;
+  console.log("[MUTE]", label || (el.tagName || "?"), "->", value, "reason=" + reason);
+}
 
 // 最终媒体是否应静音（单一计算点）：用户意图 / autoplay 待解锁 / 媒体暂 inactive 任一为真即静音。
 // 注：本函数供 Step D 收口 _applyMediaState 时使用；Step A 的 restore/onPlaying 直接按 want 解静音。
@@ -1278,13 +1296,13 @@ const PlayerManager = {
       const v = rec.el.firstElementChild;
       if (v && v.tagName === "VIDEO") {
         const ti = parseInt((rec.key || "video:0").split(":")[1], 10) || 0;
-        if (!activeKeys.has(rec.key)) { if (!v.paused) { v.pause(); v.muted = true; } continue; }  // E④：非命中轨停车静音
+        if (!activeKeys.has(rec.key)) { if (!v.paused) { v.pause(); setMediaMute(v, true, "inactive-park", rec.key); } continue; }  // E④：非命中轨停车静音
         targets.push({ el: v, rec, type: "video", ti, key: rec.key, want: wantSound("video", ti) });
       }
     }
     for (const [, rec] of previewState.audioEls) {
       const ti = parseInt((rec.key || "audio:0").split(":")[1], 10) || 0;
-      if (!activeKeys.has(rec.key)) { if (!rec.el.paused) { rec.el.pause(); rec.el.muted = true; } continue; }  // E④
+      if (!activeKeys.has(rec.key)) { if (!rec.el.paused) { rec.el.pause(); setMediaMute(rec.el, true, "inactive-park", rec.key); } continue; }  // E④
       targets.push({ el: rec.el, rec, type: "audio", ti, key: rec.key, want: wantSound("audio", ti) });
     }
 
@@ -1333,6 +1351,11 @@ const PlayerManager = {
   // 失活元素已在 ① 选择阶段 pause+muted，这里仅更新 session.targets（activation map 保留既有元素状态）。
   // 纪律：不碰 start / continueStart / _scheduleRecover / _onStartError（B 红线）。
   _handoff(session, targets) {
+    // B.5.4-4：仅打印 target diff（枚举不反向控制行为，防未来回归）
+    const oldKeys = new Set((session.targets || []).map(t => t.key));
+    const newKeys = new Set(targets.map(t => t.key));
+    for (const t of targets) console.log("[target diff]", t.key, oldKeys.has(t.key) ? MEDIA_TARGET_STATE.ACTIVE : MEDIA_TARGET_STATE.ENTERING);
+    for (const k of oldKeys) if (!newKeys.has(k)) console.log("[target diff]", k, MEDIA_TARGET_STATE.LEAVING);
     for (const t of targets) this._attemptPlay(session, t);   // 增量：已在播的走早返不动，paused 的重起播
     session.targets = targets;                                // 更新 target 列表（不重置 activation map 既有状态）
     session.state = PLAY_SESSION_STATE.MUTED_PLAYING;
@@ -1388,7 +1411,7 @@ const PlayerManager = {
       this._setActivation(session, t, MEDIA_ACTIVATION_STATE.PLAYING_CONFIRMED);
       return;
     }
-    el.muted = true;                           // (A) 静音起播，等激活门全部确认才解
+    setMediaMute(el, true, "play-mute", t.key);   // (A) 静音起播，等激活门全部确认才解
     // 1. playing 事件（最高优先级）→ 经 _onMediaPlaying seam 标记确认
     const onPlaying = () => this._onMediaPlaying(session, t);
     el.addEventListener("playing", onPlaying, { once: true });
@@ -1457,7 +1480,7 @@ const PlayerManager = {
                newState === MEDIA_ACTIVATION_STATE.READY_FALLBACK ||
                newState === MEDIA_ACTIVATION_STATE.TIMEOUT_DEGRADED) {
       if (t.el && t.el.muted) {
-        t.el.muted = !(t.want && !previewMuted);
+        setMediaMute(t.el, !(t.want && !previewMuted), "activation-handoff", t.key);
         console.log("[PlaySession]", session.id, "HANDOFF_UNMUTE", t.key, "state=" + newState, "token=" + session.recoverToken);
       }
     }
@@ -1489,7 +1512,7 @@ const PlayerManager = {
     session.autoplayUnlockPending = false;
     session.state = PLAY_SESSION_STATE.PLAYING;
     for (const t of session.targets) {
-      t.el.muted = !(t.want && !previewMuted);           // want=true 且用户没静音才解
+      setMediaMute(t.el, !(t.want && !previewMuted), "activation-restore", t.key);           // want=true 且用户没静音才解
     }
     this._cleanupAllActivation(session);                 // 解 mute 后清理监听/timer，防泄露
     console.log("[PlaySession]", session.id, session.state, session.targets.length, session.autoplayUnlockPending, "token=" + session.recoverToken, "reason=activationGate");
@@ -1555,6 +1578,47 @@ const PlayerManager = {
       rec.el.pause();
     }
   },
+  // B.5.4-3：暂停→恢复（复用 PAUSED session，不 cancel/create，不重跑激活全量）。
+  // 语义：PAUSED→PLAYING，区别于跨段 HANDOFF。绝不改 timeline/播放头所有权。
+  resume(reason = _PLAY_REASON.RESUME) {
+    if (!currentSession || !currentSession.isCurrent() || currentSession.state !== PLAY_SESSION_STATE.PAUSED) return false;
+    unlockAudio();
+    isPlaying = true;
+    playStartWall = performance.now();
+    playStartUs = Store.state.playheadUs;
+    mediaClockReady = false;
+    _mcrWaitAt = 0;
+    $("playBtn").textContent = "⏸";
+    const hits = resolveHits(Store.state.playheadUs);
+    const activeKeys = new Set(hits.map(h => h.key));
+    const targets = [];
+    for (const [, rec] of previewState.visualEls) {
+      if (rec.el.style.display === "none") continue;
+      const v = rec.el.firstElementChild;
+      if (v && v.tagName === "VIDEO") {
+        const ti = parseInt((rec.key || "video:0").split(":")[1], 10) || 0;
+        if (!activeKeys.has(rec.key)) { if (!v.paused) { v.pause(); setMediaMute(v, true, "inactive-park", rec.key); } continue; }
+        targets.push({ el: v, rec, type: "video", ti, key: rec.key, want: wantSound("video", ti) });
+      }
+    }
+    for (const [, rec] of previewState.audioEls) {
+      const ti = parseInt((rec.key || "audio:0").split(":")[1], 10) || 0;
+      if (!activeKeys.has(rec.key)) { if (!rec.el.paused) { rec.el.pause(); setMediaMute(rec.el, true, "inactive-park", rec.key); } continue; }
+      targets.push({ el: rec.el, rec, type: "audio", ti, key: rec.key, want: wantSound("audio", ti) });
+    }
+    if (hits.length > 0 && targets.length === 0) return false;   // 期望有媒体却无（元素可能已释放）→ 降级 startPlay
+    primeMediaPlayback(hits).catch(() => {});          // 手势内预热（WebView2 权限），不阻塞
+    seekActiveMediaToPlayhead(Store.state.playheadUs); // 按当前播放头重定位（inactive-park + active seek，不再写 active muted）
+    currentSession.targets = targets;                  // 复用既有 session，更新 target 列表（不重置 activation map）
+    currentSession.state = PLAY_SESSION_STATE.STARTING;
+    for (const t of targets) this._attemptPlay(currentSession, t);  // 已在播元素走 !el.paused 早返；paused 元素重起播+重新激活
+    currentSession.state = PLAY_SESSION_STATE.MUTED_PLAYING;
+    currentSession.autoplayUnlockPending = false;       // 已处播放上下文，单元素增量解（Handoff Gate）即可
+    this._cleanupAllActivation(currentSession);
+    console.log("[PlaySession]", currentSession.id, "RESUME", targets.length, "token=" + currentSession.recoverToken);
+    playTick();
+    return true;
+  },
   // 原 toggleMute()：全局静音切换（切换语义；真正的 setMute(state) 留 Phase 3）
   setGlobalMute() {
     previewMuted = !previewMuted;
@@ -1563,13 +1627,13 @@ const PlayerManager = {
       if (v && v.tagName === "VIDEO") {
         const layerKey = rec.key || "";
         const trackMuted = layerKey.startsWith("video:") ? isTrackMuted("video", parseInt(layerKey.split(":")[1], 10)) : false;
-        v.muted = previewMuted || trackMuted;
+        setMediaMute(v, previewMuted || trackMuted, "render-preview", layerKey);
       }
     }
     for (const rec of previewState.audioEls.values()) {
       const layerKey = rec.key || "";
       const ti = parseInt(layerKey.split(":")[1], 10) || 0;
-      rec.el.muted = previewMuted || isTrackMuted("audio", ti);
+      setMediaMute(rec.el, previewMuted || isTrackMuted("audio", ti), "render-preview", layerKey);
     }
     updateMuteBtn();
   },
@@ -1622,7 +1686,7 @@ function _setVisualContent(wrap, mtype, path, muted) {
     const v = PlayerManager.create("video", wrap, layerKey);
     v.src = fileURL(path);
     // 轨道静音 或 全局预览静音 → 关闭该视频段的内嵌音频
-    v.muted = !!muted || previewMuted;
+    setMediaMute(v, !!muted || previewMuted, "render-visual", (path || "visual"));
     v.playsInline = true;
   } else if (mtype === "image") {
     const img = document.createElement("img");
@@ -1740,10 +1804,10 @@ function _tryReloadMedia(el, type, layerKey) {
     if (isPlaying && el.paused) {
       const want = wantSound(type, parseInt((layerKey.split(":")[1] || "0"), 10));
       // Round G2：reload 发生在播放中，通常没有用户手势，同样要走静音起播适配 autoplay
-      el.muted = true;
+      setMediaMute(el, true, "reload-mute", layerKey);
       const restore = () => {
         const stillActive = rec && resolveHits(Store.state.playheadUs).some(h => h.key === rec.key);
-        el.muted = !(stillActive && want);
+        setMediaMute(el, !(stillActive && want), "reload-restore", layerKey);
       };
       el.addEventListener("playing", restore, { once: true });
       const p = el.play();
@@ -1828,7 +1892,7 @@ function renderPreview(s) {
     } else {
       const media = rec.el.firstElementChild;
       if (media) {
-        if (media.tagName === "VIDEO") media.muted = isTrackMuted(h.type, h.ti) || previewMuted;
+        // B.5.4-1：re-seek 时不再写 muted（与激活门双写）。活动媒体由激活门/play 生命周期统一负责；renderPreview 顶部(1566/1572)已按轨道/预览静音设好。
         PlayerManager.seek(media, h.seg, us);
         if (isPlaying) media.onseeked = () => { mediaClockReady = true; };
       }
@@ -1934,7 +1998,7 @@ function renderPreview(s) {
     let rec = previewState.audioEls.get(layerKey);
     if (!rec) {
       const a = PlayerManager.create("audio", $("audioPool"), layerKey);
-      a.muted = previewMuted;
+      setMediaMute(a, previewMuted, "pool-create", layerKey);
       rec = { el: a, key: layerKey };
       previewState.audioEls.set(layerKey, rec);
     }
@@ -1962,7 +2026,7 @@ function renderPreview(s) {
   for (const [layerKey, rec] of previewState.audioEls) {
     if (!activeAudioKeys.has(layerKey)) {
       rec.el.pause();
-      rec.el.muted = true; // 避免暂停后残留声音；下次命中时 playAllMedia/PlayerManager.seek 会恢复正确 muted 状态
+      setMediaMute(rec.el, true, "release-mute", layerKey); // 避免暂停后残留声音；下次命中时 playAllMedia/PlayerManager.seek 会恢复正确 muted 状态
     }
   }
 
@@ -1976,7 +2040,30 @@ function renderPreview(s) {
 
 /* ---------- 播放 / 暂停 ---------- */
 function dbg(msg) { const el = $("mediaStatus"); if (el) el.textContent = msg; }
-function togglePlay() { if (isPlaying) pausePlay(); else startPlay(); }
+function togglePlay() {
+  if (isPlaying) { pausePlay(); return; }
+  // B.5.4-3：PAUSED 态复用 session 恢复，避免 cold start 导致音视频状态错乱
+  if (currentSession && currentSession.isCurrent() && currentSession.state === PLAY_SESSION_STATE.PAUSED) {
+    if (PlayerManager.resume()) return;
+  }
+  startPlay();
+}
+// B.5.4-2：手势内媒体权限预热。仅在用户手势上下文调用（startPlay 冷启动 / resume）。
+// 仅 el.play()+立即 pause() 拿 WebView2/autoplay 权限，绝不改 currentTime/session/activation/timeline。
+// 必须 await play() 的 race(100ms) 后再 pause()，避免 WebView2 下 play promise 晚 resolve 产生幽灵状态。
+async function primeMediaPlayback(hits) {
+  for (const h of hits) {
+    if (h.type !== "video" && h.type !== "audio") continue;
+    const rec = h.type === "video" ? previewState.visualEls.get("video:" + h.ti) : previewState.audioEls.get("audio:" + h.ti);
+    const el = rec ? (h.type === "video" ? rec.el.firstElementChild : rec.el) : null;
+    if (!el || el.error) continue;
+    setMediaMute(el, true, "prime", h.key);   // 预热期间静音，避免 100ms 出声
+    try {
+      await Promise.race([el.play(), new Promise(r => setTimeout(r, 100))]);
+    } catch (e) { /* 预热失败不致命，正式播放时再走激活门 */ }
+    el.pause();   // 保留 currentTime，不触发 seek，不改 state
+  }
+}
 async function startPlay() {
   const maxUs = totalDurationUs();
   if (maxUs <= 0) { dbg("无内容可播放（时间轴为空）"); return; }
@@ -1992,10 +2079,11 @@ async function startPlay() {
   $("playBtn").textContent = "⏸";
   lastHitSig = resolveHits(Store.state.playheadUs).map(h => h.key).join("|");
   renderPreview();            // 立即更新元素（新素材可能刚设置 src，还未加载完）
+  const hits = resolveHits(Store.state.playheadUs);
+  primeMediaPlayback(hits).catch(() => {});   // B.5.4-2：手势内媒体权限预热（须在 await 之前、用户手势仍有效时调用）
   // Round G1：必须等命中媒体元素加载到可 seek 状态，否则 seek 会静默失败，音频从头播。
   // Round G3：外层再包 5 秒总超时，避免任何子 promise 漏网导致 startPlay 永久挂起、播放头不动。
   const withTimeout = (p, ms, label) => Promise.race([p, new Promise(r => setTimeout(() => { console.warn("[startPlay] " + label + " 总超时，强制继续"); r(); }, ms))]);
-  const hits = resolveHits(Store.state.playheadUs);
   const readyPromises = hits.map(h => {
     const rec = h.type === "video" ? previewState.visualEls.get("video:" + h.ti) : previewState.audioEls.get("audio:" + h.ti);
     const el = rec ? (h.type === "video" ? rec.el.firstElementChild : rec.el) : null;
@@ -2067,17 +2155,14 @@ function seekActiveMediaToPlayhead(us) {
     const ti = parseInt(layerKey.split(":")[1], 10);
     const isVideo = v.tagName === "VIDEO";                            // visualEls 也可能存图片(<img>)，图片无 pause()/muted
     if (!activeVideoTis.has(ti)) {
-      if (isVideo) { v.pause(); v.muted = true; }                     // 非活动视频：停车静音
-    } else if (isVideo) {
-      v.muted = isTrackMuted("video", ti) || previewMuted;            // 活动视频：恢复正确静音状态
+      if (isVideo) { v.pause(); setMediaMute(v, true, "inactive-park", layerKey); }   // 非活动视频：停车静音（inactive-park 属 seek/render reconcile；激活门只负责 active 解 mute）
     }
   }
   for (const [layerKey, rec] of previewState.audioEls) {
     const a = rec.el;
     if (!a) continue;
     const ti = parseInt(layerKey.split(":")[1], 10);
-    if (!activeAudioTis.has(ti)) { a.pause(); a.muted = true; }       // 非活动音频：停车静音
-    else a.muted = previewMuted || isTrackMuted("audio", ti);         // 活动音频：恢复正确静音状态
+    if (!activeAudioTis.has(ti)) { a.pause(); setMediaMute(a, true, "inactive-park", layerKey); }   // 非活动音频：停车静音（inactive-park 属 seek/render reconcile；激活门只负责 active 解 mute）
   }
   let allReady = true;
   for (const h of hits) {
