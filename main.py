@@ -1649,6 +1649,14 @@ class Api:
             "change_pitch": False,
             "animations": {},
         }
+        # Step 3 Asset 分离：段关联素材 uid（materials 按 path 精确匹配；匹配不到不设，
+        # 保持无 material_id，前端 resolveSegPath 会 fallback seg.path，行为不变）。
+        # 标准链路（导入素材→拖入时间轴）走 materials[].path（assets 副本），可精确命中；
+        # MCP/脚本直接传原始路径时可能 miss，属可接受（旧数据兼容路径）。
+        for _m in self.state.get("materials", []) or []:
+            if isinstance(_m, dict) and _m.get("path") == path and _m.get("uid"):
+                seg["material_id"] = _m["uid"]
+                break
         # 视频段记录是否含音轨（提取原声按钮可用性；ffprobe 探测，仅视频类型）
         if mtype == "video":
             seg["has_audio"] = _has_audio_stream(path)
@@ -3759,7 +3767,8 @@ def main():
         js_api=api,          # 把 Python 能力（Api）暴露给前端调用
     )
     # start：进入窗口事件循环（窗口会一直显示，直到用户关闭）
-    webview.start()
+    # [诊断] debug=True 临时开启 F12 开发者工具（排查 MP3 无声用，测完改回 webview.start()）
+    webview.start(debug=True)
 
 
 if __name__ == "__main__":

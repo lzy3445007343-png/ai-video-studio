@@ -71,7 +71,7 @@ function renderPreview(s) {
 
   // 视觉层：按轨道层级排列，上层（高 ti）在上；跳过本地无素材的占位段（避免空 src 报错并挡住下层视频）
   // 隐藏的 video/text 轨在预览中不渲染（对齐 OpenCut element-bounds.ts 过滤逻辑）
-  const visualHits = hits.filter(h => h.type === "video" && h.seg.path && !isTrackHidden(h.type, h.ti));
+  const visualHits = hits.filter(h => h.type === "video" && resolveSegPath(h.seg) && !isTrackHidden(h.type, h.ti));
   const textHits = hits.filter(h => h.type === "text" && !isTrackHidden(h.type, h.ti));
   const activeVisualKeys = new Set();
 
@@ -86,7 +86,7 @@ function renderPreview(s) {
       rec = { el: wrap, key: layerKey };
       previewState.visualEls.set(layerKey, rec);
     }
-    const changed = _setVisualContent(rec.el, h.seg.type, h.seg.path, isTrackMuted(h.type, h.ti));
+    const changed = _setVisualContent(rec.el, h.seg.type, resolveSegPath(h.seg), isTrackMuted(h.type, h.ti));
     rec.el.style.display = "";
     rec.el.style.zIndex = 10 + h.ti;
     rec.key = h.key;
@@ -166,7 +166,7 @@ function renderPreview(s) {
   }
 
   // 贴纸层：每条贴纸轨一个 <img> 叠加（高于视频、低于文本），按 transform 定位/缩放/旋转/透明/翻转
-  const stickerHits = hits.filter(h => h.type === "sticker" && h.seg.path && !isTrackHidden(h.type, h.ti));
+  const stickerHits = hits.filter(h => h.type === "sticker" && resolveSegPath(h.seg) && !isTrackHidden(h.type, h.ti));
   const activeStickerKeys = new Set();
   const stackH = ($("previewStack").clientHeight || 540);
   for (const h of stickerHits) {
@@ -199,9 +199,9 @@ function renderPreview(s) {
       "translate(" + ((tf.x || 0) * 50) + "%," + ((tf.y || 0) * 50) + "%) " +
       "rotate(" + (tf.rotation || 0) + "deg) " +
       "scale(" + (tf.flipH ? -1 : 1) + "," + (tf.flipV ? -1 : 1) + ")";
-    if (rec.img.dataset.src !== fileURL(h.seg.path)) {
-      rec.img.src = fileURL(h.seg.path);
-      rec.img.dataset.src = fileURL(h.seg.path);
+    if (rec.img.dataset.src !== fileURL(resolveSegPath(h.seg))) {
+      rec.img.src = fileURL(resolveSegPath(h.seg));
+      rec.img.dataset.src = fileURL(resolveSegPath(h.seg));
     }
   }
   for (const [layerKey, rec] of previewState.stickerEls) {
@@ -211,7 +211,7 @@ function renderPreview(s) {
   // 音频层：命中就维护 audio 元素；播放/暂停在 startPlay/pausePlay/playTick 外统一控制
   // 同样跳过无本地 path 的占位段，避免空 src 错误
   // 静音的 audio 轨在预览中不发声（OpenCut AudioManager.scheduleUpcomingClips 里 clip.muted 则 continue）
-  const audioHits = hits.filter(h => h.type === "audio" && h.seg.path && !isTrackMuted(h.type, h.ti));
+  const audioHits = hits.filter(h => h.type === "audio" && resolveSegPath(h.seg) && !isTrackMuted(h.type, h.ti));
   const activeAudioKeys = new Set();
   for (const h of audioHits) {
     const layerKey = "audio:" + h.ti;
@@ -223,7 +223,7 @@ function renderPreview(s) {
       rec = { el: a, key: layerKey };
       previewState.audioEls.set(layerKey, rec);
     }
-    const src = fileURL(h.seg.path);
+    const src = fileURL(resolveSegPath(h.seg));
     if (rec.el.src !== src) {
       setMediaSrc(rec.el, src, "render-audio", layerKey);
       rec.el.dataset.pendingSeek = "1";
@@ -402,10 +402,10 @@ function renderMaskPanel() {
 // 字幕来源：优先选中段（视频/音频），否则项目主视频轨/音频轨第一段
 function getAsrSource() {
   const s = selectedSeg();
-  if (s && (s.type === "video" || s.type === "audio") && s.path) return { path: s.path, name: s.name };
+  if (s && (s.type === "video" || s.type === "audio")) { const p = resolveSegPath(s); if (p) return { path: p, name: s.name }; }
   const d = Store.state.draft || {};
-  for (const tr of (d.video || [])) for (const seg of tr) if (seg.path) return { path: seg.path, name: seg.name };
-  for (const tr of (d.audio || [])) for (const seg of tr) if (seg.path) return { path: seg.path, name: seg.name };
+  for (const tr of (d.video || [])) for (const seg of tr) { const p = resolveSegPath(seg); if (p) return { path: p, name: seg.name }; }
+  for (const tr of (d.audio || [])) for (const seg of tr) { const p = resolveSegPath(seg); if (p) return { path: p, name: seg.name }; }
   return null;
 }
 

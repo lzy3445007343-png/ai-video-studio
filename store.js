@@ -78,3 +78,18 @@ function call(method, ...args) {
   if (!a || typeof a[method] !== "function") { console.warn("api 未就绪:", method); return Promise.resolve(null); }
   return Promise.resolve(a[method](...args));
 }
+
+// Step 3 Asset 分离：segment → 源文件路径的唯一解析入口。
+// 优先 material_id → materials[].uid 查 path（新数据）；查不到 fallback seg.path（旧存档/剪映导入段）。
+// 渲染层禁止再直接读 seg.path，统一走这里（为未来 segment 去 path 化铺路）。
+function resolveSegPath(seg) {
+  if (!seg) return null;
+  if (seg.material_id) {
+    const ms = Store.state.materials;
+    if (ms && ms.length) {
+      const m = ms.find(x => x && x.uid === seg.material_id);
+      if (m && m.path) return m.path;
+    }
+  }
+  return seg.path || null;
+}
