@@ -21,6 +21,10 @@
 ## decisions/（重大决策，以 `ADR-XXX` 命名）
 - `ADR-001-ai-video-os-route.md`：**项目定位与路线决策**——从剪辑软件到 AI 可调用视频操作系统；播放器争论终结；两层 Schema（Operation↔Timeline）；护城河=Video DSL；路线冻结 B-D→Operation→Timeline→Command→MCP→Skill→Agent。
 
+## handoff/（GPT 交接文档，一波次一份）
+- `GPT音频问题交接文档.md`：v1.3 交接（已发 GPT 一轮，因额度紧未续）。
+- `GPT播放问题v2交接文档.md`：**v2 全面交接**（v1.4.1 现状，截止 2026-08-15 17:10）——迭代时间线 + 每次根因 + 三个残留问题（split 第二段/从头重播/MP4 卡住）+ 源码锚点 + 给 GPT 的 5 个收敛问题 + 验收清单。**GPT 额度快没，最后一次评审就用这份**。
+
 ## 约定（强制）
 1. 任何根目录新增诊断 / 方案 / 临时分析 → 一律进 `docs/` 对应子目录，**禁止在仓库根目录新建 markdown**。
 2. 已废弃方案必须在该文档顶部标记 `> deprecated` 并注明替代方案；本仓库不保留历史废弃方案（旧方案在本地另行归档，不进 git）。
