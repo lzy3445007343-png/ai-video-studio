@@ -447,6 +447,97 @@ def load_state():
         return empty
 
 
+# =====================================================================
+# Step 5 Command 层：可审计、可回退的操作语义层（参考 OpenCut commands/）
+# ---------------------------------------------------------------------
+# 设计（用户 2026-08-15 拍板方案 X）：
+#   - 撤销栈从「裸快照」升级为「Command 栈」：每个操作一个 Command 对象，
+#     saved_state = 操作前草稿深拷贝（undo 还原，对齐 OpenCut SplitElementsCommand）。
+#   - undo/redo = 快照恢复（还原机制与旧快照栈一致，语义升级）。
+#   - meta = operation_context {actor, reason, confidence, source, reversible}：
+#     Agent 可审计"谁改了什么、为什么改"（护城河）。
+#   - 5a：save_state 自动压"快照 Command"兜底（未包壳操作照常可撤销）；
+#     5b 起写操作走 CommandManager.execute（带 cmd_id/meta 语义）。
+# =====================================================================
+class Command:
+    """一次可审计、可回退的操作。"""
+    __slots__ = ("cmd_id", "label", "meta", "saved_state", "post_state")
+
+    def __init__(self, cmd_id, label, meta=None):
+        self.cmd_id = cmd_id
+        self.label = label
+        self.meta = meta or {}
+        self.saved_state = None   # execute 前草稿深拷贝（undo 还原）
+        self.post_state = None    # undo 时记录 execute 后状态（redo 恢复）
+
+    def __repr__(self):
+        return "<Command %s actor=%s>" % (self.cmd_id, self.meta.get("actor", "-"))
+
+
+class CommandManager:
+    """撤销/重做/审计统一入口。类级共享（桌面窗口与 MCP 进程共用同一份历史）。"""
+
+    def __init__(self, cap=100):
+        self.history = []       # undo 栈：Command 对象
+        self.redo_stack = []    # redo 栈
+        self._cap = cap
+
+    def push_snapshot(self, saved_state):
+        """save_state 自动快照入口（5a 兜底）：草稿变化时压一个无语义快照 Command。
+        5b 包壳后，写操作改走 execute()，此入口仅服务未包壳操作。"""
+        cmd = Command("snapshot", "自动快照")
+        cmd.saved_state = saved_state
+        self.history.append(cmd)
+        if len(self.history) > self._cap:
+            self.history.pop(0)
+        self.redo_stack.clear()
+
+    def execute(self, api, cmd_id, args=None, meta=None):
+        """写操作统一入口（5b 起）。构造 Command → 执行现有方法 → 成功入栈 + 审计。"""
+        fn = getattr(api, cmd_id, None)
+        if not callable(fn):
+            return {"ok": False, "error": "未知命令 %s" % cmd_id}
+        cmd = Command(cmd_id, cmd_id, meta)
+        cmd.saved_state = copy.deepcopy(api.draft)
+        result = fn(**dict(args or {}))
+        if result and result.get("ok"):
+            self.history.append(cmd)
+            if len(self.history) > self._cap:
+                self.history.pop(0)
+            self.redo_stack.clear()
+        return result
+
+    def undo(self, api):
+        """撤销：弹 Command → 恢复其 saved_state（操作前状态）。"""
+        if not self.history:
+            return {"ok": False, "error": "没有可撤销的操作"}
+        cmd = self.history.pop()
+        cmd.post_state = copy.deepcopy(api.draft)   # undo 前 = 该命令执行后状态，redo 用
+        api.draft = copy.deepcopy(cmd.saved_state)
+        api.state["draft"] = api.draft
+        save_state(api.state, record=False)
+        self.redo_stack.append(cmd)
+        return {"ok": True, "remaining": len(self.history)}
+
+    def redo(self, api):
+        """重做：弹 redo 栈 → 恢复其 post_state（该命令执行后状态）。"""
+        if not self.redo_stack:
+            return {"ok": False, "error": "没有可重做的操作"}
+        cmd = self.redo_stack.pop()
+        api.draft = copy.deepcopy(cmd.post_state)
+        api.state["draft"] = api.draft
+        save_state(api.state, record=False)
+        self.history.append(cmd)
+        if len(self.history) > self._cap:
+            self.history.pop(0)
+        return {"ok": True, "remaining": len(self.redo_stack)}
+
+    def audit_log(self, limit=100, actor=None):
+        """审计查询：谁做过什么（Agent 可审计）。"""
+        rows = self.history[-limit:] if not actor else [r for r in self.history if r.meta.get("actor") == actor][-limit:]
+        return [{"cmd_id": r.cmd_id, "label": r.label, "meta": r.meta} for r in rows]
+
+
 def save_state(state, record=True):
     """把状态写回 draft_state.json，并打上版本时间戳（前端靠 version 判断是否变化）。
 
@@ -460,10 +551,9 @@ def save_state(state, record=True):
     加文件锁防竞态：如果 MCP 进程正在写，桌面进程会等待它写完再写，反之亦然。
     无 portalocker 时回退到无锁写（单进程场景够用，多进程有低概率互踩）。"""
     if record and Api.last_committed is not None and state["draft"] != Api.last_committed:
-        Api.undo_stack.append(copy.deepcopy(Api.last_committed))
-        if len(Api.undo_stack) > Api.MAX_HISTORY:
-            Api.undo_stack.pop(0)
-        Api.redo_stack.clear()
+        # Step 5：压「快照 Command」入 Command 栈（5a 兜底；5b 包壳操作改走 CommandManager.execute）
+        if Api.cmd_mgr is not None:
+            Api.cmd_mgr.push_snapshot(copy.deepcopy(Api.last_committed))
     Api.last_committed = copy.deepcopy(state["draft"])
     try:
         state["version"] = int(time.time() * 1000)
@@ -1533,11 +1623,9 @@ def _extract_text_content(mat):
 class Api:
     """暴露给前端（HTML）调用的 Python 能力。一个方法 = 一个原子能力。"""
 
-    # 撤销/重做栈：类级共享（桌面窗口是单例持久，MCP 每次调用新建实例也能共享同一份历史）。
-    # 每次会改草稿的操作前，把当前草稿深拷贝压栈；undo 弹栈还原、redo 弹重做栈还原。
-    undo_stack = []
-    redo_stack = []
-    MAX_HISTORY = 100
+    # Step 5 Command 层：撤销/重做/审计统一入口（类级共享，桌面窗口与 MCP 进程共用同一份历史）。
+    # 每次会改草稿的操作，由 save_state（5a 快照 Command）或 CommandManager.execute（5b 起）入栈。
+    cmd_mgr = None
     # 上次「已提交」的草稿快照；save_state 用它判断本次是否真的发生变化，从而决定是否入撤销栈。
     # 初始化为 None（尚未加载），Api.__init__ 加载后会设为当前草稿的深拷贝。
     last_committed = None
@@ -1548,6 +1636,9 @@ class Api:
         # 人和 AI/MCP 改的都是同一份文件，前端轮询刷新即可互相看到改动。
         self.state = load_state()
         self.draft = self.state["draft"]  # 直接引用 state 里的草稿字典，改它就改 state
+        # 类级 CommandManager 单例：MCP 每次新建 Api 实例也共享同一份撤销历史
+        if Api.cmd_mgr is None:
+            Api.cmd_mgr = CommandManager()
         # 记录「已提交」基线，供 save_state 判断真实变更（undo 快照自动记录机制依赖此）。
         Api.last_committed = copy.deepcopy(self.draft)
 
@@ -1576,26 +1667,18 @@ class Api:
         return
 
     def undo(self):
-        """撤销上一步：弹撤销栈还原草稿（人与 AI 的编辑都记录在同一份历史里）。"""
-        if not Api.undo_stack:
-            return {"ok": False, "error": "没有可撤销的操作"}
+        """撤销上一步：Command 栈弹栈还原（人与 AI 的编辑都记录在同一份历史里）。"""
+        if Api.cmd_mgr is None:
+            return {"ok": False, "error": "撤销系统未就绪"}
         self._reload()
-        Api.redo_stack.append(copy.deepcopy(self.draft))
-        self.draft = Api.undo_stack.pop()
-        self.state["draft"] = self.draft
-        save_state(self.state, record=False)  # 撤销动作本身不入栈
-        return {"ok": True, "remaining": len(Api.undo_stack)}
+        return Api.cmd_mgr.undo(self)
 
     def redo(self):
-        """重做：弹重做栈还原草稿（撤销的反操作）。"""
-        if not Api.redo_stack:
-            return {"ok": False, "error": "没有可重做的操作"}
+        """重做：重做栈弹栈恢复（撤销的反操作）。"""
+        if Api.cmd_mgr is None:
+            return {"ok": False, "error": "重做系统未就绪"}
         self._reload()
-        Api.undo_stack.append(copy.deepcopy(self.draft))
-        self.draft = Api.redo_stack.pop()
-        self.state["draft"] = self.draft
-        save_state(self.state, record=False)  # 重做动作本身不入栈
-        return {"ok": True, "remaining": len(Api.redo_stack)}
+        return Api.cmd_mgr.redo(self)
 
     def add_to_timeline(self, name, path, mtype, track_index=None, at_time_us=None, insert_index=None):
         """把素材登记进草稿对应轨道（双击或拖拽都走这里，真实进轨）。
