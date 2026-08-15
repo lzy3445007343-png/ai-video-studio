@@ -5,6 +5,9 @@
 ## architecture/（设计类：描述“怎么做”）
 - `player-ownership.md`：Player 媒体控制权收口方案（facade-first 迁移，**当前生效方案**）。
 - `roadmap.md`：架构收口路线 briefing（Phase0→Phase3，含验收基线与明确不做项）。
+- `player-session-v2-design.md`：PlaySession 状态层设计（v2.2）。
+- `player-session-stepB-continueStart.md`：Step B 冻结稿（v2.3，continueStart 契约 + 4 钉子）。
+- `operation-schema-sketch.md`：Operation Schema v1 草图（**概念模型，不锁字段**，ADR-001 §9 要求）。
 
 ## audits/（审计 / 核查类：描述“现状是什么”）
 - `opencut-analysis.md`：与 OpenCut 开源项目的架构对照诊断。
@@ -12,7 +15,7 @@
 - `playback-state-analysis.md`：播放状态机只读审计（`isPlaying` + 标志位）。
 
 ## decisions/（重大决策，以 `ADR-XXX` 命名）
-- 暂空。重大架构决策在此以 `ADR-001-xxx.md` 形式记录。
+- `ADR-001-ai-video-os-route.md`：**项目定位与路线决策**——从剪辑软件到 AI 可调用视频操作系统；播放器争论终结；两层 Schema（Operation↔Timeline）；护城河=Video DSL；路线冻结 B-D→Operation→Timeline→Command→MCP→Skill→Agent。
 
 ## 约定（强制）
 1. 任何根目录新增诊断 / 方案 / 临时分析 → 一律进 `docs/` 对应子目录，**禁止在仓库根目录新建 markdown**。

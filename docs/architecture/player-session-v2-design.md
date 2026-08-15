@@ -319,7 +319,7 @@ Step C 调整：reload 恢复改调 `PlayerManager.continueStart(session)`（带
   ```
   **禁止出现** `1 STARTING → 2 STARTING → 1 PLAYING`（旧事务复活）。
 
-### Step B —— 迁移 AbortError 到 `continueStart(session)`（L1201）— 验收：暂停再播有声
+### Step B —— 迁移 AbortError 到 `continueStart(session)`（L1268-1280）→ 详细契约见 [`player-session-stepB-continueStart.md`](./player-session-stepB-continueStart.md) — 验收：暂停再播有声 + AbortError 走 RECOVERING 恢复
 ### Step C —— 迁移 reload 到 `continueStart` + 删复制 restore（L1432/L1427-1435）— 验收：reload 恢复有声
 ### Step D —— 收口 muted 到 `_applyMediaState(media, intent)`（§3.1 散落点）— 验收：多段 gap 不跳/不双播
 
