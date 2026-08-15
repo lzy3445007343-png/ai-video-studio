@@ -1,6 +1,6 @@
-# Step B.5.4 — Media Lifecycle Ownership 收口设计稿（v1.0 冻结）
+# Step B.5.4 — Media Lifecycle Ownership 收口设计稿（v1.1 真机回归修正）
 
-> 状态：**已落码，待真机验收**（提交见仓库 git log，hash 在文末）。
+> 状态：**v1.1 已落码，待真机验收**（提交见仓库 git log，hash 在文末）。
 > 日期：2026-08-15
 > 上游方案：`player-session-stepB5-mediaActivation-contract.md`（B.5 Media Activation Contract v1.1）
 > 关联路线：ADR-001 §路线冻结 `B→B.5→C→D→Operation Schema→Command→Timeline→MCP→Skill→Agent`
@@ -160,3 +160,23 @@ for (const k of oldKeys) if (!newKeys.has(k)) console.log("[target diff]", k, ME
 
 - 本稿是 `player-session-stepB5-mediaActivation-contract.md`（B.5 v1.1）在「播放路径 muted 所有权 + session 复用 + target 可观测」侧的收尾，二者同属 `player-ownership.md` facade-first 收口。
 - 不替代、不推翻 B.5 激活门；B.5.4 是在其之上收口 muted 写者与 session 生命周期。
+
+---
+
+## 9. v1.1 真机回归修正（2026-08-15 17:00）
+
+**真机现象**：①纯 MP3 首播无声 ②MP4 首播卡住、无画面无声音（比 B.5.4 之前更糟，属回归）。
+
+**根因**：B.5.4-2 原实现 `primeMediaPlayback` 对**真实时间轴元素**做 `el.play()` + `el.pause()`，且在 `startPlay` 里**未 `await`**。race 序列：
+1. prime 的 `el.play()` 已发起、还没走到 `el.pause()`；
+2. 主流程已进 `_waitMediaReady → seekActiveMediaToPlayhead → playAllMedia → _attemptPlay`；
+3. `_attemptPlay` 见 `!el.paused`（元素还在 prime 的 play 态）→ 早返当「已在播」，不真正起播；
+4. 随后 prime 的 `el.pause()` 落盘把元素暂停 → session 以为在播、媒体实际被暂停 → 卡死/无声；
+5. `play()` 被 `pause()` 打断还会让 WebView2 对该元素后续 `play()` 进入「被中断」态，再点也起不来。
+
+**修正（v1.1，commit 5f1d79b）**：
+1. `primeMediaPlayback` 改用**临时隐藏 `<audio>`**（`_getSilentPrimeUrl()` 动态生成 0.2s 静音 WAV Blob URL）拿**文档级** autoplay 权限，绝不碰真实时间轴元素。autoplay 权限是文档级持久的——临时元素在手势内 play 成功一次后，后续真实元素 `play()` 不再受手势限制。
+2. `startPlay` 里 `await primeMediaPlayback(hits)`（放在一切 `await` 之前，手势仍有效时完成解锁）。
+3. `resume()` 里 `autoplayUnlockPending` 由 `false` 改回 `true`（恢复也走 Session 门，全体激活后整批解 mute），并去掉提前的 `_cleanupAllActivation`（原来会移除激活监听、致元素卡在 WAITING 永远静音）。
+
+**验证**：`node --check` 语法通过（160505 字符单 script 块）。待真机 6 项验收。
