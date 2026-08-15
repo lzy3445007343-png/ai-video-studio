@@ -1165,6 +1165,10 @@ const PLAY_SESSION_STATE = Object.freeze({
 let currentSessionId = 0;
 let currentSession = null;
 
+// Step B：恢复纪律常量
+const RECOVER_CAP = 2;            // 单 session 窗口内恢复上限（防无限重试）
+const RECOVER_WINDOW_MS = 60000;  // 恢复配额窗口：超过该时长未恢复则配额自动清零（适配长时运行）
+
 // 最终媒体是否应静音（单一计算点）：用户意图 / autoplay 待解锁 / 媒体暂 inactive 任一为真即静音。
 // 注：本函数供 Step D 收口 _applyMediaState 时使用；Step A 的 restore/onPlaying 直接按 want 解静音。
 function shouldMediaBeMuted(s) {
@@ -1181,12 +1185,24 @@ function createSession(targets) {
     mediaMuteReasons: new Set(),                // (C) 临时静音来源集合（gap/seek/crossSegment...）
     userPaused: false,
     lastPlayhead: Store.state.playheadUs,
+    // Step B：恢复纪律字段（防第二套播放逻辑 + 长时运行配额）
+    recoverToken: 0,                            // 恢复调度令牌：每次 _scheduleRecover 自增，旧恢复天然作废
+    recoverCount: 0,                            // 窗口内恢复次数（RECOVER_CAP 封顶）
+    lastRecoverAt: 0,                           // 上次恢复时间戳（用于窗口清零）
     isCurrent() { return this.id === currentSessionId; },
     canRestore() { return !this.userMuteIntent && !this.userPaused && this.autoplayUnlockPending; },
+    // Step B：continueStart 准入（RECOVERING + 当前 + 未逾限）
+    canContinue() {
+      if (this.state !== PLAY_SESSION_STATE.RECOVERING) return false;
+      if (!this.isCurrent()) return false;
+      const now = performance.now();
+      if (this.lastRecoverAt && now - this.lastRecoverAt > RECOVER_WINDOW_MS) this.recoverCount = 0; // 窗口外清零
+      return this.recoverCount < RECOVER_CAP;
+    },
     cancel() { this.state = PLAY_SESSION_STATE.CANCELLED; },
   };
   currentSession = s;
-  console.log("[PlaySession]", s.id, s.state, s.targets.length, s.autoplayUnlockPending);
+  console.log("[PlaySession]", s.id, s.state, s.targets.length, s.autoplayUnlockPending, "token=" + s.recoverToken, "reason=start");
   return s;
 }
 
@@ -1253,38 +1269,37 @@ const PlayerManager = {
     const session = createSession(targets);
     this.start(session);
   },
-  // Step A：静音起播（仅 PlayerManager 动 el）。逐 target 绑定真实 playing 事件 + onPlaying 两阶段解锁。
-  // 关键纪律：play() promise 的 reject（AbortError 等）不再触发解静音；只有真实 playing 事件或兜底超时才解锁。
+  // Step B：start 只负责编排状态机 + 调起播入口，不碰媒体动作细节（钉子3：_attemptPlay 是唯一 el.play 出口）。
+  // 关键纪律：play() promise 的 reject 不再在 start 内散落处理；AbortError 统一经 _scheduleRecover→continueStart 恢复。
   start(session) {
     session.state = PLAY_SESSION_STATE.STARTING;
-    for (const t of session.targets) {
-      const { el, rec, type, ti } = t;
-      if (!el || !el.paused) continue;        // 已在播则跳过（静音状态由 seekActiveMediaToPlayhead 维护）
-      el.muted = true;                         // (A) 静音起播，等真实 playing 事件再解
-      el.addEventListener("playing", () => this.onPlaying(session, t), { once: true });
-      const p = el.play();
-      // 兜底：若 playing 事件迟迟不来（某些浏览器/文件），120ms 后仍尝试一次解锁
-      setTimeout(() => this.onPlaying(session, t), 120);
-      if (p && p.catch) p.catch(err => {
-        const name = (err && err.name) || "Error";
-        if (name === "AbortError") {
-          // seek/play 竞态（跨段边 seek 边 play），非致命：轻量重试一次（Step B 将改 continueStart）
-          setTimeout(() => { if (isPlaying && el.paused) { const r = el.play(); if (r && r.catch) r.catch(() => {}); } }, 60);
-        } else if (name === "NotSupportedError") {
-          console.warn("[play] 媒体不可解码，尝试 reload:", rec.key, err);
-          _tryReloadMedia(el, type, rec.key || (type + ":" + ti));
-        } else {
-          console.warn("[play] 播放错误:", name, rec.key, err);
-          showFatal("⚠ 播放错误(" + (rec.key || type) + ")：" + name + " — 详见控制台");
-        }
-      });
-    }
+    for (const t of session.targets) this._attemptPlay(session, t);  // 唯一起播出口
     session.state = PLAY_SESSION_STATE.MUTED_PLAYING;
-    console.log("[PlaySession]", session.id, session.state, session.targets.length, session.autoplayUnlockPending);
+    console.log("[PlaySession]", session.id, session.state, session.targets.length, session.autoplayUnlockPending, "token=" + session.recoverToken, "reason=start");
   },
-  // Step A：真实 playing 事件 = 媒体真的在播。幂等清 (A) + 按 want 解静音 + 置 PLAYING。
-  // 这是唯一正确解锁点：play() promise resolve 不等于媒体已在播，reject/abort 更不能解锁。
-  onPlaying(session, t) {
+  // Step B 核心：continueStart 复用 start 的启动序列，绝不复制 start 内部逻辑（防第二套 PlayerManager）。
+  // 仅重走 _attemptPlay + 解锁链；只对仍 paused 的 target 重新起播（_attemptPlay 内部跳过已播）。
+  continueStart(session) {
+    if (!session.isCurrent()) return;
+    if (session.state === PLAY_SESSION_STATE.CANCELLED || session.state === PLAY_SESSION_STATE.ENDED) return;
+    session.state = PLAY_SESSION_STATE.STARTING;
+    for (const t of session.targets) this._attemptPlay(session, t);
+    session.state = PLAY_SESSION_STATE.MUTED_PLAYING;
+    console.log("[PlaySession]", session.id, session.state, session.targets.length, session.autoplayUnlockPending, "token=" + session.recoverToken, "reason=continueStart");
+  },
+  // 钉子3：唯一 el.play() 入口，纯媒体动作，不碰 state / 不写 restore / 不分类错误。
+  // 静音起播 + 绑 playing 监听（→ _onMediaPlaying seam）+ 120ms 兜底（B 红线保留，B.5 才替换）+ 分类错误（→ _onStartError）。
+  _attemptPlay(session, t) {
+    const { el, rec, type, ti } = t;
+    if (!el || !el.paused) return;        // 已在播则跳过（静音状态由 seekActiveMediaToPlayhead 维护）
+    el.muted = true;                       // (A) 静音起播，等真实 playing 事件再解
+    el.addEventListener("playing", () => this._onMediaPlaying(session, t), { once: true });
+    setTimeout(() => this._onMediaPlaying(session, t), 120);   // 兜底：playing 事件迟迟不来（B 红线：保留）
+    const p = el.play();
+    if (p && p.catch) p.catch(err => this._onStartError(session, t, err));
+  },
+  // 钉子4 seam：B 阶段等同原 onPlaying 解锁逻辑；B.5 将升级为"等全部 target 激活才解 mute"，此处不动调用方。
+  _onMediaPlaying(session, t) {
     if (!session.isCurrent()) return;
     if (!session.autoplayUnlockPending) return;          // 幂等：已解锁则跳过
     if (session.state === PLAY_SESSION_STATE.PAUSED ||
@@ -1293,7 +1308,41 @@ const PlayerManager = {
     session.autoplayUnlockPending = false;
     session.state = PLAY_SESSION_STATE.PLAYING;
     t.el.muted = !(t.want && !previewMuted);             // want=true 且用户没静音才解
-    console.log("[PlaySession]", session.id, session.state, session.targets.length, session.autoplayUnlockPending);
+    console.log("[PlaySession]", session.id, session.state, session.targets.length, session.autoplayUnlockPending, "token=" + session.recoverToken);
+  },
+  // Step B：play() promise 错误分类入口（集中收口，消灭 start 内散落 catch 第二套逻辑）。
+  _onStartError(session, t, err) {
+    const name = (err && err.name) || "Error";
+    if (name === "AbortError") {
+      // seek/play 竞态（跨段边 seek 边 play），非致命：统一经 _scheduleRecover→continueStart 恢复（不再裸 play）。
+      this._scheduleRecover(session, t);
+    } else if (name === "NotSupportedError") {
+      // B 边界：NotSupportedError 不归 B 处理，原样移交 _tryReloadMedia（Step C 才收口 reload）。
+      console.warn("[play] 媒体不可解码，尝试 reload:", t.rec.key, err);
+      _tryReloadMedia(t.el, t.type, t.rec.key || (t.type + ":" + t.ti));
+    } else {
+      console.warn("[play] 播放错误:", name, t.rec.key, err);
+      showFatal("⚠ 播放错误(" + (t.rec.key || t.type) + ")：" + name + " — 详见控制台");
+    }
+  },
+  // 钉子1：恢复调度。recoverToken 自增防竞态；窗口化配额；超时后回调校验 token + canContinue 才续。
+  _scheduleRecover(session, t) {
+    if (!session.isCurrent() || session.state === PLAY_SESSION_STATE.CANCELLED) return;
+    const now = performance.now();
+    if (session.lastRecoverAt && now - session.lastRecoverAt > RECOVER_WINDOW_MS) session.recoverCount = 0; // 窗口外清零
+    if (session.recoverCount >= RECOVER_CAP) {
+      console.warn("[PlaySession] 恢复配额耗尽，放弃:", session.id, "token=" + session.recoverToken);
+      return;
+    }
+    const token = ++session.recoverToken;   // 每次调度自增，旧 setTimeout 回调见 token 不等即作废
+    session.state = PLAY_SESSION_STATE.RECOVERING;
+    setTimeout(() => {
+      if (token !== session.recoverToken) return;        // 钉子1：旧恢复天然作废（新事务/新调度/暂停后旧回调）
+      if (!session.canContinue()) return;                // RECOVERING + 当前 + 未逾限
+      session.lastRecoverAt = performance.now();
+      session.recoverCount++;
+      this.continueStart(session);                       // 复用启动序列
+    }, 60);
   },
   // 原 pausePlay()：暂停整个播放会话
   pause() {
@@ -1302,7 +1351,7 @@ const PlayerManager = {
     if (currentSession && currentSession.isCurrent()) {   // Step A 验证：记录暂停态（pause 属 PlayerManager，可改 session 状态）
       currentSession.userPaused = true;
       currentSession.state = PLAY_SESSION_STATE.PAUSED;
-      console.log("[PlaySession]", currentSession.id, currentSession.state, currentSession.targets.length, currentSession.autoplayUnlockPending);
+      console.log("[PlaySession]", currentSession.id, currentSession.state, currentSession.targets.length, currentSession.autoplayUnlockPending, "token=" + currentSession.recoverToken, "reason=pause");
     }
     $("playBtn").textContent = "▶";
     for (const rec of previewState.visualEls.values()) {
