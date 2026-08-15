@@ -15,6 +15,16 @@ function forEachSeg(fn) {
     (d[type] || []).forEach((segs, ti) => segs.forEach((s, idx) => fn(s, type, ti, idx)));
   });
 }
+
+// UI 对齐 OpenCut 标尺（2026-08-15）：刻度密度随缩放自适应细分 + 短标签（mm:ss，高缩放才带毫秒）。
+function rulerStep(p) {
+  return p >= 200 ? 1 : p >= 80 ? 2 : p >= 30 ? 5 : 10;   // 秒
+}
+function rulerLabel(us, p) {
+  const s = us / 1e6, m = Math.floor(s / 60), sec = s - m * 60;
+  if (p >= 500) return String(m).padStart(2, "0") + ":" + sec.toFixed(3).padStart(6, "0");
+  return String(m).padStart(2, "0") + ":" + String(Math.round(sec)).padStart(2, "0");
+}
 function contentWidth() {
   let maxUs = 10e6;
   forEachSeg(s => { const end = s.start + s.duration; if (end > maxUs) maxUs = end; });
@@ -148,12 +158,12 @@ function renderTimeline(s) {
   ruler.style.width = w + "px";
   ruler.innerHTML = "";
   const totalSec = w / pps();
-  const step = pps() >= 200 ? 1 : pps() >= 80 ? 2 : 5;
+  const step = rulerStep(pps());
   for (let t = 0; t <= totalSec; t += step) {
     const tick = document.createElement("div");
     tick.className = "tick";
     tick.style.left = (t * pps()) + "px";
-    tick.innerHTML = "<span>" + usToTime(t * 1e6) + "</span>";
+    tick.innerHTML = "<span>" + rulerLabel(t * 1e6, pps()) + "</span>";
     ruler.appendChild(tick);
   }
   // 书签标记（对齐 OpenCut bookmarks.tsx：标尺顶部小红旗，点击跳转、双击切换、右键删除）
