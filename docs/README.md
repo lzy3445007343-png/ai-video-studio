@@ -20,6 +20,7 @@
 - `media-control-audit.md`：HTML 内所有直接碰 `video`/`audio` 的代码点核查（含行号）。
 - `playback-state-analysis.md`：播放状态机只读审计（`isPlaying` + 标志位）。
 - `opencut-vs-ours-playback.md`：**播放路径对比审计（2026-08-15）**——OpenCut 音频走 Web Audio 调度（BufferSourceNode 精确时间戳）、画面走 canvas 逐帧、播放头纯墙钟，完全不用 HTMLMediaElement 播放状态机；我们的所有播放问题根因=元素模式在 WebView2 不可靠。方向选项：音频迁 Web Audio 根治 / 视频保持元素模式兜底。
+- `opencut-vs-ours-architecture.md`：**全面架构对比审计（2026-08-15，19:55）**——OpenCut 分层（12 Manager 单向依赖）+ 一切修改走 Command（execute/undo/redo/ripple）+ Asset/Element 分离 + 播放与数据解耦；我们单文件 3988 行平铺 + 快照式 undo + 元素模式播放。**答案"为什么我们一直修 bug"：缺的是分层纪律本身，不是单个功能**。止损建议：冻结播放器 → Command 层 → Asset 分离。
 
 ## decisions/（重大决策，以 `ADR-XXX` 命名）
 - `ADR-001-ai-video-os-route.md`：**项目定位与路线决策**——从剪辑软件到 AI 可调用视频操作系统；播放器争论终结；两层 Schema（Operation↔Timeline）；护城河=Video DSL；路线冻结 B-D→Operation→Timeline→Command→MCP→Skill→Agent。
