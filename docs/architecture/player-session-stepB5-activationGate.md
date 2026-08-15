@@ -1,6 +1,6 @@
 # PlayerManager v2.2 · Step B.5：Media Activation Gate 设计稿
 
-> **状态**：v1.1 已落码（commit 待填），在 v1.0 基础上根据真机验收新增「预 ready gate」：等媒体 readyState>=2 再真正调用 `el.play()`，解决首次播放画面不动问题。
+> **状态**：v1.2 已落码（commit 待填），在 v1.1 基础上新增：① 用户手势内 `AudioContext.resume()` 解锁页面音频输出（针对 WebView2 下 `<audio>` 比 `<video>` 更严的自动播放策略）；② `_playWhenReady` 额外监听 `canplay` / `loadeddata` 作为 `<audio>` 的激活 fallback。
 > **上一篇**：`player-session-stepB-continueStart.md`（Step B v2.3 已落码，commit `9aac35a`）。
 > **定位**：Step B.5 只治「媒体未真正 ready 就解 mute」导致的无声，不动 Step B 已冻结的启动事务层（`_attemptPlay` / `start` / `continueStart` / `_scheduleRecover`）。
 
@@ -107,14 +107,17 @@ WAITING ──playing──► PLAYING_CONFIRMED
 
 | 信号 | 触发条件 | 可信度 | 备注 |
 |---|---|---|---|
+| `AUDIO_UNLOCK` | 用户手势内 `audioCtx.resume()` | 全局 | WebView2/CEF 对 `<audio>` 的自动播放策略比 `<video>` 更严，需在用户手势内主动解锁页面音频输出；不实际用 WebAudio 处理音频。 |
 | `PRE_READY_GATE` | `el.readyState >= 2` 或收到 `canplay`/`canplaythrough`/`error` | 前置 | 在真正调用 `el.play()` 之前必须满足；防止 HAVE_NOTHING 阶段 play() pending/失败导致画面不动。 |
 | `PLAYING_CONFIRMED` | 元素 `playing` 事件 | 最高 | 浏览器确认媒体真正开始播放。 |
-| `READY_FALLBACK` | `canplaythrough` 事件或调用时 `readyState >= 4` | 中 | 数据已缓冲到可连续播放，但不等于音频输出已启动。 |
+| `READY_FALLBACK` | `canplaythrough` / `canplay` / `loadeddata` 事件或调用时 `readyState >= 4` | 中 | 数据已缓冲到可连续播放，但不等于音频输出已启动；WebView2 下 `<audio>` 可能不 fire `playing`，用这组信号兜底。 |
 | `TIMEOUT_DEGRADED` | 自 `_playWhenReady` 起超过 `MEDIA_ACTIVATION_TIMEOUT` | 兜底 | 保证不会永久等待；坏轨/损坏文件走此分支。 |
 
 **为什么不只用 `Promise.all` 等全部 playing**：单坏轨（损坏/纯静音/永不 playing）会死锁整体；Activation Tracker 允许单轨降级，不拖死整体。
 
 **为什么加 PRE_READY_GATE**：Step B.5 v1.0 落码后真机验收发现，首次播放时 `el.play()` 在 `readyState < 2` 时被调用，浏览器让 play() 长期处于 pending，画面迟迟不动。因此把 `_attemptPlay` 拆成两步：先等媒体 ready，再 play + 等 playing。
+
+**为什么加 AUDIO_UNLOCK**：真机验收发现“视频有声音、MP3 没声音”， narrowing 到 `<audio>` 自动播放策略更严；`startPlay()` 内在调用 `playAllMedia()` 之前有两个 `await`（等 ready + 等 seek），可能耗尽用户手势上下文。在 `startPlay()` 首行同步 `audioCtx.resume()` 解锁音频输出。
 
 ### 4.5 Session 聚合判断
 
@@ -266,6 +269,8 @@ _playWhenReady(session, t) {
   el.addEventListener("playing", onPlaying, { once: true });
   const onReady = () => this._setActivation(session, t, MEDIA_ACTIVATION_STATE.READY_FALLBACK);
   el.addEventListener("canplaythrough", onReady, { once: true });
+  el.addEventListener("canplay", onReady, { once: true });
+  el.addEventListener("loadeddata", onReady, { once: true });
   const timer = setTimeout(() => this._setActivation(session, t, MEDIA_ACTIVATION_STATE.TIMEOUT_DEGRADED), MEDIA_ACTIVATION_TIMEOUT);
   const rec = session.activation.get(t.key);
   if (rec) {
@@ -273,6 +278,8 @@ _playWhenReady(session, t) {
     rec.cleanups.push(
       () => el.removeEventListener("playing", onPlaying),
       () => el.removeEventListener("canplaythrough", onReady),
+      () => el.removeEventListener("canplay", onReady),
+      () => el.removeEventListener("loadeddata", onReady),
       () => clearTimeout(timer)
     );
   }
@@ -370,7 +377,7 @@ _playWhenReady(session, t) {
 
 - ❌ 不改 `start()` / `continueStart()` / `_scheduleRecover()` / `_onStartError()` 的现有结构。
 - ❌ 不在 `_attemptPlay` 里加 state 修改 / restore / 错误分类（保持 Step B 钉子3）。
-- ❌ 不引入 `AudioContext` 监听或 Web Audio API（超出当前范围）。
+- ⚠️ `AudioContext` 仅作“音频解锁钥匙”，不处理音频流、不分析音频数据。若未来要引入 Web Audio 管线，须单独评审。
 - ❌ 不改 `MEDIA_ACTIVATION_TIMEOUT` 为更小值前须经真机测试（WebView2 冷启动可能需接近 1000ms）。
 - ❌ 不把 `readyState>=4` 当"一定有声"的主判据（它只是辅助信号，真实 playing 优先）。
 
@@ -387,3 +394,4 @@ _playWhenReady(session, t) {
 
 - **v1.0（冻结版）**：基于实施手册 §3 与第五轮 GPT 评审，明确 Activation Tracker、activationState 枚举、三层信号优先级、与 Step B 接口边界、验收门禁。
 - **v1.1（落码后热修）**：根据真机验收发现"首次播放画面不动"，把 `_attemptPlay` 拆为「预 ready gate + `_playWhenReady`」，确保 `el.play()` 不在 `readyState < 2` 时调用。
+- **v1.2（音频专项）**：根据真机验收"视频有声音、MP3 没声音"，新增用户手势内 `AudioContext.resume()` 解锁页面音频输出；`_playWhenReady` 额外监听 `canplay` / `loadeddata` 作为 `<audio>` 的 fallback 激活信号。

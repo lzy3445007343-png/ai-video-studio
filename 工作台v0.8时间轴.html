@@ -1093,6 +1093,17 @@ let mediaClockReady = true;   // 视频/音频已 seek 到播放位置：true �
 let _mcrWaitAt = 0;           // mediaClockReady 看门狗计时起点（performance.now()），用于 D 超时回退
 let _lastPlayAll = 0;          // playAllMedia 防抖计时（performance.now()），避免同一媒体被反复 play 引发 AbortError
 
+// B.5 音频解锁：WebView2/CEF 对 <audio> 的自动播放策略比 <video> 更严，
+// 需要在用户手势内主动 resume AudioContext，才能解锁页面音频输出。
+// 这里不实际用 WebAudio 处理音频，只把它当“音频解锁钥匙”。
+const audioCtx = (typeof AudioContext !== "undefined") ? new AudioContext() :
+                 (typeof webkitAudioContext !== "undefined") ? new webkitAudioContext() : null;
+function unlockAudio() {
+  if (audioCtx && audioCtx.state === "suspended") {
+    audioCtx.resume().catch(err => console.warn("[audioCtx] resume failed:", err));
+  }
+}
+
 function totalDurationUs() {
   let maxUs = 0;
   forEachSeg(s => { const e = s.start + s.duration; if (e > maxUs) maxUs = e; });
@@ -1351,9 +1362,11 @@ const PlayerManager = {
     // 1. playing 事件（最高优先级）→ 经 _onMediaPlaying seam 标记确认
     const onPlaying = () => this._onMediaPlaying(session, t);
     el.addEventListener("playing", onPlaying, { once: true });
-    // 2. canplaythrough 辅助信号
+    // 2. canplaythrough / canplay / loadeddata 辅助信号（WebView2 下 <audio> 可能不 fire playing，多绑几个兜底）
     const onReady = () => this._setActivation(session, t, MEDIA_ACTIVATION_STATE.READY_FALLBACK);
     el.addEventListener("canplaythrough", onReady, { once: true });
+    el.addEventListener("canplay", onReady, { once: true });
+    el.addEventListener("loadeddata", onReady, { once: true });
     // 3. timeout 兜底降级（防坏轨/损坏文件死锁整体）
     const timer = setTimeout(() => this._setActivation(session, t, MEDIA_ACTIVATION_STATE.TIMEOUT_DEGRADED), MEDIA_ACTIVATION_TIMEOUT);
     const rec = session.activation.get(t.key);
@@ -1362,6 +1375,8 @@ const PlayerManager = {
       rec.cleanups.push(
         () => el.removeEventListener("playing", onPlaying),
         () => el.removeEventListener("canplaythrough", onReady),
+        () => el.removeEventListener("canplay", onReady),
+        () => el.removeEventListener("loadeddata", onReady),
         () => clearTimeout(timer)
       );
     }
@@ -1923,6 +1938,8 @@ async function startPlay() {
   const maxUs = totalDurationUs();
   if (maxUs <= 0) { dbg("无内容可播放（时间轴为空）"); return; }
   if (Store.state.playheadUs >= maxUs - 1000) Store.set({ playheadUs: 0 });
+  // B.5 音频解锁：必须在任何 await 之前、用户手势上下文还在时调用，否则 WebView2 下 <audio> 会被自动播放策略拒绝。
+  unlockAudio();
   // Round E⑤：NLE 默认行为——播放头从当前位置沿墙钟推进，空白区静音自然穿过，绝不自动跳空隙（避免跳过空镜/转场缓冲）
   isPlaying = true;
   playStartWall = performance.now();
