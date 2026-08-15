@@ -133,6 +133,9 @@
   .rail-btn.active { background: var(--primary-dim); border-color: var(--primary); color: var(--primary); }
   .kfpanel .head { padding: 10px; border-bottom: 1px solid var(--border); font-weight: 600; font-size: 12px; display: flex; align-items: center; gap: 6px; }
   .kfpanel .head .seg { color: var(--muted); font-weight: 400; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+  .kfpanel .head .head-close, .maskpanel .head .head-close, .subpanel .head .head-close, .stickerpanel .head .head-close,
+  .empty-panel .head-close, .multi-panel .head-close, .placeholder-panel .head-close { width: 22px; height: 22px; border-radius: 4px; border: 1px solid var(--border); background: var(--panel); color: var(--muted); cursor: pointer; flex: none; font-size: 13px; line-height: 1; padding: 0; }
+  .kfpanel .head .head-close:hover, .maskpanel .head .head-close:hover, .subpanel .head .head-close:hover, .stickerpanel .head .head-close:hover { background: var(--panel-2); color: var(--text); }
   .kfpanel .body { flex: 1; overflow: auto; padding: 10px; min-width: 0; }
   .kfpanel .empty { text-align: center; color: var(--muted); font-size: 11px; padding: 24px 8px; line-height: 1.6; }
   #kfRows { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; min-width: 0; }
@@ -311,7 +314,7 @@
       </div>
       <div class="tools-content">
     <div class="kfpanel" id="kfPanel">
-      <div class="head">关键帧 <span class="seg" id="kfSegName"></span></div>
+      <div class="head">关键帧 <span class="seg" id="kfSegName"></span><button class="head-close" id="kfClose" title="取消选择（Esc）">✕</button></div>
       <div class="body" id="kfBody">
         <div class="empty" id="kfEmpty">选中视频/音频段后，可在此打关键帧做动画</div>
         <div id="kfRows" style="display:none"></div>
@@ -322,7 +325,7 @@
     </div>
 
     <div class="maskpanel" id="maskPanel">
-      <div class="head">遮罩 <span class="seg" id="maskSegName"></span></div>
+      <div class="head">遮罩 <span class="seg" id="maskSegName"></span><button class="head-close" id="maskClose" title="取消选择（Esc）">✕</button></div>
       <div class="body" id="maskBody">
         <div class="empty" id="maskEmpty">选中视频/图片段可加遮罩（矩形/椭圆/星形/爱心/菱形/线性/电影黑边）</div>
         <div id="maskShapes" style="display:none" class="mask-shapes"></div>
@@ -331,7 +334,7 @@
     </div>
 
     <div class="subpanel" id="subPanel">
-      <div class="head">字幕生成 <span class="seg" id="subSegName"></span></div>
+      <div class="head">字幕生成 <span class="seg" id="subSegName"></span><button class="head-close" id="subClose" title="取消选择（Esc）">✕</button></div>
       <div class="body" id="subBody">
         <div class="empty" id="subEmpty">自动从「选中的视频/音频」或「主视频轨」识别语音生成字幕（本地 Whisper，离线可用）</div>
         <div id="subCtrls" style="display:none">
@@ -368,7 +371,7 @@
     </div>
 
     <div class="stickerpanel" id="stickerPanel">
-      <div class="head">贴纸 <span class="seg" id="stSegName"></span></div>
+      <div class="head">贴纸 <span class="seg" id="stSegName"></span><button class="head-close" id="stClose" title="取消选择（Esc）">✕</button></div>
       <div class="body" id="stickerBody">
         <div class="empty" id="stickerEmpty">贴纸 = 本地透明图片叠加（PNG/WebP），离线可用。点「选择图片」→「添加到播放头」。</div>
         <div id="stickerCtrls" style="display:none">
@@ -398,12 +401,6 @@
             <label class="chk"><input type="checkbox" id="stFlipV"> 垂直翻转</label>
           </div>
         </div>
-      </div>
-    </div>
-      </div>
-    </div>
-
-
     <div class="empty-panel panel-active" id="emptyPanel">
       <div class="empty-icon">▢</div>
       <div class="empty-title">这里空无一人</div>
@@ -421,7 +418,10 @@
       <div class="ph-title" id="phTitle">暂未实现</div>
       <div class="empty-hint" id="phHint">该面板开发中</div>
     </div>
-
+      </div>
+    </div>
+      </div>
+    </div>
     <style>
     .maskpanel { border-top:1px solid var(--bd); }
     .maskpanel .head { font-size:12px; padding:6px 8px; color:var(--fg2); background:#1c1f26; }
@@ -873,7 +873,10 @@ function renderPropertyPanel() {
   }
 
   ["kfPanel", "maskPanel", "subPanel", "stickerPanel", "emptyPanel", "multiPanel", "placeholderPanel"].forEach(id => {
-    $(id).classList.toggle("panel-active", id === activePanel);
+    const el = document.getElementById(id);
+    if (!el) return;        // 防御：id 找不到跳过，不影响其他面板
+    if (id === activePanel) el.classList.add("panel-active");
+    else el.classList.remove("panel-active");
   });
 
   document.querySelectorAll("#toolsRail .rail-btn").forEach(b => {
@@ -1748,6 +1751,11 @@ function hideImportLoading() { const el = $("importLoading"); if (el) el.style.d
 
 /* ---------- 事件绑定（一次性） ---------- */
 function bindEvents() {
+  // 4 面板头部 ✕ 取消选择（更直观的取消入口；Esc 兜底）
+  ["kfClose", "maskClose", "subClose", "stClose"].forEach(id => {
+    const b = $(id); if (!b) return;
+    b.addEventListener("click", e => { e.stopPropagation(); clearSelection(); });
+  });
   $("importBtn").addEventListener("click", () => call("import_media").then(refresh));
   $("importJyBtn").addEventListener("click", () => {
     const def = "E:\\草稿\\JianyingPro Drafts\\5月2日\\draft_content.json";
