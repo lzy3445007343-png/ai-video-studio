@@ -1688,6 +1688,34 @@ const PlayerManager = {
     el._seekTarget = t;
   },
 
+  // B.5.5-2（用户拍板）：内部 seek barrier（drift 同步专用）。
+  // drift 不再暴力 el.currentTime=t —— WebView2 audio 在 playing 状态下被高频 seek 会进入
+  // "decoder seek 无效/未提交"状态，drift 自激振荡（cur 恒 0 + playing 每帧 fire）。
+  // 改为元素级 pause → seek → wait seeked → resume。只动媒体元素，绝不碰 PlaySession/playhead。
+  // 防并发：_seekPending 期间 drift 跳过（见 correctActiveMediaDrift）。
+  async seekBarrier(el, seg, us) {
+    if (!el || !seg) return;
+    if (el._seekPending) return;                 // 已有 barrier 在跑，跳过
+    const srcStartUs = seg.src_start || 0;
+    const srcEndUs = seg.src_end || (srcStartUs + seg.duration);
+    const localUs = Math.max(0, us - seg.start);
+    const t = Math.max(srcStartUs / 1e6, Math.min(srcEndUs / 1e6, (srcStartUs + localUs) / 1e6));
+    const wasPlaying = !el.paused;
+    el._seekPending = true;
+    try {
+      if (wasPlaying) el.pause();                // 元素级暂停（不改 PlaySession 状态）
+      try { el.currentTime = t; } catch (e) {}   // paused 状态 seek（v1.4.1 证明稳定）
+      el._seekTarget = t;
+      await _waitSeekSettled(el);                // 等落位（80ms 轮询 + 主动重 seek + 700ms 安全网）
+      if (wasPlaying) {                          // 恢复播放（元素级）
+        const p = el.play();
+        if (p && p.catch) p.catch(() => {});
+      }
+    } finally {
+      el._seekPending = false;
+    }
+  },
+
   // ---- 同步（Phase 4 才合并 drift / crossSegment / seek 的内部逻辑）----
   // 原：correctActiveMediaDrift(us) + seekActiveMediaToPlayhead(us)
   syncTimeline(us) {
@@ -2157,6 +2185,7 @@ function correctActiveMediaDrift(us) {
     if (!rec) return;
     const el = type === "video" ? rec.el.firstElementChild : rec.el;  // video 元素在 wrap 内；audio 元素本身
     if (!el || el.paused || el.seeking) return;   // 暂停/seek 中不打扰，避免与跨段 seek 抢
+    if (el._seekPending) return;                   // B.5.5-2：内部 seek barrier 在跑，drift 跳过（防并发自激振荡）
     if (_seekConfirmKeys.has(rec.key)) return;    // B.5.5：起播前 seek 确认期间，drift 不打断（修 seek/play/drift 每帧自我震荡）
     const s = rec.seg; if (!s) return;
     const srcStartUs = s.src_start || 0;
@@ -2167,13 +2196,14 @@ function correctActiveMediaDrift(us) {
     // Round E-F2：核心修正。当 currentTime 明显落在当前段源区间之前（ct < ss - 100ms），
     // 说明跨段 seek 没有真正落位（WebView2 下 audio 常见：seeked 事件触发后 play() 又把 currentTime 冲回 0）。
     // 这种情况不能当成“映射过期”跳过，必须强制 seek 到正确位置，否则用户会一直听到素材头。
+    // B.5.5-2：不再暴力 seek，改内部 seek barrier（pause→seek→wait→resume）。
     if (ct < ssSec - 0.1 || ct > endSec + 0.1) {
-      PlayerManager.seek(el, s, us);
+      PlayerManager.seekBarrier(el, s, us).catch(() => {});
       return;
     }
     const mapped = s.start + (ct * 1e6 - srcStartUs);  // 媒体当前位置映射回时间轴
     if (mapped < s.start || mapped > s.start + s.duration) return;  // 映射过期（跨段未刷新）→ 跳过，交给 _handleCrossSegment
-    if (Math.abs(mapped - us) > 100000) PlayerManager.seek(el, s, us);      // 仅 >100ms 大漂移才纠正；绝不反写播放头
+    if (Math.abs(mapped - us) > 100000) PlayerManager.seekBarrier(el, s, us).catch(() => {});      // 仅 >100ms 大漂移才纠正；绝不反写播放头
   };
   for (const h of hits) {
     if (h.type === "video") consider(previewState.visualEls.get("video:" + h.ti), "video");
