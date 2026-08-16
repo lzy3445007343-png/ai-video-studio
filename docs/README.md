@@ -15,6 +15,7 @@
 - `implementation-manual-stepB-D.md`：实施手册（**自包含，给 GPT 参谋审阅**）——Step B 行号级改动清单 + B.5 草案（Media Activation Gate，待审）+ C/D 方向；含给 GPT 的待审问题汇总。
 - `operation-schema-sketch.md`：Operation Schema v1 草图（**概念模型，不锁字段**，ADR-001 §9 要求）。
 - `player-kernel-architecture.md`：**播放器内核架构（2026-08-16 根治收官·冻结基线）**——MasterClock 职责、媒体数据通道（HTTP Range 为什么必须）、MediaSlot A/B 双槽、AudioEngine 实时锚定、生命周期纪律、未来元素（关键帧/蒙版/特效/文本）扩展点。**播放器任何改动先读这份 + 跑 V1-V6 回归**。
+- `fablecut-comparison.md`：**FableCut 架构对照（2026-08-16，B 步）**——开源"AI 经 MCP 操作 JSON 时间轴"项目源码对照：patch 批量 op + conflict-safe（P0 借鉴）、props/keyframes 统一动画模型（P0，关键帧/特效地基）、textAnim/chromaKey/adjustment layer（P1 差异化）、渲染路线差异与特效一致性风险（§3.1）。
 
 ## audits/（审计 / 核查类：描述“现状是什么”）
 - `opencut-analysis.md`：与 OpenCut 开源项目的架构对照诊断。
