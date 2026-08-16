@@ -18,7 +18,8 @@ function createAudioEngine(ctx) {
     bufferCache: new Map(),    // path -> AudioBuffer（LRU，上限 MAX_BUFFERS）
     scheduled: new Set(),      // 已调度 BufferSourceNode
     clips: [],                 // 当前 audioClips 快照（graph 平铺结果）
-    anchorOffset: 0,           // ctx 秒 ↔ 时间轴秒 偏移换算锚点
+    playheadUs: 0,             // 播放头实时位置（微秒，playTick 每帧喂入；调度用实时锚定消除时钟偏差）
+    anchorOffset: 0,           // ctx 秒 ↔ 时间轴秒 偏移换算锚点（旧一次性锚定，保留兼容；调度已改实时锚定）
     globalMuted: false,        // 全局预览静音（previewMuted 的引擎内副本；v1.3：只在播放端叠加）
     _tickTimer: null,
     _decodeInflight: new Map(), // path -> Promise（并发解码去重）
@@ -28,6 +29,7 @@ function createAudioEngine(ctx) {
   const MAX_BUFFERS = 8;       // LRU 上限（内存对冲：decodeAudioData 全量解码风险）
   const LOOKAHEAD_SEC = 2.0;   // 未来调度窗口
   const TICK_MS = 500;         // lookahead 轮询周期
+  const PAST_SLACK = 0.5;      // 秒：startCtx 允许略早于 now 的补播宽容带（防漏调度）
 
   // 绑定现有 AudioContext（复用 player.js 的 audioCtx 与手势解锁状态）
   engine.attach = function (audioCtx) {
@@ -44,7 +46,20 @@ function createAudioEngine(ctx) {
     }
   };
 
-  // ---- 时钟锚定（v1.2 审查 S2-2 修正） ----
+  // 播放头实时喂入（playTick 每帧调；拖动/跨段后播放头跳变，下一帧自动生效）
+  engine.setPlayhead = function (us) {
+    engine.playheadUs = us;
+  };
+
+  // 实时锚定：clip 的 ctx 起始时刻 = clip 时间轴起点 + (当前 ctx - 当前播放头)。
+  // 关键修复（2026-08-16 真机）：旧 setAnchor 一次性锚定，AudioContext 时钟与播放头墙钟
+  // 存在 ~0.166s 系统性偏差（resume 异步等）→ 跨段后新 clip 的 startCtx 落进"过去"，
+  // tick 永不命中 → 第二/三段无声。实时锚定让偏差每帧自愈。
+  engine._anchorNow = function () {
+    return engine.ctx.currentTime - engine.playheadUs / 1e6;
+  };
+
+  // ---- 时钟锚定（v1.2 审查 S2-2 修正；保留兼容，调度主路径用 _anchorNow） ----
   // 原则：时间轴秒 T 对应的 ctx 时刻 = T + anchorOffset（由 setClips 时播放头位置决定）
   engine.setAnchor = function (playheadUs) {
     if (!engine.ctx) return;
@@ -91,7 +106,9 @@ function createAudioEngine(ctx) {
   };
 
   // ---- 调度单个 clip：到点出声 ----
-  engine.schedule = async function (c) {
+  // startCtxSnapshot：tick 调度时刻算好的 ctx 起始时刻（decode 是异步的，必须用调度时的
+  // 快照，不能用 decode 完成时刻重新算——否则 decode 期间播放头前进，startCtx 又漂移）
+  engine.schedule = async function (c, startCtxSnapshot) {
     if (!engine.ctx) return;
     const myEpoch = engine._epoch; // 记录发起时代际（v1.3 防 in-flight 竞态）
     const buf = await engine._decode(c.path);
@@ -108,7 +125,7 @@ function createAudioEngine(ctx) {
     src.connect(g).connect(engine.ctx.destination);
     const offset = c.srcStartUs / 1e6;                          // 源窗口起点（buffer 内偏移）
     const dur = (c.srcEndUs - c.srcStartUs) / 1e6 / (c.speed || 1);
-    const startCtx = engine.timelineToCtx(c.startUs);           // 到点出声（含 anchor 偏移）
+    const startCtx = (startCtxSnapshot != null) ? startCtxSnapshot : (c.startUs / 1e6 + engine._anchorNow());
     try {
       src.start(startCtx, offset, Math.max(0.001, dur));
       console.log("[AudioEngine] start ok", c.key, "at=" + startCtx.toFixed(3), "offset=" + offset.toFixed(3), "dur=" + dur.toFixed(3), "ctxNow=" + engine.ctx.currentTime.toFixed(3), "ctxState=" + engine.ctx.state);
@@ -126,13 +143,19 @@ function createAudioEngine(ctx) {
     if (!engine.ctx) return;
     const now = engine.ctx.currentTime;
     const horizon = now + LOOKAHEAD_SEC;
+    const anchorNow = engine._anchorNow();   // 实时锚定（每帧随播放头/ctx 自愈偏差）
     for (const c of engine.clips) {
       if (c._scheduled) continue;
       if ((c.gain || 0) <= 0) continue; // 静音段跳过（muted 不调度）
-      const startCtx = engine.timelineToCtx(c.startUs);
-      if (startCtx >= now && startCtx < horizon) {
+      const startCtx = c.startUs / 1e6 + anchorNow;
+      // 命中窗口：未来 LOOKAHEAD 内；或刚过去一点点（PAST_SLACK）→ 立即补播
+      // （Web Audio src.start 对过去时刻自动立即播；防 tick 抖动/播放头跳过导致漏调度）
+      if (startCtx < horizon && startCtx >= now - PAST_SLACK) {
+        // 整段已错过（startCtx + 时长 < now）→ 不补播，避免播已过期的段
+        const durSec = (c.srcEndUs - c.srcStartUs) / 1e6 / (c.speed || 1);
+        if (startCtx + durSec < now) continue;
         console.log("[AudioEngine] tick-hit", c.key, "startCtx=" + startCtx.toFixed(3), "now=" + now.toFixed(3), "horizon=" + horizon.toFixed(3));
-        engine.schedule(c);
+        engine.schedule(c, startCtx);
       }
     }
   };
@@ -141,9 +164,9 @@ function createAudioEngine(ctx) {
   engine.setClips = async function (clips, playheadUs) {
     engine.stopAll();
     engine.clips = clips || [];
-    if (playheadUs != null) engine.setAnchor(playheadUs); // v1.2：每次重排都重新锚定
+    if (playheadUs != null) { engine.playheadUs = playheadUs; }   // 同步播放头基准（实时锚定用）
     engine._startTicking();
-    console.log("[AudioEngine] setClips n=" + (clips || []).length + " us=" + playheadUs + " ctx=" + (engine.ctx ? engine.ctx.state : "null") + " anchor=" + engine.anchorOffset.toFixed(3));
+    console.log("[AudioEngine] setClips n=" + (clips || []).length + " us=" + playheadUs + " ctx=" + (engine.ctx ? engine.ctx.state : "null"));
     engine.tick(); // 立即扫一次
   };
 

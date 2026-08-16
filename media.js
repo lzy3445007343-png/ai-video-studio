@@ -431,7 +431,7 @@ const PlayerManager = {
     }
     if (hits.length > 0 && targets.length === 0) return false;   // 期望有媒体却无（元素可能已释放）→ 降级 startPlay
     primeMediaPlayback(hits).catch(() => {});          // 手势内预热（临时元素，fire-and-forget 安全，不碰真实元素）
-    seekActiveMediaToPlayhead(Store.state.playheadUs); // 按当前播放头重定位（inactive-park + active seek，不再写 active muted）
+    seekActiveMediaToPlayhead(Store.state.playheadUs, true); // 按当前播放头重定位（恢复：音频基准变了，reanchorAudio=true）
     currentSession.targets = targets;                  // 复用既有 session，更新 target 列表（不重置 activation map）
     currentSession.state = PLAY_SESSION_STATE.STARTING;
     currentSession.autoplayUnlockPending = true;        // 恢复也走 Session 门：全体激活后整批解 mute（原 false 会跳过整批解 mute，致元素停在 WAITING 永远静音）
@@ -515,7 +515,7 @@ const PlayerManager = {
   // 原：correctActiveMediaDrift(us) + seekActiveMediaToPlayhead(us)
   syncTimeline(us) {
     correctActiveMediaDrift(us);
-    seekActiveMediaToPlayhead(us);
+    seekActiveMediaToPlayhead(us, true);   // 外部显式同步 = 重定位语义，音频重排
   },
   // 原：_handleCrossSegment(us)（async）
   handleCrossSegment(us) {

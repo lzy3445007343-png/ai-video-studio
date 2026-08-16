@@ -376,7 +376,7 @@ async function startPlay() {
   //   - playAllMedia 立即调（_attemptPlay 内部 pre-ready gate 自己等就绪后起播）；
   //   - playTick 立即启动墙钟。媒体是 follower，自己追上播放头；播放头永远不被媒体拖住。
   primeMediaPlayback(hits).catch(() => {});
-  seekActiveMediaToPlayhead(Store.state.playheadUs);
+  seekActiveMediaToPlayhead(Store.state.playheadUs, true);   // 起播：reanchorAudio=true 喂音频基准
   playAllMedia();
   playTick();
 }
@@ -440,7 +440,7 @@ function correctActiveMediaDrift(us) {
 // Round B：跨段只 seek 已存在的媒体元素，绝不复建/改 src/重跑 render。
 // 仅当命中元素缺失（startPlay 未预建该段，例如音频首段在 t=10、起播在 t=0）才降级 renderPreview 一次，
 // 并用 previewState.isRepairing 防止「跨段→renderPreview→跨段」循环（新 GPT 保险建议）。
-function seekActiveMediaToPlayhead(us) {
+function seekActiveMediaToPlayhead(us, reanchorAudio) {
   const hits = resolveHits(us);
   const seeked = [];   // Round D：收集本轮回实际 seek 的媒体元素，供 startPlay/跨段 await 屏障
   // Round B1：未命中的媒体元素必须主动停车（pause+mute），否则空白区/旧段继续发声、
@@ -528,10 +528,15 @@ function seekActiveMediaToPlayhead(us) {
     renderPreview();   // 安全降级：仅缺失元素重建一次，不破坏媒体生命周期纪律
     setTimeout(() => { previewState.isRepairing = false; }, 120);
   }
-  // Phase C-2：seek 后重排 AudioEngine 调度（拖动/跨段/起播后音频基准已变，重新锚定 + 重扫）
-  try {
-    AudioEngine.setClips(buildPlaybackGraph(Store.state.draft, Store.state.materials).audioClips, us);
-  } catch (e) { console.warn("[AudioEngine] seek 重排失败:", e); }
+  // Phase C-2：audio 轨交给 AudioEngine（lookahead 自动调度，不参与元素 seek 路径）。
+  // reanchorAudio=true 时重排（起播/恢复/拖动——播放头基准变了）；播放中自然跨段
+  // reanchorAudio=false（2026-08-16 真机修复：跨段 setClips → stopAll 会硬杀"刚响/正在播"
+  // 的 clip → 第二/三段无声+卡顿。音频按时间轴位置 lookahead 自动到点响，跨段无需重排）
+  if (reanchorAudio) {
+    try {
+      AudioEngine.setClips(buildPlaybackGraph(Store.state.draft, Store.state.materials).audioClips, us);
+    } catch (e) { console.warn("[AudioEngine] seek 重排失败:", e); }
+  }
   return seeked;   // Round D：调用方凭此 await 屏障，确保 seek 完成后再 playAllMedia()
 }
 
@@ -554,7 +559,7 @@ async function _handleCrossSegment(us) {
       // 等 seek 落位会让播放头墙钟超前 2.5s → 跨段错位。改为：
       //   seek 只发不管（元素未 ready 时静默失败）→ 立即 playAllMedia（_attemptPlay 内部 pre-ready gate 自己等就绪）
       //   → 落后由 drift（静默期 1s 后）校准。播放头墙钟绝不被媒体 await 拖住（与 startPlay 止血同构）。
-      seekActiveMediaToPlayhead(target);
+      seekActiveMediaToPlayhead(target);   // 跨段：reanchorAudio 默认 false（音频 lookahead 自动到点响，重排会 stopAll 杀正在播的 clip）
       if (isPlaying) { _lastPlayAll = 0; playAllMedia(_PLAY_REASON.HANDOFF); }   // 跨段强制起播，HANDOFF 交接
       target = crossSegmentQueuedUs;   // 处理期间又跨段？取最新再走一轮
       crossSegmentQueuedUs = null;
@@ -617,6 +622,9 @@ function playTick() {
   correctActiveMediaDrift(us);
   // 播放时绕开 Store.set 的整树重绘：直接写 state + 仅动红线与时间码
   Store.state.playheadUs = us;
+  // Phase C-2 实时锚定：每帧把播放头喂给 AudioEngine（tick 用 ctx.currentTime - playheadUs
+  // 实时换算调度时刻，AudioContext 与墙钟的系统性偏差自动自愈——否则跨段 clip 落进"过去"永不响）
+  try { AudioEngine.setPlayhead(us); } catch (e) {}
   positionPlayhead();
   renderTimecode();
   applyKfLiveAll();   // 每帧刷新关键帧动画（位移/缩放/旋转/透明度）
