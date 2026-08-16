@@ -480,7 +480,9 @@ function seekActiveMediaToPlayhead(us) {
       //   根治 WebView2"切段 destroy+重建→新元素加载慢→从 0 起播"（日志实锤 cur=0.002 反复播开头）。
       //   仅当 prepare 未 READY/无 prepare 时，降级走原 destroy+重建（现有逻辑兜底）。
       if (rec && rec.el && rec.key !== h.key) {
-        if (rec.prepare && rec.slotState === "READY") {
+        // C.5-4 修复：swap 必须校验 prepare 预加载的正是要切的段（rec._preloadKey === h.key）——
+        // 拖动回跳（段2→段0）时 prepare 预加载的是"下一段"（段3），不是目标段，swap 会播错内容。
+        if (rec.prepare && rec.slotState === "READY" && rec._preloadKey === h.key) {
           // swap：active ↔ prepare
           const oldActive = rec.el;
           rec.el = rec.prepare;
@@ -595,6 +597,16 @@ function playTick() {
       return;
     }
     // 否则：不修改 us / playStartUs / playStartWall，播放头沿当前时钟自然推进（空白区无声音）
+    // C.5-4：间隙时 visualHits 为空 → renderPreview 的 preload 调度停摆 → 手动补 prepare（跨过间隙预加载下一段）
+    try {
+      for (const [lkey, rec] of previewState.visualEls) {
+        if (lkey.startsWith("video:") && rec && rec.el && typeof preloadNextVideoSlot === "function") {
+          const baseStart = (rec.seg && rec.seg.start) || 0;
+          const ti = parseInt(lkey.split(":")[1], 10);
+          preloadNextVideoSlot(rec, ti, baseStart);
+        }
+      }
+    } catch (e) {}
   }
   // Round E②：媒体若因缓冲/解码滞后偏离播放头 >100ms，才把它 seek 回正确时间轴位置；绝不反写 playheadUs。
   correctActiveMediaDrift(us);
