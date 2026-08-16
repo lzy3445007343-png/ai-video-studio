@@ -1269,19 +1269,27 @@ function onPointerMove(e) {
     else { d.targetType = d.type; d.targetTi = -1; d.newAboveMain = false; }
   } else if (d.side === "left") {
     const right = d.s0.start + d.s0.duration;
-    let left = Math.max(0, Math.min(right - 0.2e6, d.s0.start + dUs));
+    const speed = d.s0.speed || 1;
+    // 素材头对应时间轴位置：src_start=0 处（再往左没有素材可补，对齐后端 _trim_core clamp）
+    const minLeft = d.s0.start - (d.s0.src_start || 0) / speed;
+    let left = Math.max(minLeft, Math.min(right - 0.2e6, d.s0.start + dUs));
     if (Store.state.snapOn) {
       const r = resolveSnap(left, buildSnapPoints(d.key, false));
-      left = Math.max(0, Math.min(right - 0.2e6, r.snapped));
+      left = Math.max(minLeft, Math.min(right - 0.2e6, r.snapped));
       r.point ? showSnapGuide(r.point.time) : hideSnapGuide();
     } else hideSnapGuide();
     d.curLeftUs = left;
   } else {
     const right = d.s0.start + d.s0.duration;
-    let r2 = Math.max(d.s0.start + 0.2e6, right + dUs);
+    const speed = d.s0.speed || 1;
+    // 素材尾对应时间轴位置（拖过素材尾没有素材可补，对齐后端 clamp）；
+    // 旧段缺 src_end 时用当前时长兜底（= 当前位置，不能拖长但不锁死）
+    const srcEnd = d.s0.src_end || (d.s0.src_start || 0) + (d.s0.duration || 0) * speed;
+    const maxRight = d.s0.start + (srcEnd - (d.s0.src_start || 0)) / speed;
+    let r2 = Math.max(d.s0.start + 0.2e6, Math.min(maxRight, right + dUs));
     if (Store.state.snapOn) {
       const r = resolveSnap(r2, buildSnapPoints(d.key, false));
-      r2 = Math.max(d.s0.start + 0.2e6, r.snapped);
+      r2 = Math.max(d.s0.start + 0.2e6, Math.min(maxRight, r.snapped));
       r.point ? showSnapGuide(r.point.time) : hideSnapGuide();
     } else hideSnapGuide();
     d.curRightUs = r2;
