@@ -112,7 +112,11 @@ function renderPreview(s) {
         // play() 不在 oncanplay 里调：统一交给 playAllMedia() 在 startPlay 点击手势（或 sticky-activation 跨段）内播放。
       };
       media.oncanplay = onReady;
-      media.onloadedmetadata = onReady;
+      // 2026-08-16 真机修复：**去掉 onloadedmetadata 绑定**——loadedmetadata 触发时 readyState=1（仅 metadata），
+      // WebView2 在 readyState<2 时设 currentTime 会被吞（日志实锤：seek to=5.524 ready=1 后 play 从 0 起播）。
+      // 只有 canplay（readyState>=2 有数据可播）时才 seek 才生效。
+      // 兜底：若元素在绑定前已 canplay（startPlay 早已建好元素），事件不再触发 → 就绪则立即执行。
+      if (media.readyState >= 2) onReady();
       }
     } else {
       const media = rec.el.firstElementChild;

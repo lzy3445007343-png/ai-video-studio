@@ -201,18 +201,16 @@ const PlayerManager = {
     // 起播前 seek 确认：v1.4.1 是全局 await seek 再 play（媒体慢拖死播放头），
     // 这里只对当前 target 确认（_waitSeekSettled 80ms 轮询 + 700ms 安全网），
     // 确认期间挂 _seekConfirmKeys 让 drift 不打断（修"seek/play/drift 每帧自我震荡"）。
-    // 2026-08-16 真机修复：**WebView2 在元素 paused 时设置 currentTime 会被吞**——不触发 seeking/seeked，
-    // currentTime 不变（日志实锤：readyState=4 但 cur=0 死等 2.5s 超时）。"等 seek 落位"在此环境永远等不到
-    // → 播放头墙钟超前 → 跨段错位。正确顺序：设 currentTime（吞了就吞了）→ 立即 play()（play 触发浏览器应用位置）
-    // → 落后由 drift 校准。故删除 seek 确认等待（_seekConfirmKeys 保留空 Set，drift 检查无害）。
-    if (false && el._seekTarget != null) {
-      _seekConfirmKeys.add(t.key);
-      try { await _waitSeekSettled(el); } finally { _seekConfirmKeys.delete(t.key); }
-      if (!session.isCurrent()) return;                       // 等待期间 session 被换/取消
-      if (!el.paused) {                                       // 等待期间已被别的路径起播
-        this._setActivation(session, t, MEDIA_ACTIVATION_STATE.PLAYING_CONFIRMED);
-        return;
-      }
+    // 2026-08-16 真机修复（v3）：**WebView2 只在 readyState<2（未加载完）时吞 currentTime 赋值**——
+    // 跨段重建的新元素在 readyState=1 时被 seek 后，play() 不会应用被吞的位置（日志实锤：
+    // [seek] to=5.524 ready=1 → [playAFTER] cur=0.002 从 0 起播）。正确顺序：
+    // ①元素 canplay（readyState>=2，renderPreview pendingSeek 已保证）
+    // ②play 前重设 currentTime（此刻 readyState>=2 赋值生效）
+    // ③play 从正确位置起播。_waitSeekSettled 仍保留给 seekBarrier（无调用点）。
+    if (el._seekTarget != null && el.readyState >= 2) {
+      try {
+        if (Math.abs((el.currentTime || 0) - el._seekTarget) > 0.05) { el.currentTime = el._seekTarget; el._lastSeekAt = performance.now(); }   // 关键：play 前重设，此刻生效
+      } catch (e) {}
     }
     setMediaMute(el, true, "play-mute", t.key);   // (A) 静音起播，等激活门全部确认才解
     console.log("[playReq]", t.key, "muted=" + el.muted, "cur=" + (el.currentTime || 0).toFixed(3), "readyState=" + el.readyState);
@@ -466,6 +464,10 @@ const PlayerManager = {
     const t = Math.max(srcStartUs / 1e6, Math.min(srcEndUs / 1e6, (srcStartUs + localUs) / 1e6));
     // DIAG-2026-08-16：打印换算用的段字段（排查"to=时间轴秒"疑点——若 seg.start/src_start 为 0 则前端 draft 是旧数据）
     console.log("[seek]", el.tagName || "?", "to=" + t.toFixed(3), "cur=" + (el.currentTime || 0).toFixed(3), "ready=" + el.readyState, "seg{start=" + ((seg.start || 0) / 1e6).toFixed(1) + " ss=" + (srcStartUs / 1e6).toFixed(1) + " se=" + (srcEndUs / 1e6).toFixed(1) + "} us=" + (us / 1e6).toFixed(3));
+    // 2026-08-16 真机修复（v3）：readyState<2 时**跳过赋值**——WebView2 此刻设 currentTime 必被吞（日志实锤：
+    // seek to=5.524 ready=1 → play 从 0 起播）。seek 只记录目标（_seekTarget），由 renderPreview pendingSeek
+    // （canplay 后）或 _playWhenReady（play 前 readyState>=2 重设）真正落位。
+    if (el.readyState < 2) { el._seekTarget = t; return; }
     try {
       if (Math.abs((el.currentTime || 0) - t) > 0.05) { el.currentTime = t; el._lastSeekAt = performance.now(); }   // 静默期起点：seek 后 1s 内 drift 不碰（2026-08-16 真机修复）
     } catch (e) {}
