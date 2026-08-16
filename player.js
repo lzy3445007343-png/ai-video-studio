@@ -196,12 +196,13 @@ function _waitSeekSettled(el) {
     el.addEventListener("error", errListener, { once: true });
     // 轮询检查：每 80ms 验证一次是否真正落位；未落位则主动重 seek。
     timer = setInterval(recheck, 80);
-    // 安全网：700ms 内仍未落位 → 强制放行，避免永久死锁；由 correctActiveMediaDrift/playAllMedia 后续兜底。
+    // 安全网：2.5s 内仍未落位 → 强制放行，避免永久死锁；由 correctActiveMediaDrift/playAllMedia 后续兜底。
+    // 真机 2026-08-16：WebView2 跨段 seek 大文件常 700-2000ms 才到 readyState>=2，700ms 太短会卡住 play。
     setTimeout(() => {
       if (fired) return;
       console.warn("[_waitSeekSettled] 超时放行(媒体可能未加载):", el.tagName, "readyState=", el.readyState, "seeking=", el.seeking, "currentTime=", el.currentTime, "target=", target, "src=", (el.currentSrc || el.src || "").slice(0, 70));
       cleanup();
-    }, 700);
+    }, 2500);
   });
 }
 
@@ -516,14 +517,18 @@ async function _handleCrossSegment(us) {
       mediaClockReady = false;   // 切源后等新的视频/音频 seeked 再跟随其时钟
       _mcrWaitAt = 0;
       const seeked = seekActiveMediaToPlayhead(target);   // Round B：跨段只 seek 已存在媒体，绝不复建/改 src/重跑 render
-      await Promise.all(seeked.map(_waitSeekSettled));    // Round D：等 seek 完成
-      // Round E③：await 屏障后会话期间播放头已按墙钟推进，重读当前 playheadUs 再对齐到最新位置，
-      // 避免媒体停在旧 target（旧写法只在进入时用 us，屏障后不重读 → 跨段后媒体慢半拍/错位）。
-      const currentUs = Store.state.playheadUs;
-      if (currentUs !== target) {
-        const seeked2 = seekActiveMediaToPlayhead(currentUs);
-        await Promise.all(seeked2.map(_waitSeekSettled));
-      }
+      try {
+        await Promise.all(seeked.map(_waitSeekSettled));    // Round D：等 seek 完成（2.5s 安全网）
+        // Round E③：await 屏障后会话期间播放头已按墙钟推进，重读当前 playheadUs 再对齐到最新位置，
+        // 避免媒体停在旧 target（旧写法只在进入时用 us，屏障后不重读 → 跨段后媒体慢半拍/错位）。
+        const currentUs = Store.state.playheadUs;
+        if (currentUs !== target) {
+          const seeked2 = seekActiveMediaToPlayhead(currentUs);
+          await Promise.all(seeked2.map(_waitSeekSettled));
+        }
+      } catch (e) { /* seek 超时已 resolve，此处防御性兜底 */ }
+      // 真机 2026-08-16：无论如何都触发 HANDOFF 起播 —— 之前 await 在 _waitSeekSettled 异常时
+      // 可能跳出 try，导致 playAllMedia 没调到 → 元素 paused 看起来卡死
       if (isPlaying) { _lastPlayAll = 0; playAllMedia(_PLAY_REASON.HANDOFF); }   // 跨段强制起播，HANDOFF 交接（复用 session，不重建/不重静音全体）
       target = crossSegmentQueuedUs;   // 处理期间又跨段？取最新再走一轮
       crossSegmentQueuedUs = null;
