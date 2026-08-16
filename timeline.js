@@ -233,6 +233,8 @@ function renderTimeline(s) {
       const on = !m.hidden;
       icons += '<span class="icon' + (on ? "" : " off") + '" data-act="hide" title="显示/隐藏">' + (on ? "👁" : "🚫") + '</span>';
     }
+    // 轨道锁定（2026-08-16 对齐 OpenCut TrackLabelsPanel lock）：锁定的轨禁止编辑
+    icons += '<span class="icon' + (m.locked ? " off" : "") + '" data-act="lock" title="锁定/解锁轨道（锁定后禁止编辑该轨）">' + (m.locked ? "🔒" : "🔓") + '</span>';
     label.innerHTML = icons + '<span class="name">' + tr.label + '</span>';
     labels.appendChild(label);
     const track = document.createElement("div");

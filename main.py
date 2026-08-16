@@ -3182,7 +3182,7 @@ class Api:
         meta = _ensure_track_meta(self.draft, track_type)
         while len(meta) <= track_index:
             meta.append({})
-        if field in ("hidden", "muted"):
+        if field in ("hidden", "muted", "locked"):
             meta[track_index][field] = bool(value)
         elif field == "height":
             try:

@@ -1375,11 +1375,25 @@ function onPointerUp() {
 }
 
 /* 时间轴 mousedown：把手=裁剪，片段体=移动/选中，空白=框选/取消选中 */
+function isTrackLocked(type, ti) {
+  const meta = ((Store.state.draft._track_meta || {})[type] || []);
+  return !!(meta[ti] && meta[ti].locked);
+}
 function onTimelineDown(e) {
   const handle = e.target.closest(".handle");
   const seg = e.target.closest(".seg");
-  if (handle && seg) { startPointer(e, seg, "resize", handle.classList.contains("l") ? "left" : "right"); return; }
-  if (seg) { startPointer(e, seg, "move", null); return; }
+  if (handle && seg) {
+    // 轨道锁定拦截：锁定的轨禁止裁剪（仍可选中）
+    const [kt, kti] = seg.dataset.key.split(":");
+    if (isTrackLocked(kt, +kti)) { selectKey(seg.dataset.key); return; }
+    startPointer(e, seg, "resize", handle.classList.contains("l") ? "left" : "right"); return;
+  }
+  if (seg) {
+    // 轨道锁定拦截：锁定的轨禁止移动（仍可选中）
+    const [kt, kti] = seg.dataset.key.split(":");
+    if (isTrackLocked(kt, +kti)) { selectKey(seg.dataset.key); return; }
+    startPointer(e, seg, "move", null); return;
+  }
   if (e.target.closest(".ruler")) return;            // 标尺定位交给 onRulerDown
   // 轨道或内容区空白 → 起框选（拖出矩形选段；纯点空白在 onBoxUp 取消选中）
   if (e.target.closest(".track") || e.target.closest(".tl-content")) {
@@ -2050,8 +2064,9 @@ function bindEvents() {
     } else if (act === "hide") {
       call("toggle_track_visibility", type, ti).then(r => { if (r && r.ok) refresh(); });
     } else if (act === "lock") {
-      // TODO: 轨道锁定（防止误编辑），当前占位
-      showMediaStatus("轨道锁定功能暂未实现");
+      // 轨道锁定（2026-08-16 对齐 OpenCut TrackLabelsPanel lock）：锁定的轨禁止编辑
+      const meta = ((Store.state.draft._track_meta || {})[type] || [])[ti] || {};
+      call("set_track_meta", type, ti, "locked", !meta.locked).then(r => { if (r && r.ok) refresh(); });
     }
   });
   // 垂直滚动：右侧时间轴内容与左侧轨道标签必须锁定同步
