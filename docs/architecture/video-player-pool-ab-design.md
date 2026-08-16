@@ -1,8 +1,10 @@
-# 视频播放器 A/B Pool 设计稿（Preview Renderer 稳定化）
+# 视频播放器 MediaSlot 池设计稿（Preview Renderer 稳定化）
 
-> 版本：v0.1（2026-08-16 21:00）
+> 版本：v0.2（2026-08-16 21:10，经外部 GPT 审查修订）
+> 命名：**MediaSlotManager**（不叫 ABPlayer——未来扩展图片/gif/AI 片段/贴纸/转场时不被"播放器"限定）
 > 背景：播放器跨段"反复播开头"根因已定位——WebView2（Chromium）下 video 元素 seek 到当前缓冲范围外时触发媒体管线重置（readyState 4→1，位置丢失）。打补丁修 seek 时机无效，因为"seek→重置→丢位置"是浏览器固有行为。
 > 目标：把"seek 失败"从用户视线移走——**后台预加载下一段，切段时 swap 无感**。这属于 Preview Renderer 内部优化，不改变"Timeline 驱动"架构（Playback Graph 已落地）。
+> **GPT 审查确认**：架构位置正确（Renderer 内部双解码槽，不是倒退为播放器驱动）；核心收益=把风险从台前移到后台（"不要求每次操作成功，只要求用户看到的结果永远稳定"）。
 
 ---
 
@@ -59,19 +61,40 @@ previewState.visualEls: key="video:0"（轨级不变），value={
   → 用户无感，无 seek 等待，无 readyState 抖动可见
 ```
 
-### 2.3 预加载调度（核心）
+### 2.3 预加载调度（核心）+ 状态机（v0.2 新增，防伪 ready）
+
+**prepare 槽必须有显式状态机**——这是本轮踩坑的核心教训（"readyState 看起来好了，下一秒掉"）：
+不能用"有 video 对象 = 可用"，必须等状态机走到 READY 才允许切段。
 
 ```
-播放段 N（startUs=6s, srcStartUs=5s）时：
-  Prepare 槽 = 段 N+1（同轨内 start 最小且 > N.start 的段）
-    ① setMediaSrc(prepare, 段N+1.path)
-    ② PlayerManager.seek(prepare, 段N+1, 段N+1.startUs)   ← 后台 seek，失败重试一次
-    ③ 等 canplay（readyState>=2）→ 标记 ready
-  若同素材（path 相同）→ seek 后台完成即可（Chromium 共享缓存，快）
-  若不同素材 → 后台加载+seek，切段时可能还没 ready → 等 500ms 或降级 Active 重载
+SLOT_STATES:
+  EMPTY    （无任务）
+    ↓ 分配 nextNode
+  LOADING  （setMediaSrc 中）
+    ↓ canplay（readyState>=2 且 currentTime 已 seek 到位）
+  READY    （可切换）
+    ↓ keySig 变化切段
+  ACTIVE   （当前播放）
+    ↓ 播放头离开
+  RETIRING （旧 active，清 src 复位）
+    ↓
+  EMPTY / 复用为新 prepare
 ```
 
-**数据来源**：`buildPlaybackGraph(Store.state.draft, Store.state.materials).videoNodes` —— 已平铺（含 startUs/srcStartUs/srcEndUs/path/key），直接按 startUs 排序找下一段。
+**调度**（播放段 N 时）：
+```
+nextNode = videoNodes 中同轨 start > N.start 的最小 start 段
+prepare 槽 = nextNode：
+  ① 若 prepare.state 不是 LOADING/READY → 进入 LOADING
+  ② setMediaSrc(prepare, nextNode.path)
+  ③ PlayerManager.seek(prepare, nextNode, nextNode.startUs)   ← 后台 seek
+  ④ 等 canplay 且 currentTime 与 _seekTarget 偏差 <50ms → READY
+  ⑤ seek 失败（canplay 超时 2.5s）→ 重置 LOADING 重试一次 → 仍失败 → 标记 STUCK（降级 Active 重载兜底）
+同素材（path 相同）→ Chromium 共享缓存，快
+不同素材 → 后台加载，切段时可能未 READY → 降级 Active 重载
+```
+
+**数据来源**：`buildPlaybackGraph(...).videoNodes`（已平铺，含 startUs/srcStartUs/srcEndUs/path/key）。
 
 ---
 
@@ -149,21 +172,22 @@ refresh() 检测 draft 变化 → 重平铺 → 预加载调度重新计算 next
 | # | 项 | 通过标准 |
 |---|----|---------|
 | V1 | 3+3 段 17s 连续播放 | 全程无"反复播开头"、无可见重载卡顿 |
-| V2 | 跨段时刻 | F12 日志：切段前 prepare 已 ready（无 seek 重置日志） |
+| V2 | 跨段时刻 | F12 日志：切段前 prepare 已 READY（无 seek 重置日志） |
 | V3 | 同素材切段 | Chromium 共享缓存，切段 <200ms 无感 |
 | V4 | 拖动 seek | 点击标尺/拖动播放头直接定位，无死循环 |
 | V5 | 播放中 AI 改时间轴 | 重平铺后预加载正确（Phase E 衔接） |
+| V6 | **连续跳剪**（v0.2 新增，GPT 建议） | 0s→20s→3s→45s→8s 反复跳转+播放，每次稳定定位（编辑器用户真实压力=拖/停/改/撤销/播放，非连续播放） |
 
 ---
 
 ## 7. 落地顺序（半天）
 
 ```
-C.5-1  previewState 双槽结构 + destroy 全清（30 分钟）
-C.5-2  renderPreview 预加载调度（nextNode 查找 + 后台 seek + ready 标记）（1 小时）
+C.5-1  previewState 双槽结构（active+prepare+state）+ destroy 全清（30 分钟）
+C.5-2  renderPreview 预加载调度（nextNode 查找 + 状态机 LOADING→READY）（1 小时）
 C.5-3  _handleCrossSegment swap 逻辑 + 降级兜底（40 分钟）
 C.5-4  拖动 seek / 间隙 / 跳转边界（30 分钟）
-C.5-5  真机验收 V1-V5（30 分钟）
+C.5-5  真机验收 V1-V6（30 分钟）
 ```
 
 每步独立 commit，中途不交付验收（避免误导）。
@@ -177,4 +201,11 @@ C.5-5  真机验收 V1-V5（30 分钟）
 | Playback Graph（playback-graph.js） | 预加载调度的数据源（videoNodes 平铺）——**复用，不改** |
 | AudioEngine（audio-engine.js） | 音频轨已 Web Audio，video 内嵌声跟 Active 元素走——**不受影响** |
 | Command 层 / MCP | 播放器内部改动，不碰写操作层 |
-| REGRESSION.md | V1-V5 落进回归基线 |
+| REGRESSION.md | V1-V6 落进回归基线 |
+
+## 9. v0.2 修订记录（GPT 审查采纳）
+
+- 命名：A/B Pool → **MediaSlotManager**（防未来被"播放器"语义限定）
+- **新增 prepare 槽状态机**（EMPTY/LOADING/READY/ACTIVE/RETIRING）——防"readyState 看起来好了下一秒掉"（本轮踩坑核心教训）
+- **新增 V6 连续跳剪验收**（编辑器用户真实压力：拖/停/改/撤销/播放）
+- 未采纳：Renderer 动态 Pool（acquire/release）——当前 1 视频轨，每轨双槽够用；动态池复杂度 3 倍，等 4 轨时升级（接口已留 MediaSlot 语义）
