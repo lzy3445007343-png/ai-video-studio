@@ -475,12 +475,12 @@ function seekActiveMediaToPlayhead(us) {
     if (h.type === "video") {
       const v = previewState.visualEls.get("video:" + h.ti);
       rec = v; el = v ? v.el.firstElementChild : null;   // video 元素在 wrap 内，firstElementChild 即 <video>
-      // Phase C-fix（2026-08-16 真机）：跨段换内容 → 销毁重建。**判断必须用内容指纹（path）而非对象引用**——
-      // 轮询刷新（0.5s）会把 draft 换成全新对象，引用比较永远不同 → 每 0.5s 重建一次 video → 画面一直卡。
-      // 同素材（path 相同，含同素材不同窗口的 split 段）→ 轻量 seek（PlayerManager.seek 内部按 src_start/src_end 换算）；
-      // 不同素材才销毁重建（清 WebView2 元素状态残留 + 修"同轨不同素材播错内容"）。
-      const needPath = resolveSegPath(h.seg);
-      if (rec && rec.el && rec.el.dataset.path && rec.el.dataset.path !== needPath) {
+      // Phase C-fix v2（2026-08-16 真机 20:33）：跨段换内容 → 销毁重建。**判断用 key（轨:段索引）而非 path/对象引用**——
+      // ①轮询刷新（0.5s）key 不变 → 不重建（修 453b631 前"每 0.5s 重建卡顿"）
+      // ②跨段 key 必变（video:0:0→video:0:1）→ 重建（**为什么同素材相邻也重建**：WebView2 同元素 seek 在播放中
+      //   不可靠——currentTime 赋值被吞，元素从 0 起播、cur 卡 ~1s 反复播，日志实锤 [seek] to=6.063 cur=1.012）
+      // ③重建后 renderPreview 增量重建新元素，canplay 时（readyState>=2）才 seek → 位置正确
+      if (rec && rec.el && rec.key !== h.key) {
         PlayerManager.destroy("video:" + h.ti);
         rec = null; el = null;
       }
