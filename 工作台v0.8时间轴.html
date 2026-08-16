@@ -67,6 +67,15 @@
   .media-list-wrapper::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
   .media-list-wrapper::-webkit-scrollbar-thumb:hover { background: var(--muted); }
   .media-list { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; padding: 8px 10px; align-content: start; }
+  /* list 模式（2026-08-16 对齐 OpenCut assets grid/list 切换）：单列紧凑，thumb 小图横向 */
+  #mediaList.view-list { grid-template-columns: 1fr; gap: 4px; padding: 6px 8px; }
+  #mediaList.view-list .media-card { display: flex; align-items: center; }
+  #mediaList.view-list .media-card .thumb { width: 52px; height: 40px; flex: none; }
+  #mediaList.view-list .media-card .name { flex: 1; padding: 0 6px; }
+  #mediaList.view-list .media-card .add { bottom: auto; top: 50%; transform: translateY(-50%); right: 26px; }
+  #mediaList.view-list .media-card .del { bottom: auto; top: 50%; transform: translateY(-50%); right: 4px; }
+  .assets .head .view-btn { background: var(--panel-2); border: 1px solid var(--border); padding: 4px 7px; font-size: 13px; border-radius: 5px; color: var(--muted); cursor: pointer; line-height: 1; }
+  .assets .head .view-btn.active { background: var(--primary-dim); border-color: var(--primary); color: var(--primary); }
   .media-card { background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px;
     overflow: hidden; cursor: grab; position: relative; }
   .media-card:active { cursor: grabbing; }
@@ -290,7 +299,7 @@
 
   <div class="main">
     <div class="assets">
-      <div class="head"><button class="btn" id="importBtn">+ 导入素材</button><button class="btn" id="importJyBtn">导入剪映</button></div>
+      <div class="head"><button class="btn" id="importBtn">+ 导入素材</button><button class="btn" id="importJyBtn">导入剪映</button><span style="flex:1"></span><button class="view-btn active" id="viewGrid" title="网格视图">⊞</button><button class="view-btn" id="viewList" title="列表视图">≡</button></div>
       <div class="tabs" id="mediaTabs">
         <div class="tab active" data-f="all">全部</div>
         <div class="tab" data-f="video">视频</div>
@@ -762,6 +771,7 @@ function renderMedia(s) {
   }
   _mediaSig = sig;
   const box = $("mediaList");
+  box.classList.toggle("view-list", Store.state.mediaView === "list");
   box.innerHTML = "";
   for (const m of list) {
     const card = document.createElement("div");
@@ -1833,6 +1843,15 @@ function bindEvents() {
       $("mediaTabs").querySelectorAll(".tab").forEach(t => t.classList.remove("active"));
       tab.classList.add("active");
       Store.set({ filter: tab.dataset.f }); // → 自动重绘素材面板
+    });
+  });
+  // 资产面板 grid/list 切换（2026-08-16 对齐 OpenCut assets.tsx mode 切换）
+  ["viewGrid", "viewList"].forEach(id => {
+    $(id).addEventListener("click", () => {
+      const v = id === "viewGrid" ? "grid" : "list";
+      Store.set({ mediaView: v });
+      ["viewGrid", "viewList"].forEach(b => $(b).classList.toggle("active", b === id));
+      renderMedia(Store.state);
     });
   });
   $("tlContent").addEventListener("mousedown", onTimelineDown);
