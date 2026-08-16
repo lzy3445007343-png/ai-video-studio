@@ -26,7 +26,12 @@ const audioCtx = (typeof AudioContext !== "undefined") ? new AudioContext() :
                  (typeof webkitAudioContext !== "undefined") ? new webkitAudioContext() : null;
 function unlockAudio() {
   if (audioCtx && audioCtx.state === "suspended") {
-    audioCtx.resume().catch(err => console.warn("[audioCtx] resume failed:", err));
+    console.log("[audioCtx] suspended → resume()");
+    audioCtx.resume().then(() => {
+      console.log("[audioCtx] resumed, state=" + audioCtx.state);
+    }).catch(err => console.warn("[audioCtx] resume failed:", err));
+  } else if (audioCtx) {
+    console.log("[audioCtx] state=" + audioCtx.state + "（无需 resume）");
   }
 }
 

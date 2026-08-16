@@ -32,6 +32,7 @@ function createAudioEngine(ctx) {
   // 绑定现有 AudioContext（复用 player.js 的 audioCtx 与手势解锁状态）
   engine.attach = function (audioCtx) {
     engine.ctx = audioCtx;
+    console.log("[AudioEngine] attach ctx=" + (audioCtx ? audioCtx.state : "null"));
   };
 
   // 全局静音（播放端专用）：toggleMute 接线时调用
@@ -69,7 +70,9 @@ function createAudioEngine(ctx) {
         const resp = await fetch(url);
         if (!resp.ok) { console.warn("[AudioEngine] fetch 失败:", path, resp.status); return null; }
         const arr = await resp.arrayBuffer();
+        console.log("[AudioEngine] decode start", path, arr.byteLength + "B");
         const buf = await engine.ctx.decodeAudioData(arr);
+        console.log("[AudioEngine] decode ok", path, buf.duration.toFixed(2) + "s");
         engine.bufferCache.set(path, buf);
         if (engine.bufferCache.size > MAX_BUFFERS) {
           const oldest = engine.bufferCache.keys().next().value;
@@ -108,6 +111,7 @@ function createAudioEngine(ctx) {
     const startCtx = engine.timelineToCtx(c.startUs);           // 到点出声（含 anchor 偏移）
     try {
       src.start(startCtx, offset, Math.max(0.001, dur));
+      console.log("[AudioEngine] start ok", c.key, "at=" + startCtx.toFixed(3), "offset=" + offset.toFixed(3), "dur=" + dur.toFixed(3), "ctxNow=" + engine.ctx.currentTime.toFixed(3), "ctxState=" + engine.ctx.state);
     } catch (e) {
       console.warn("[AudioEngine] src.start 失败:", c.key, e);
       return;
@@ -126,7 +130,10 @@ function createAudioEngine(ctx) {
       if (c._scheduled) continue;
       if ((c.gain || 0) <= 0) continue; // 静音段跳过（muted 不调度）
       const startCtx = engine.timelineToCtx(c.startUs);
-      if (startCtx >= now && startCtx < horizon) engine.schedule(c);
+      if (startCtx >= now && startCtx < horizon) {
+        console.log("[AudioEngine] tick-hit", c.key, "startCtx=" + startCtx.toFixed(3), "now=" + now.toFixed(3), "horizon=" + horizon.toFixed(3));
+        engine.schedule(c);
+      }
     }
   };
 
@@ -136,6 +143,7 @@ function createAudioEngine(ctx) {
     engine.clips = clips || [];
     if (playheadUs != null) engine.setAnchor(playheadUs); // v1.2：每次重排都重新锚定
     engine._startTicking();
+    console.log("[AudioEngine] setClips n=" + (clips || []).length + " us=" + playheadUs + " ctx=" + (engine.ctx ? engine.ctx.state : "null") + " anchor=" + engine.anchorOffset.toFixed(3));
     engine.tick(); // 立即扫一次
   };
 
