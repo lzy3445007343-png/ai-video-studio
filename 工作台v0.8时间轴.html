@@ -833,8 +833,31 @@ function renderTimecode(s) {
 function renderPreviewMaybe(s) {
   // 播放中预览由 playTick 驱动（仅在跨段换源时重建一次），轮询/其它状态变更不要重建，
   // 否则每 0.5s 重跑 renderPreview → 音频被拽回播放头 → 卡顿+反复播同段，并扰动播放头时钟
-  if (isPlaying) return;
+  if (isPlaying) { syncPreviewVolume(); return; }
   renderPreview(s);
+}
+// 播放期同步段级 volume 到现有元素（2026-08-16：渲染层一次性设的 volume 改了不重建就丢失）
+function syncPreviewVolume() {
+  const us = Store.state.playheadUs;
+  const hits = resolveHits(us);
+  const hitsByVideoTi = new Map();
+  const hitsByAudioTi = new Map();
+  for (const h of hits) {
+    if (h.type === "video" && !hitsByVideoTi.has(h.ti)) hitsByVideoTi.set(h.ti, h.seg);
+    else if (h.type === "audio" && !hitsByAudioTi.has(h.ti)) hitsByAudioTi.set(h.ti, h.seg);
+  }
+  for (const [layerKey, rec] of previewState.visualEls) {
+    const v = rec.el.firstElementChild;
+    if (!(v && v.tagName === "VIDEO")) continue;
+    const ti = +layerKey.split(":")[1];
+    const seg = hitsByVideoTi.get(ti);
+    v.volume = seg ? ((seg.volume == null ? 1 : seg.volume)) : 0;
+  }
+  for (const [layerKey, rec] of previewState.audioEls) {
+    const ti = +layerKey.split(":")[1];
+    const seg = hitsByAudioTi.get(ti);
+    rec.el.volume = seg ? ((seg.volume == null ? 1 : seg.volume)) : 0;
+  }
 }
 function renderAll(s) {
   renderMedia(s);
@@ -1012,14 +1035,23 @@ function selectKey(key) {
 function selectMaterial(uid) { Store.set({ selectedMaterialUid: uid, selectedKey: null, selectedKeys: [] }); }
 
 /* ===================== 关键帧 / 动画（对齐 OpenCut 属性面板 keyframe 轨道） ===================== */
-const KF_PATHS = [
-  ["transform.positionX", "位置 X", 10, 0],
-  ["transform.positionY", "位置 Y", 10, 0],
-  ["transform.scaleX", "缩放 X", 0.1, 1],
-  ["transform.scaleY", "缩放 Y", 0.1, 1],
-  ["transform.rotate", "旋转", 5, 0],
-  ["transform.opacity", "不透明度", 0.1, 1],
-];
+// transform 关键帧仅对视觉元素（video/image/text/sticker）有意义；audio 段没有画面位移概念
+// OpenCut 对 audio 关键帧也是 N/A（audio 用 volume slider 在 AudioTab，我们已实现）
+const KF_PATHS_BY_TYPE = {
+  video:   [["transform.positionX", "位置 X", 10, 0], ["transform.positionY", "位置 Y", 10, 0],
+            ["transform.scaleX", "缩放 X", 0.1, 1], ["transform.scaleY", "缩放 Y", 0.1, 1],
+            ["transform.rotate", "旋转", 5, 0], ["transform.opacity", "不透明度", 0.1, 1]],
+  image:   [["transform.positionX", "位置 X", 10, 0], ["transform.positionY", "位置 Y", 10, 0],
+            ["transform.scaleX", "缩放 X", 0.1, 1], ["transform.scaleY", "缩放 Y", 0.1, 1],
+            ["transform.rotate", "旋转", 5, 0], ["transform.opacity", "不透明度", 0.1, 1]],
+  sticker: [["transform.positionX", "位置 X", 10, 0], ["transform.positionY", "位置 Y", 10, 0],
+            ["transform.scaleX", "缩放 X", 0.1, 1], ["transform.scaleY", "缩放 Y", 0.1, 1],
+            ["transform.rotate", "旋转", 5, 0], ["transform.opacity", "不透明度", 0.1, 1]],
+  audio:   [],   // audio 无画面，transform 关键帧无意义（OpenCut 行为）
+  text:    [],   // 文本字段在 sub_style（字号/颜色等），不在 transform 关键帧
+};
+// 兼容旧引用（kfGraph 等）：默认 video 的 KF_PATHS
+const KF_PATHS = KF_PATHS_BY_TYPE.video;
 let selectedKf = { path: null, id: null };
 
 function round2(v) { return Math.round(v * 100) / 100; }
@@ -1068,11 +1100,13 @@ function renderKfPanel() {
   hintEl.style.display = ""; nameEl.textContent = s.name || "";
   const anims = s.animations || {};
   const local = Math.max(0, Math.min(Store.state.playheadUs - s.start, s.duration));
+  // 按 type 过滤 KF_PATHS（2026-08-16：audio/text 无 transform 概念）
+  const paths = KF_PATHS_BY_TYPE[s.type] || [];
   let html = "";
-  for (const [path, lab] of KF_PATHS) {
+  for (const [path, lab] of paths) {
     const on = !!(anims[path] && anims[path].keys && anims[path].keys.length);
     const cur = kfVal(anims, path, local);
-    const def = KF_PATHS.find(p => p[0] === path)[3];
+    const def = paths.find(p => p[0] === path)[3];
     const shown = cur == null ? def : cur;
     html += '<div class="kf-row" data-path="' + path + '">'
       + '<button class="tog' + (on ? ' on' : '') + '" data-act="tog" title="开/关该属性动画">◆</button>'
@@ -1080,6 +1114,13 @@ function renderKfPanel() {
       + '<input class="val" data-act="val" value="' + round2(shown) + '" step="0.1">'
       + '<button class="add" data-act="add" title="在播放头处添加关键帧">＋</button>'
       + '</div>';
+  }
+  // audio/text 类型无 transform 关键帧时显示引导
+  if (paths.length === 0) {
+    const tip = s.type === "audio"
+      ? "音频段不支持位移/缩放/旋转关键帧（无画面）；调音量请切到 🔊 audio tab。"
+      : "文本段的字号/颜色等字段在字幕生成面板（💬 sub tab），不在 transform 关键帧里。";
+    html = '<div style="padding:16px 8px;font-size:11px;color:var(--muted);text-align:center;line-height:1.6">' + tip + '</div>';
   }
   rowsEl.innerHTML = html;
   rowsEl.querySelectorAll(".kf-row").forEach(row => {
