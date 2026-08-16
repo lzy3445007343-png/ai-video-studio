@@ -1,7 +1,7 @@
 # 播放器根治 · 捆绑版实施方案（Playback Graph 原子切换包）
 
-> 版本：**v1.2 二审修正版**（2026-08-16，经两轮独立 Agent 代码级审查）
-> 依据：OpenCut 三份源码全扒 + 我们现状三链代码级侦察 + 独立审查报告（一审 agent-c32a318f / 二审 agent-c9f38739）
+> 版本：**v1.3 三审修正版**（2026-08-16，经三轮独立 Agent 代码级审查）
+> 依据：OpenCut 三份源码全扒 + 我们现状三链代码级侦察 + 独立审查报告（一审 agent-c32a318f / 二审 agent-c9f38739 / 三审"小扭扭"）
 > 定位：**不是补丁，是把"同一份时间轴数据被多套逻辑各自算"收成"一套语义层 + 所有消费方同步切换"**。中途状态必然不一致，所以 6 件必须同批改完，统一验收。
 >
 > **v1.1 修正记录**（一审打脸 → 已修）：
@@ -16,7 +16,13 @@
 > 7. ❌→✅ **R5 CORS 是误诊（二审推翻）**：页面本身走本地 HTTP 加载（main.py:3908 url=HTTP_URL，origin=http://127.0.0.1:PORT），与媒体服务器**同源**，fetch 不会被 CORS 拦截。v1.1 的 §4.2 CORS 前置**撤销**——无需 ACAO 头；仅当未来改用 file:// 打开页面时才需要
 > 8. 🆕 **S2-1 §4.2 伪代码 bug**：`schedule()` 内 `await` 但函数非 async → SyntaxError，照抄即崩；已改 `async schedule(c)`
 > 9. 🆕 **S2-2 §4.2 时钟基准缺陷（二审最实质发现）**：tick 用 `ctx.currentTime`（AudioContext 创建以来的绝对秒）与时间轴秒（startUs/1e6）直接比较，基准不一致——seek 后 MP3 会不响/错位响。已设计 anchor 偏移换算（§4.2）
-> 10. 🆕 **S1 §5.1 收敛边界补全**：startPlay 起播（player.js:356）是第三条建元素触发点；previewState key 是轨级（"video:0"）非段级——destroy 按轨 key 删元素后跨段重建，与 mediaClockReady/crossSegmentPending 状态机衔接需显式处理
+> 10. 🆕 **S1 §5.1 收敛边界补全**：startPlay 起播（player.js:342）是第三条建元素触发点；previewState key 是轨级（"video:0"）非段级——destroy 按轨 key 删元素后跨段重建，与 mediaClockReady/crossSegmentPending 状态机衔接需显式处理
+>
+> **v1.3 修正记录**（三审"小扭扭"打脸 → 已修）：
+> 11. 🔴 **§3.4 resolveGain 拆两层（三审问题 2，唯一会直接导致导出声错的逻辑 bug）**：`resolveGain` 原签名把 `previewMuted` 塞进统一公式——但导出端（Phase D）根本没有 previewMuted 概念（export_draft main.py:3382 只判 `track_muted or seg.muted`，导出正确不受预览静音影响）。若导出吃"含 previewMuted 的 gain"→ 预览静音时导出也静音（错）。**已拆**：`resolveGain(trackMuted, segMuted, segVolume)` 为两端共享（不含 previewMuted）；previewMuted 只在 JS 播放端叠加（`finalGain = previewMuted ? 0 : resolveGain(...)`）
+> 12. 🟠 **§6 Phase D 工期与对象链（三审问题 3）**：关键帧/遮罩绑定在同一 vseg 对象（main.py:3388-3398 VideoSegment 一体建）——改吃平铺后对象构建链要整体重排，非"只换参数来源"。工期 0.5 天 → **1 天**
+> 13. 🟠 **§7 Phase E 与 Phase C 衔接（三审问题 4）**：播放中视频重建走 Phase C 的 destroy 路径 + 复用"重建中禁止再次触发跨段"锁（§5.1），方案原未写清
+> 14. ⚠️ **行号核对（三审问题 1，部分成立）**：现查 v0.9 源码——大部分引用行号准确（audioCtx 25 / resolveHits 40 / _handleCrossSegment 475 / playTick 500 / seekActiveMediaToPlayhead 419 / destroy 39 / handleCrossSegment 494 / renderer setMediaSrc 46+232 / export_draft 3377-3387 / renderPreviewMaybe 837 / renderAll 866 / refresh 2316），**仅 startPlay 漂移：实际 342（方案曾写 347）**。已修正为 342。结论：文档行号基本可信，但落地时仍以 grep 现查为准
 
 ---
 
@@ -106,7 +112,7 @@ function buildPlaybackGraph(draft) {
   startUs, durationUs,       // 时间轴位置
   srcStartUs, srcEndUs,      // 源窗口（兼容兜底后）
   speed,                     // 变速（default 1）；⚠️ v1.1：预览端目前不变速（无 playbackRate），B 落地后本字段才在预览生效；导出端立即生效
-  gain,                      // 统一音量解析结果（0~2）
+  gain,                      // 统一音量解析结果（0~2）；⚠️ v1.3：= resolveGain(...) **不含 previewMuted**（预览静音在播放端叠加，导出端不受影响）
   path,                      // resolveSegPath 结果（失效返回 null → 跳过）
 }
 
@@ -135,18 +141,25 @@ function buildPlaybackGraph(draft) {
 | muted | 缺 → false |
 | material_id | 缺 → 用 path 直接引用（resolveSegPath 已有 fallback） |
 
-### 3.4 统一音量解析 resolveGain（三层收敛成一个函数）
+### 3.4 统一音量解析 resolveGain（三层收敛成一个函数）—— ⚠️ v1.3：拆两层，previewMuted 只在播放端叠加
+
+**v1.3 关键修正（三审问题 2）**：previewMuted（全局预览静音）是**预览专用**概念，导出端（export_draft main.py:3382）正确只判 `track_muted or seg.muted`——导出不该受预览静音影响。因此 resolveGain **不能**把 previewMuted 塞进两端共享公式，拆两层：
 
 ```js
-// 规范：全局静音 > 轨静音 > 段静音 > 段音量
-function resolveGain(previewMuted, trackMuted, segMuted, segVolume) {
-  if (previewMuted) return 0;
+// 第一层：两端共享（播放 + 导出都用）——不含 previewMuted
+function resolveGain(trackMuted, segMuted, segVolume) {
   if (trackMuted) return 0;
   if (segMuted) return 0;
   return segVolume == null ? 1 : segVolume;
 }
+// 第二层：仅 JS 播放端叠加全局预览静音
+function finalPlaybackGain(previewMuted, trackMuted, segMuted, segVolume) {
+  if (previewMuted) return 0;
+  return resolveGain(trackMuted, segMuted, segVolume);
+}
 ```
 
+> 用法：`clip.gain` = `resolveGain(...)`（两端一致，导出直接吃）；播放端消费时再乘 previewMuted（`AudioEngine.schedule` 里 `g.gain.value = previewMuted ? 0 : clip.gain`）。
 > OpenCut 用 dB 制（audio-state.ts resolveEffectiveAudioGain）；我们保持线性（volume 0~2，剪映也是线性 volume）——**两端用同一公式即可，不必迁 dB**。
 
 ### 3.5 平铺换算（唯一换算点，替代散落逻辑）
@@ -156,7 +169,7 @@ function resolveGain(previewMuted, trackMuted, segMuted, segVolume) {
   srcStartUs' = src_start（兜底 0）
   srcEndUs'   = src_end（兜底 src_start+duration）
   speed'      = speed（兜底 1）
-  gain'       = resolveGain(...)
+  gain'       = resolveGain(trackMuted, segMuted, segVolume)   // v1.3：不含 previewMuted（播放端另叠）
   path'       = 素材解析（失效 → 该段平铺为 null，播放跳过 + 控制台警告）
 ```
 
@@ -218,7 +231,7 @@ const AudioEngine = {
     src.buffer = buf;
     src.playbackRate.value = c.speed;             // 变速（音调随变；change_pitch 后置）
     const g = ctx.createGain();
-    g.gain.value = c.gain;
+    g.gain.value = previewMuted ? 0 : c.gain;   // v1.3：previewMuted 只在播放端叠加（clip.gain 不含它）
     src.connect(g).connect(ctx.destination);
     const offset = c.srcStartUs / 1e6;            // 源窗口起点（buffer 内偏移，与 ctx 无关）
     const startCtx = this.timelineToCtx(c.startUs); // v1.2：到点出声（含 anchor 偏移）
@@ -261,7 +274,7 @@ const AudioEngine = {
 Phase C 落地时，把三条路径合并成单一策略：
   ① renderPreview（renderer.js:46/232 的 setMediaSrc 点）—— 非播放期建元素
   ② seekActiveMediaToPlayhead（player.js 复用纪律）—— 播放期跨段
-  ③ startPlay 起播（player.js:356 调 renderPreview）—— 起播建元素（v1.2 补：一审只列了 ① ②，第三条触发点漏了）
+  ③ startPlay 起播（player.js:342 调 renderPreview）—— 起播建元素（v1.2 补：一审只列了 ① ②，第三条触发点漏了；v1.3 行号核实：342 非 356）
 → 统一为：元素只属于"一个段"，段变化 = 销毁旧 + 建新（含 setMediaSrc）
 → 绝不存在"换 src 路径"与"不换 src 路径"并存
 ```
@@ -317,13 +330,14 @@ def _playback_graph(draft):
     # 内建：兼容兜底（§3.3）+ resolveGain（§3.4）+ 素材解析（resolveSegPath 的 Python 对应）
 ```
 
-### 6.2 export_draft 改吃它
+### 6.2 export_draft 改吃它 —— ⚠️ v1.3：不是"只换参数来源"，是对象构建链重排
 
-- `export_draft`（L3262）里视频/音频段映射（L3390/L3410）**不再自己拼换算**，改为遍历 `_playback_graph(self.draft)` 的平铺结果：
+- `export_draft`（main.py L3262）里视频/音频段映射（L3377-3387 / L3413-3421）**不再自己拼换算**，改为遍历 `_playback_graph(self.draft)` 的平铺结果：
   - `start/duration` → `Timerange(clip.startUs, clip.durationUs)`
   - `source_timerange` → `Timerange(clip.srcStartUs, clip.srcEndUs - clip.srcStartUs)`
-  - `volume` → `clip.gain`；`speed` → `clip.speed`
-  - 关键帧/遮罩仍走原有 `_seg_anims/_seg_masks`（这些不动，只换时间/音量/变速来源）
+  - `volume` → `clip.gain`（⚠️ v1.3：clip.gain 不含 previewMuted，导出天然正确）；`speed` → `clip.speed`
+  - 关键帧/遮罩仍走 `_seg_anims/_seg_masks`
+- **v1.3 修正（三审问题 3）**：当前导出循环里 VideoSegment 是一体建的（main.py:3388-3398：`vseg = VideoSegment(path, t, **kwargs)` → `_apply_keyframes_to_segment(vseg,...)` → `_apply_mask_to_segment(vseg,...)`），关键帧/遮罩**绑定在同一个 vseg 对象**上。改吃 graph 平铺后，循环结构要从"遍历 self.draft[track]"改成"遍历 graph 的节点列表"，对象构建链整体重排（vseg 的构造参数来源、关键帧/遮罩的挂载时机都要动）——**工期按 1 天估，不是 0.5 天**
 - 保留现有 skipped 容错逻辑（重叠跳过等）
 
 ### 6.3 解决什么问题
@@ -339,7 +353,7 @@ def _playback_graph(draft):
 
 播放时 `renderTimeline` 冻结 + `renderPreviewMaybe` 播放期 return（防撕裂），但 **AI 在播放中改 draft → 轮询刷新被冻结 → 播的还是旧时间轴**（"AI 放的对，我看的错"的机制之一）。
 
-### 7.2 改法
+### 7.2 改法 —— ⚠️ v1.3：与 Phase C 的衔接写清（三审问题 4）
 
 ```
 refresh()（HTML L2316 附近）：
@@ -350,6 +364,8 @@ refresh()（HTML L2316 附近）：
     视频节点 diff → 增删重建对应元素         // 不中断播放头墙钟
   若变化 且 !isPlaying：走现有 renderAll（时间轴+预览刷新）
 ```
+
+**v1.3 衔接规则（三审问题 4）**：Phase E 的视频重建**必须走 Phase C 的 destroy 路径**（同一套销毁→建新逻辑），并**复用 §5.1 的"重建中禁止再次触发跨段"锁**（crossSegmentPending / mediaClockReady 覆盖重建期）——否则 Phase E 的"播放中 diff 重建"和 Phase C 的"跨段重建"会同时操作 previewState，造成两套时序互踩。一句话：**Phase E 只负责"发现变化 + 触发重平铺"，元素操作全部委托 Phase C 的机制**。
 
 - 时间轴 DOM 仍冻结（防撕裂）——但**播放内容**实时反映 AI 修改
 - 播放头墙钟不动（master 纪律不变）
@@ -384,6 +400,8 @@ refresh()（HTML L2316 附近）：
   E. 轮询重平铺（播放中修改）
   F. 缩略图补缺（只修 material_id 场景，不重复实现）
 验收：V1~V6 统一跑（不中途验收 —— 中途状态必然不一致，会误导）；V2 依赖 B/C 先落地
+
+**v1.3 补充（三审弱逻辑提醒）**：A 阶段**本质不可独立验收**——对拍全绿只能证明"JS 平铺 == Python 平铺"（结构一致），证明不了"播放正确"（预览不变速是现状缺口）。因此 A 的验收标准 = **结构对拍一致 + 静态走查**（字段表逐项核对），V2 真机验证整体后置到 B/C 落地后。落地 A 后**不要误以为已经搞定播放器**。
 ```
 
 ### 9.2 风险与缓解（v1.1 新增 3 行 ⚠️）
@@ -400,18 +418,19 @@ refresh()（HTML L2316 附近）：
 | ⚠️ **AudioEngine 时钟基准**（二审发现，最实质） | setAnchor 锚定偏移（§4.2 timelineToCtx），每次 setClips/seek 重新锚定 |
 | ⚠️ **"换 src/不换 src"两套纪律并存**（一审发现） | Phase C 一次收敛成单一策略（§5.1，含 startPlay 第三条触发点 + 轨级 key 映射 + 重建期防振荡） |
 | ⚠️ **假对拍**：A 单独落地时对拍全绿但预览不变速（一审发现） | speed 字段标注"预览端待 B 接管"；V2 验收排在 B/C 后（§0 已标依赖） |
+| ⚠️ **resolveGain 污染导出端**（三审发现，唯一会导出声错的逻辑 bug） | v1.3 已拆两层：clip.gain 不含 previewMuted，导出直接吃；previewMuted 播放端叠加（§3.4） |
 
 ### 9.3 工期（诚实估计）
 
 | Phase | 工期 |
 |-------|------|
-| A 语义层（两端+对拍） | 0.5-1 天 |
+| A 语义层（两端+对拍） | 0.5-1 天（验收=结构对拍+静态走查，非真机） |
 | B 音频引擎 | 1 天 |
 | C 视频重建 | 0.5 天 |
-| D 导出切换 | 0.5 天 |
+| D 导出切换 | **1 天**（v1.3：对象构建链整体重排，非 0.5） |
 | E 播放中修改 | 0.5 天 |
 | F 缩略图 | 0.5h |
-| **合计** | **2-3 天** |
+| **合计** | **2.5-3.5 天** |
 
 ---
 
