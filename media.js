@@ -443,11 +443,8 @@ const PlayerManager = {
         setMediaMute(v, previewMuted || trackMuted, "render-preview", layerKey);
       }
     }
-    for (const rec of previewState.audioEls.values()) {
-      const layerKey = rec.key || "";
-      const ti = parseInt(layerKey.split(":")[1], 10) || 0;
-      setMediaMute(rec.el, previewMuted || isTrackMuted("audio", ti), "render-preview", layerKey);
-    }
+    // Phase C-2：audioEls 已空（audio 轨交给 AudioEngine），旧循环跳过；改为同步 AudioEngine 全局静音
+    try { AudioEngine.setGlobalMuted(previewMuted); } catch (e) {}
     updateMuteBtn();
   },
   // 兼容壳阶段代理名（无外部调用，仅保底）

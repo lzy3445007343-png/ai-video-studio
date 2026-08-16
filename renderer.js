@@ -211,49 +211,15 @@ function renderPreview(s) {
     if (!activeStickerKeys.has(layerKey)) rec.el.style.display = "none";
   }
 
-  // 音频层：命中就维护 audio 元素；播放/暂停在 startPlay/pausePlay/playTick 外统一控制
-  // 同样跳过无本地 path 的占位段，避免空 src 错误
-  // 静音的 audio 轨在预览中不发声（OpenCut AudioManager.scheduleUpcomingClips 里 clip.muted 则 continue）
+  // 音频层（Phase C-2，2026-08-16）：audio 轨发声交给 AudioEngine（Web Audio），不再维护 <audio> 元素。
+  // 声音调度完全由 AudioEngine.setClips(audioClips, playheadUs) 负责（startPlay/seek 时喂入）。
+  // 保留 audioHits 计算仅用于"是否有音频命中"的语义判断（后续可做 audio 轨波形高亮），元素不再创建。
   const audioHits = hits.filter(h => h.type === "audio" && resolveSegPath(h.seg) && !isTrackMuted(h.type, h.ti) && !h.seg.muted);
-  const activeAudioKeys = new Set();
-  for (const h of audioHits) {
-    const layerKey = "audio:" + h.ti;
-    activeAudioKeys.add(layerKey);
-    let rec = previewState.audioEls.get(layerKey);
-    if (!rec) {
-      const a = PlayerManager.create("audio", $("audioPool"), layerKey);
-      setMediaMute(a, previewMuted, "pool-create", layerKey);
-      a.volume = (h.seg.volume == null ? 1 : h.seg.volume);   // 段级音量（2026-08-16）
-      rec = { el: a, key: layerKey };
-      previewState.audioEls.set(layerKey, rec);
-    }
-    const src = fileURL(resolveSegPath(h.seg));
-    if (rec.el.src !== src) {
-      setMediaSrc(rec.el, src, "render-audio", layerKey);
-      rec.el.dataset.pendingSeek = "1";
-      rec.el._pendingSeg = h.seg;
-      rec.el.oncanplay = () => {
-        if (rec.el.dataset.pendingSeek) {
-          PlayerManager.seek(rec.el, h.seg, Store.state.playheadUs);
-          rec.el.dataset.pendingSeek = "";
-        }
-        // play() 交给 playAllMedia()，避免异步无手势被 autoplay 拒绝
-      };
-    } else {
-      PlayerManager.seek(rec.el, h.seg, us);
-      if (isPlaying) rec.el.onseeked = () => { mediaClockReady = true; };
-    }
-    rec.key = h.key;
-    rec.seg = h.seg;
+  // Phase C-2：清理旧元素（老存档/旧逻辑建的 audio 元素一次性清空；之后 audioEls 保持为空，由 AudioEngine 接管）
+  if (previewState.audioEls.size > 0) {
+    for (const key of [...previewState.audioEls.keys()]) PlayerManager.destroy(key);
   }
-  // 未命中的音频暂停即可，不要 removeAttribute("src")+load()：load() 会 abort 正在进行中的 play()
-  // promise，导致播放末尾/切换片段/拖动 zoom 时频繁报 AbortError。保留 src 也便于同轨下一段复用元素。
-  for (const [layerKey, rec] of previewState.audioEls) {
-    if (!activeAudioKeys.has(layerKey)) {
-      rec.el.pause();
-      setMediaMute(rec.el, true, "release-mute", layerKey); // 避免暂停后残留声音；下次命中时 playAllMedia/PlayerManager.seek 会恢复正确 muted 状态
-    }
-  }
+  void audioHits;
 
   // 占位显隐
   ph.style.display = hasVisual ? "none" : "";

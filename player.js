@@ -354,6 +354,13 @@ async function startPlay() {
   $("playBtn").textContent = "⏸";
   lastHitSig = resolveHits(Store.state.playheadUs).map(h => h.key).join("|");
   renderPreview();            // 立即更新元素（新素材可能刚设置 src，还未加载完）
+  // Phase C-2（2026-08-16）：audio 轨交给 AudioEngine（Web Audio）——起播前喂平铺 clip 列表 + 锚定时钟。
+  // 调度是 lookahead 式的，到点自动出声；这里 attach 复用 audioCtx（手势解锁状态）并立即扫一次。
+  try {
+    AudioEngine.attach(audioCtx);
+    AudioEngine.setGlobalMuted(previewMuted);
+    AudioEngine.setClips(buildPlaybackGraph(Store.state.draft, Store.state.materials).audioClips, Store.state.playheadUs);
+  } catch (e) { console.warn("[AudioEngine] startPlay 接线失败:", e); }
   const hits = resolveHits(Store.state.playheadUs);
   // 止血（B.5.5-STAB，2026-08-15 拍板）：Timeline Clock 是 master，绝不被媒体 await 阻塞。
   // 原实现 3 个 await 屏障（primeMediaPlayback / _waitMediaReady 最长5s / _waitSeekSettled 最长5s）
@@ -367,7 +374,11 @@ async function startPlay() {
   playAllMedia();
   playTick();
 }
-function pausePlay() { return PlayerManager.pause(); }
+function pausePlay() {
+  // Phase C-2：AudioEngine 清场（stopAll 已调度源 + 停轮询）；video 元素由 PlayerManager.pause 处理
+  try { AudioEngine.pause(); } catch (e) {}
+  return PlayerManager.pause();
+}
 function toggleMute() { return PlayerManager.setGlobalMute(); }
 function playAllMedia(reason) { return PlayerManager.play(reason || _PLAY_REASON.START); }
 // Round E②：drift 检测辅助（替代原 _dominantMediaUs 的“媒体当 master”角色）。
@@ -442,6 +453,9 @@ function seekActiveMediaToPlayhead(us) {
   let allReady = true;
   for (const h of hits) {
     if (h.type !== "video" && h.type !== "audio") continue;
+    // Phase C-2：audio 轨交给 AudioEngine（lookahead 自动调度），不参与元素 seek 路径。
+    // audioEls 已清空，若不跳过会导致 el=null → allReady=false → 每次 seek 都触发 renderPreview 重建。
+    if (h.type === "audio") continue;
     let el = null, rec = null;
     if (h.type === "video") {
       const v = previewState.visualEls.get("video:" + h.ti);
@@ -472,6 +486,10 @@ function seekActiveMediaToPlayhead(us) {
     renderPreview();   // 安全降级：仅缺失元素重建一次，不破坏媒体生命周期纪律
     setTimeout(() => { previewState.isRepairing = false; }, 120);
   }
+  // Phase C-2：seek 后重排 AudioEngine 调度（拖动/跨段/起播后音频基准已变，重新锚定 + 重扫）
+  try {
+    AudioEngine.setClips(buildPlaybackGraph(Store.state.draft, Store.state.materials).audioClips, us);
+  } catch (e) { console.warn("[AudioEngine] seek 重排失败:", e); }
   return seeked;   // Round D：调用方凭此 await 屏障，确保 seek 完成后再 playAllMedia()
 }
 
