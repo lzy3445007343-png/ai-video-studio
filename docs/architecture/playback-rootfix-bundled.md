@@ -1,16 +1,22 @@
 # 播放器根治 · 捆绑版实施方案（Playback Graph 原子切换包）
 
-> 版本：**v1.1 审查修正版**（2026-08-16，经独立 Agent 代码级审查后修正）
-> 依据：OpenCut 三份源码全扒（audio-manager.ts / scene-builder.ts / audio-state.ts / media/audio.ts collectAudioClips）+ 我们现状三链代码级侦察 + **独立审查报告（agent-c32a318f，逐项代码证据）**
+> 版本：**v1.2 二审修正版**（2026-08-16，经两轮独立 Agent 代码级审查）
+> 依据：OpenCut 三份源码全扒 + 我们现状三链代码级侦察 + 独立审查报告（一审 agent-c32a318f / 二审 agent-c9f38739）
 > 定位：**不是补丁，是把"同一份时间轴数据被多套逻辑各自算"收成"一套语义层 + 所有消费方同步切换"**。中途状态必然不一致，所以 6 件必须同批改完，统一验收。
 >
-> **v1.1 修正记录**（审查打脸 → 已修）：
+> **v1.1 修正记录**（一审打脸 → 已修）：
 > 1. ❌→✅ §1.1：跨段**不是** setMediaSrc+seek+play，是**同元素只 seek+play、src 恒定**（player.js:416-417 明令"绝不复建/改 src"）——"不换 src"是现有纪律，Phase C 将其翻转，两套纪律必须一次收敛（§5.1）
 > 2. ❌→✅ §1.2：导出**就是在自己算第二套换算**（不是"读字段"）——对拍 diff 面比 v1.0 预估大
 > 3. 🆕 §1.1：**预览播放从不变速**（全项目无 playbackRate）——speed 只影响 UI 面板+导出；V2 验收实质依赖 B 落地
 > 4. ❌→✅ §1.4：缩略图**前端已实现**（timeline.js:130-139 background-image 瓦片）——Phase F 改为只修 material_id 缺口，不重复实现
 > 5. 🆕 §4.2：Phase B 前置 **CORS 坑**——本地服务器 main.py:69-93 无 ACAO 头，fetch decodeAudioData 会被拦截，先加头
 > 6. ✅ 修正：destroy() 实际在 media.js:38-41（非 L67），且 pool 是死代码（grep 无任何调用）
+>
+> **v1.2 修正记录**（二审打脸 → 已修）：
+> 7. ❌→✅ **R5 CORS 是误诊（二审推翻）**：页面本身走本地 HTTP 加载（main.py:3908 url=HTTP_URL，origin=http://127.0.0.1:PORT），与媒体服务器**同源**，fetch 不会被 CORS 拦截。v1.1 的 §4.2 CORS 前置**撤销**——无需 ACAO 头；仅当未来改用 file:// 打开页面时才需要
+> 8. 🆕 **S2-1 §4.2 伪代码 bug**：`schedule()` 内 `await` 但函数非 async → SyntaxError，照抄即崩；已改 `async schedule(c)`
+> 9. 🆕 **S2-2 §4.2 时钟基准缺陷（二审最实质发现）**：tick 用 `ctx.currentTime`（AudioContext 创建以来的绝对秒）与时间轴秒（startUs/1e6）直接比较，基准不一致——seek 后 MP3 会不响/错位响。已设计 anchor 偏移换算（§4.2）
+> 10. 🆕 **S1 §5.1 收敛边界补全**：startPlay 起播（player.js:356）是第三条建元素触发点；previewState key 是轨级（"video:0"）非段级——destroy 按轨 key 删元素后跨段重建，与 mediaClockReady/crossSegmentPending 状态机衔接需显式处理
 
 ---
 
@@ -169,7 +175,9 @@ function resolveGain(previewMuted, trackMuted, segMuted, segVolume) {
 
 ### 4.2 引擎结构（对齐 OpenCut audio-manager.ts）
 
-> ⚠️ **v1.1 前置条件（审查发现）：CORS 坑** —— decodeAudioData 需要 `fetch` 媒体文件。当前本地服务器 `main.py:69-93` 是 `SimpleHTTPRequestHandler`，**无 `Access-Control-Allow-Origin` 头**，而页面是 file://（origin=null）→ fetch http://127.0.0.1 会被 CORS 拦截。**B 落码第一步：给本地服务器加 ACAO 头**（`send_response` 后 `send_header("Access-Control-Allow-Origin", "*")`）。若加头后 WebView2 仍拦，备选：走 pywebview 桥传 ArrayBuffer。
+> ✅ **v1.2 修正（二审推翻 v1.1 的 CORS 误诊）**：页面经本地 HTTP 加载（main.py:3908 url=HTTP_URL，origin=http://127.0.0.1:PORT），与媒体服务器**同源**——fetch decodeAudioData **不会被 CORS 拦截，无需 ACAO 头**。仅当未来改用 file:// 打开页面时才需要加 `Access-Control-Allow-Origin`。此条从 v1.1 的"前置条件"降级为"备忘"。
+
+> ⚠️ **v1.2 时钟基准设计（二审 S2-2，B 落地必读）**：`ctx.currentTime` 是 AudioContext 创建以来的绝对秒（player.js:25 页面加载即建），与时间轴坐标秒（startUs/1e6）**基准不一致**——直接比较会导致 seek 后 MP3 不响/错位响。必须在 `setClips` 时锚定偏移：
 
 ```js
 const AudioEngine = {
@@ -177,24 +185,33 @@ const AudioEngine = {
   bufferCache: new Map(),    // path → AudioBuffer（LRU，上限 8 个素材，超限逐出最久未用）
   scheduled: new Set(),      // 已调度 BufferSourceNode
   clips: [],                 // 当前 graph.audioClips 快照
+  anchorOffset: 0,           // v1.2：ctx 秒 ↔ 时间轴秒 的偏移换算锚点
 
-  async setClips(clips) {          // 平铺结果喂进来（播放前 / 播放中重平铺 / seek 后）
-    this.stopAll();                // 清掉已调度 source
-    this.clips = clips;
-    this.tick();                   // 立即扫一次
+  // v1.2：锚定。playheadUs 为当前播放头（时间轴坐标）。
+  // 原则：时间轴秒 T 对应的 ctx 时刻 = T + anchorOffset（由本次 setClips 时的播放头位置决定）
+  setAnchor(playheadUs) {
+    this.anchorOffset = this.ctx.currentTime - playheadUs / 1e6;
   },
-  async tick() {                   // 每 500ms 扫未来 2s（setInterval 驱动）
-    const now = ctx.currentTime;   // 墙钟（音频时钟，与播放头墙钟独立）
+  timelineToCtx(us) { return us / 1e6 + this.anchorOffset; },
+
+  async setClips(clips, playheadUs) {      // 平铺结果喂进来（播放前 / 播放中重平铺 / seek 后）
+    this.stopAll();                        // 清掉已调度 source
+    this.setAnchor(playheadUs);            // v1.2：每次重排都重新锚定（seek 后基准才正确）
+    this.clips = clips;
+    this.tick();                           // 立即扫一次
+  },
+  async tick() {                           // 每 500ms 扫未来 2s（setInterval 驱动）
+    const now = ctx.currentTime;           // ctx 绝对时钟
     const horizon = now + 2.0;
     for (const c of this.clips) {
       if (c.scheduled) continue;
-      const clipStartCtx = c.startUs / 1e6;      // 时间轴秒 → ctx 秒
+      const clipStartCtx = this.timelineToCtx(c.startUs);   // v1.2：时间轴秒 → ctx 秒（含偏移）
       if (clipStartCtx >= now && clipStartCtx < horizon && c.gain > 0) {
         this.schedule(c);
       }
     }
   },
-  schedule(c) {
+  async schedule(c) {                      // v1.2：补 async（原伪代码漏了，SyntaxError）
     const buf = await this._decode(c.path);       // decodeAudioData，带缓存
     if (!buf) return;                             // 解码失败：跳过该段，控制台警告
     const src = ctx.createBufferSource();
@@ -203,8 +220,8 @@ const AudioEngine = {
     const g = ctx.createGain();
     g.gain.value = c.gain;
     src.connect(g).connect(ctx.destination);
-    const offset = c.srcStartUs / 1e6;            // 源窗口起点
-    const startCtx = c.startUs / 1e6;             // 到点出声
+    const offset = c.srcStartUs / 1e6;            // 源窗口起点（buffer 内偏移，与 ctx 无关）
+    const startCtx = this.timelineToCtx(c.startUs); // v1.2：到点出声（含 anchor 偏移）
     src.start(startCtx, offset, (c.srcEndUs - c.srcStartUs) / 1e6 / c.speed);
     this.scheduled.add(src);
     src.onended = () => this.scheduled.delete(src);
@@ -220,9 +237,9 @@ const AudioEngine = {
 
 | 位置 | 改法 |
 |------|------|
-| `startPlay()`（L347） | 播放前：`AudioEngine.setClips(graph.audioClips)` |
+| `startPlay()`（L347） | 播放前：`AudioEngine.setClips(graph.audioClips, Store.state.playheadUs)`（v1.2：带播放头锚定偏移） |
 | `pausePlay()` | `AudioEngine.stopAll()` |
-| `seekActiveMediaToPlayhead`（L419） | seek 后：`AudioEngine.setClips(graph.audioClips)`（重排调度） |
+| `seekActiveMediaToPlayhead`（L419） | seek 后：`AudioEngine.setClips(graph.audioClips, 新播放头)`（重排调度 + 重新锚定） |
 | `playTick` 跨段分支（L541） | 不再操作 audio 元素；`keySig` 变化仅重排 video 元素（Phase C） |
 
 ### 4.4 解决什么问题
@@ -241,12 +258,17 @@ const AudioEngine = {
 
 **收敛要求（避免比现状更糟）**：
 ```
-Phase C 落地时，把两条路径合并成单一策略：
+Phase C 落地时，把三条路径合并成单一策略：
   ① renderPreview（renderer.js:46/232 的 setMediaSrc 点）—— 非播放期建元素
   ② seekActiveMediaToPlayhead（player.js 复用纪律）—— 播放期跨段
+  ③ startPlay 起播（player.js:356 调 renderPreview）—— 起播建元素（v1.2 补：一审只列了 ① ②，第三条触发点漏了）
 → 统一为：元素只属于"一个段"，段变化 = 销毁旧 + 建新（含 setMediaSrc）
 → 绝不存在"换 src 路径"与"不换 src 路径"并存
 ```
+
+> ⚠️ **v1.2 收敛边界补全（二审 S1）**：
+> - **key 是轨级不是段级**：previewState.visualEls/audioEls 的 key 形如 `"video:0"`（轨级），不是 `"video:0:0"`（段级）。destroy 按轨 key 删元素后，同轨下一段跨段需重建——**"轨级 key ↔ 段级元素"的映射必须在 C 落地时显式定义**（方案：destroy 后由跨段路径立即建新元素，key 保持轨级，元素引用刷新）
+> - **重建与状态机衔接**：`_handleCrossSegment` 依赖 `mediaClockReady`/`crossSegmentPending`（player.js:481-497）。销毁重建会让新元素经过 loading→canplay→playing，800ms mediaClockReady 回退窗口（playTick D 分支）要覆盖这段重建期，否则重建期间播放头提前走到下一段又触发一次重建（振荡）。C 落地时显式处理"重建中禁止再次触发跨段"
 
 现状：`PlayerManager.destroy()` 是 TODO 空壳（media.js:38-41）——补实现（注意 pool 是死代码，元素实际在 previewState 里，destroy 要按 key 从 previewState 找元素）：
 
@@ -374,9 +396,10 @@ refresh()（HTML L2316 附近）：
 | 视频重建瞬间闪 | 旧元素最后一帧 + opacity 过渡遮闪（0.15s） |
 | 两端平铺不一致 | 对拍脚本进 tools/，每次改字段必跑 |
 | 音频变速音调 | change_pitch（保调）后置：先保证变速时长/节奏对 |
-| ⚠️ **CORS 拦截 fetch 解码**（审查发现） | B 落码第一步给本地服务器加 ACAO 头（main.py:69-93） |
-| ⚠️ **"换 src/不换 src"两套纪律并存**（审查发现） | Phase C 一次收敛成单一策略（§5.1），绝不留两套路径 |
-| ⚠️ **假对拍**：A 单独落地时对拍全绿但预览不变速（审查发现） | speed 字段标注"预览端待 B 接管"；V2 验收排在 B/C 后（§0 已标依赖） |
+| ⚠️ **CORS 拦截 fetch 解码**（一审提出、**二审推翻=误诊，v1.2 撤销**） | 页面经本地 HTTP 同源加载（main.py:3908），无需 ACAO；仅当未来 file:// 打开页面才需要加头 |
+| ⚠️ **AudioEngine 时钟基准**（二审发现，最实质） | setAnchor 锚定偏移（§4.2 timelineToCtx），每次 setClips/seek 重新锚定 |
+| ⚠️ **"换 src/不换 src"两套纪律并存**（一审发现） | Phase C 一次收敛成单一策略（§5.1，含 startPlay 第三条触发点 + 轨级 key 映射 + 重建期防振荡） |
+| ⚠️ **假对拍**：A 单独落地时对拍全绿但预览不变速（一审发现） | speed 字段标注"预览端待 B 接管"；V2 验收排在 B/C 后（§0 已标依赖） |
 
 ### 9.3 工期（诚实估计）
 
