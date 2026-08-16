@@ -2102,6 +2102,29 @@ class Api:
         save_state(self.state)
         return {"ok": True, "muted": m["muted"]}
 
+    def set_segment_flag(self, track_type, track_index, index, flag, value):
+        """段级静音/隐藏（OpenCut: toggle-elements-muted-selected / visibility-selected）。
+
+        flag ∈ muted（静音：视频内嵌音频/音频段不出声）/ hidden（隐藏：画面不渲染）。
+        value 为布尔。影响预览（renderer 过滤）+ 导出（muted→音量 0、hidden→跳过画面）。
+        """
+        if flag not in ("muted", "hidden"):
+            return {"ok": False, "error": "flag 必须是 muted 或 hidden"}
+        self._reload()
+        self._push_undo()
+        if track_type not in self.draft:
+            return {"ok": False, "error": f"未知轨道类型：{track_type}"}
+        tracks = self.draft[track_type]
+        if not isinstance(track_index, int) or track_index < 0 or track_index >= len(tracks):
+            return {"ok": False, "error": f"{track_type} 没有第 {track_index} 条轨道（共 {len(tracks)} 条）"}
+        segs = tracks[track_index]
+        if not isinstance(index, int) or index < 0 or index >= len(segs):
+            return {"ok": False, "error": f"{track_type}[{track_index}] 没有第 {index} 段（共 {len(segs)} 段）"}
+        segs[index][flag] = bool(value)
+        save_state(self.state)
+        return {"ok": True, "track_type": track_type, "track_index": track_index, "index": index,
+                "flag": flag, "value": bool(value)}
+
     # ---------- 书签（纯 UI 标注，不参与剪辑/导出；存 state 顶层 bookmarks，对齐 OpenCut scene.bookmarks） ----------
     # 位置用微秒整数，1 帧容差（30fps）避免缩放/浮点误差导致同位置加不上或删不掉。
     BOOKMARK_TOL_US = 33333  # 1_000_000 / 30

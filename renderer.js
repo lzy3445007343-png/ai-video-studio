@@ -67,12 +67,12 @@ function renderPreview(s) {
   const ph = $("previewPlaceholder");
   const us = Store.state.playheadUs;
   const hits = resolveHits(us);
-  const hasVisual = hits.some(h => (h.type === "video" || h.type === "image" || h.type === "text") && !isTrackHidden(h.type, h.ti));
+  const hasVisual = hits.some(h => (h.type === "video" || h.type === "image" || h.type === "text") && !isTrackHidden(h.type, h.ti) && !h.seg.hidden);
 
   // 视觉层：按轨道层级排列，上层（高 ti）在上；跳过本地无素材的占位段（避免空 src 报错并挡住下层视频）
   // 隐藏的 video/text 轨在预览中不渲染（对齐 OpenCut element-bounds.ts 过滤逻辑）
-  const visualHits = hits.filter(h => h.type === "video" && resolveSegPath(h.seg) && !isTrackHidden(h.type, h.ti));
-  const textHits = hits.filter(h => h.type === "text" && !isTrackHidden(h.type, h.ti));
+  const visualHits = hits.filter(h => h.type === "video" && resolveSegPath(h.seg) && !isTrackHidden(h.type, h.ti) && !h.seg.hidden);
+  const textHits = hits.filter(h => h.type === "text" && !isTrackHidden(h.type, h.ti) && !h.seg.hidden);
   const activeVisualKeys = new Set();
 
   // 每条 video 轨道一个容器；同轨内当前最多一个段命中
@@ -86,7 +86,7 @@ function renderPreview(s) {
       rec = { el: wrap, key: layerKey };
       previewState.visualEls.set(layerKey, rec);
     }
-    const changed = _setVisualContent(rec.el, h.seg.type, resolveSegPath(h.seg), isTrackMuted(h.type, h.ti));
+    const changed = _setVisualContent(rec.el, h.seg.type, resolveSegPath(h.seg), isTrackMuted(h.type, h.ti) || h.seg.muted);
     rec.el.style.display = "";
     rec.el.style.zIndex = 10 + h.ti;
     rec.key = h.key;
@@ -166,7 +166,7 @@ function renderPreview(s) {
   }
 
   // 贴纸层：每条贴纸轨一个 <img> 叠加（高于视频、低于文本），按 transform 定位/缩放/旋转/透明/翻转
-  const stickerHits = hits.filter(h => h.type === "sticker" && resolveSegPath(h.seg) && !isTrackHidden(h.type, h.ti));
+  const stickerHits = hits.filter(h => h.type === "sticker" && resolveSegPath(h.seg) && !isTrackHidden(h.type, h.ti) && !h.seg.hidden);
   const activeStickerKeys = new Set();
   const stackH = ($("previewStack").clientHeight || 540);
   for (const h of stickerHits) {
@@ -211,7 +211,7 @@ function renderPreview(s) {
   // 音频层：命中就维护 audio 元素；播放/暂停在 startPlay/pausePlay/playTick 外统一控制
   // 同样跳过无本地 path 的占位段，避免空 src 错误
   // 静音的 audio 轨在预览中不发声（OpenCut AudioManager.scheduleUpcomingClips 里 clip.muted 则 continue）
-  const audioHits = hits.filter(h => h.type === "audio" && resolveSegPath(h.seg) && !isTrackMuted(h.type, h.ti));
+  const audioHits = hits.filter(h => h.type === "audio" && resolveSegPath(h.seg) && !isTrackMuted(h.type, h.ti) && !h.seg.muted);
   const activeAudioKeys = new Set();
   for (const h of audioHits) {
     const layerKey = "audio:" + h.ti;

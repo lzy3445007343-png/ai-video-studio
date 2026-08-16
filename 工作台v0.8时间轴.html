@@ -271,6 +271,8 @@
   <button data-act="split">✂ 分割</button>
   <button data-act="copy">📋 复制</button>
   <button data-act="dup">⧉ 复制段</button>
+  <button data-act="mute">🔇 静音</button>
+  <button data-act="hide">🙈 隐藏</button>
   <button data-act="del">🗑 删除</button>
   <div class="sep"></div>
   <button data-act="clear">✕ 取消选择</button>
@@ -1829,6 +1831,13 @@ function bindEvents() {
     e.preventDefault();
     ctxKey = seg.dataset.key;
     if (ctxKey) selectKey(ctxKey);           // 右键自动选中（对齐 OpenCut）
+    // 段级静音/隐藏动态文案（对齐 OpenCut toggle-elements-muted/visibility-selected）
+    const [ct, cti, cidx] = ctxKey.split(":");
+    const cs = findSeg(ct, +cti, cidx);
+    const muteBtn = document.querySelector('#ctxMenu [data-act="mute"]');
+    const hideBtn = document.querySelector('#ctxMenu [data-act="hide"]');
+    if (muteBtn) muteBtn.textContent = (cs && cs.muted) ? "🔊 取消静音" : "🔇 静音";
+    if (hideBtn) hideBtn.textContent = (cs && cs.hidden) ? "👁 取消隐藏" : "🙈 隐藏";
     const m = $("ctxMenu");
     m.style.display = "block";
     const mw = m.offsetWidth || 140, mh = m.offsetHeight || 150;
@@ -1846,6 +1855,8 @@ function bindEvents() {
     if (act === "split") call("split_segment", type, +ti, +idx, Math.round(Store.state.playheadUs)).then(refresh);
     else if (act === "copy") call("copy_to_buffer", [k]);
     else if (act === "dup") call("duplicate_segment", type, +ti, +idx).then(refresh);
+    else if (act === "mute") { const s = findSeg(type, +ti, idx); call("set_segment_flag", type, +ti, +idx, "muted", !(s && s.muted)).then(refresh); }
+    else if (act === "hide") { const s = findSeg(type, +ti, idx); call("set_segment_flag", type, +ti, +idx, "hidden", !(s && s.hidden)).then(refresh); }
     else if (act === "del") call("remove_segments", [k], Store.state.rippleOn).then(() => { selectKey(null); refresh(); });
     else if (act === "clear") clearSelection();
   });

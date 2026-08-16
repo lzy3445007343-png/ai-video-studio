@@ -212,6 +212,14 @@ def audit_log(limit: int = 100, actor: str = None) -> str:
     return json.dumps(r, ensure_ascii=False, indent=2)
 
 
+@mcp.tool()
+def set_segment_flag(track_type: str, track_index: int, index: int, flag: str, value: bool) -> str:
+    """段级静音/隐藏（OpenCut: toggle-elements-muted-selected / visibility-selected）。
+    flag 取值：muted（该段静音：视频内嵌音频/音频段不出声）/ hidden（该段隐藏：画面不渲染）。
+    value: true/false。影响预览与导出。返回结果 JSON。"""
+    return _exec("set_segment_flag", {"track_type": track_type, "track_index": track_index, "index": index, "flag": flag, "value": value})
+
+
 # ---------------------------------------------------------------------------
 # 细粒度读取工具（让 agent "理解" 草稿，而非吞下全量 JSON 黑盒）
 # 对应 8-12「跳切读取铁律」：绝不直接把整份草稿丢给 agent，必须按需抽小数据。
