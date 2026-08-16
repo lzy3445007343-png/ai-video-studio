@@ -553,7 +553,15 @@ function playTick() {
       _mcrWaitAt = now;          // 重置计时，避免每帧重试；只等下一次 800ms 窗口
     }
   } else { _mcrWaitAt = 0; }
-  if (us >= maxUs) { Store.state.playheadUs = maxUs; positionPlayhead(); renderTimecode(); pausePlay(); return; }
+  if (us >= maxUs) {
+    // DIAG-2026-08-16：播放头≥maxUs 提前收尾时打印前端真实 draft 状态（排查"前端拿旧数据"）
+    try {
+      const _d = Store.state.draft || {};
+      const _count = t => (_d[t] || []).map(tr => tr.length).join("+");
+      console.warn("[PAUSED-DIAG] us=" + (us/1e6).toFixed(3) + "s maxUs=" + (maxUs/1e6).toFixed(3) + "s videoSegs=" + _count("video") + " audioSegs=" + _count("audio"));
+    } catch (e) {}
+    Store.state.playheadUs = maxUs; positionPlayhead(); renderTimecode(); pausePlay(); return;
+  }
   // 纯空隙：不再运行时瞬移播放头（Round D.1 —— NLE 行为：播放头沿当前时钟自然穿过空白，静音滑到下一素材）
   // 仅当播放头处于空隙且后面没有任何可播素材时，才在末尾收尾暂停。
   if (!hasPlayableAt(us)) {
