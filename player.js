@@ -441,7 +441,14 @@ function seekActiveMediaToPlayhead(us) {
     const ti = parseInt(layerKey.split(":")[1], 10);
     const isVideo = v.tagName === "VIDEO";                            // visualEls 也可能存图片(<img>)，图片无 pause()/muted
     if (!activeVideoTis.has(ti)) {
-      if (isVideo) { v.pause(); setMediaMute(v, true, "inactive-park", layerKey); }   // 非活动视频：停车静音（inactive-park 属 seek/render reconcile；激活门只负责 active 解 mute）
+      if (isVideo) {
+        v.pause(); setMediaMute(v, true, "inactive-park", layerKey);   // 非活动视频：停车静音
+        // Phase C-fix（2026-08-16 真机）：间隙时仅 pause 还残留最后一帧画面，必须 hide 让预览区回到占位黑屏
+        rec.el.style.display = "none";
+      }
+    } else {
+      // 命中轨恢复显示（跨段后新元素已由 renderPreview 设为 display=""，但若 playTick 跨过边界需保险恢复）
+      if (isVideo) rec.el.style.display = "";
     }
   }
   for (const [layerKey, rec] of previewState.audioEls) {

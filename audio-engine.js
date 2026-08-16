@@ -172,3 +172,11 @@ function createAudioEngine(ctx) {
 if (typeof module !== "undefined" && module.exports) {
   module.exports = { createAudioEngine };
 }
+
+// 浏览器环境：HTML 加载 audio-engine.js 后自动创建全局 AudioEngine 实例。
+// audioCtx 在 player.js 里创建，audio-engine.js 在 player.js 之后加载（HTML script 顺序约束）。
+// 这里 ctx 传 null，后续在 player.js 的 startPlay() 里 AudioEngine.attach(audioCtx) 绑定（复用解锁状态）。
+// 关键修复（2026-08-16 真机 ReferenceError）：之前漏了这一步，player.js 调 AudioEngine.xxx 直接抛 ReferenceError → 整个音频引擎从未运行。
+if (typeof window !== "undefined") {
+  window.AudioEngine = createAudioEngine(null);
+}
