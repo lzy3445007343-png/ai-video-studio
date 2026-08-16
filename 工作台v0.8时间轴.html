@@ -79,6 +79,11 @@
     text-align: center; opacity: 0; transition: opacity .12s; pointer-events: none; }
   .media-card:hover .add { opacity: 1; pointer-events: auto; }
   .drag-ghost { position: fixed; z-index: 9999; width: 80px; height: 80px; pointer-events: none;
+  /* 右键菜单（2026-08-16 对齐 OpenCut context-menu） */
+  .ctx-menu { position: fixed; z-index: 10000; min-width: 140px; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 4px; box-shadow: 0 4px 16px rgba(0,0,0,.35); }
+  .ctx-menu button { display: block; width: 100%; text-align: left; padding: 6px 10px; border-radius: 5px; font-size: 12px; color: var(--text); background: none; border: none; cursor: pointer; }
+  .ctx-menu button:hover { background: var(--primary-dim); color: var(--primary); }
+  .ctx-menu .sep { height: 1px; background: var(--border); margin: 4px 6px; }
     border-radius: 6px; overflow: hidden; box-shadow: 0 6px 24px rgba(0,0,0,.55); border: 2px solid var(--primary);
     background: #15151a center/cover no-repeat; display: flex; align-items: center; justify-content: center; }
   .drop-newtrack-hint { position: absolute; left: 50%; top: 50%; transform: translate(-50%,-50%);
@@ -261,6 +266,15 @@
 </style>
 </head>
 <body>
+<!-- 右键菜单（2026-08-16 对齐 OpenCut context-menu.tsx）：时间轴片段右键弹出 -->
+<div class="ctx-menu" id="ctxMenu" style="display:none">
+  <button data-act="split">✂ 分割</button>
+  <button data-act="copy">📋 复制</button>
+  <button data-act="dup">⧉ 复制段</button>
+  <button data-act="del">🗑 删除</button>
+  <div class="sep"></div>
+  <button data-act="clear">✕ 取消选择</button>
+</div>
 <div class="app">
   <div class="topbar">
     <span class="title">AI剪辑工作台 v0.9</span>
@@ -1806,6 +1820,35 @@ function bindEvents() {
     });
   });
   $("tlContent").addEventListener("mousedown", onTimelineDown);
+  // 右键菜单（2026-08-16 对齐 OpenCut context-menu.tsx）
+  let ctxKey = null;
+  function hideCtxMenu() { const m = $("ctxMenu"); if (m) m.style.display = "none"; ctxKey = null; }
+  $("tlContent").addEventListener("contextmenu", e => {
+    const seg = e.target.closest(".seg");
+    if (!seg) return;
+    e.preventDefault();
+    ctxKey = seg.dataset.key;
+    if (ctxKey) selectKey(ctxKey);           // 右键自动选中（对齐 OpenCut）
+    const m = $("ctxMenu");
+    m.style.display = "block";
+    const mw = m.offsetWidth || 140, mh = m.offsetHeight || 150;
+    m.style.left = Math.min(e.clientX, window.innerWidth - mw - 8) + "px";
+    m.style.top = Math.min(e.clientY, window.innerHeight - mh - 8) + "px";
+  });
+  document.addEventListener("click", e => { if (!e.target.closest("#ctxMenu")) hideCtxMenu(); });
+  $("ctxMenu").addEventListener("click", e => {
+    const b = e.target.closest("button[data-act]");
+    if (!b) return;
+    const act = b.dataset.act, k = ctxKey;
+    hideCtxMenu();
+    if (!k) return;
+    const [type, ti, idx] = k.split(":");
+    if (act === "split") call("split_segment", type, +ti, +idx, Math.round(Store.state.playheadUs)).then(refresh);
+    else if (act === "copy") call("copy_to_buffer", [k]);
+    else if (act === "dup") call("duplicate_segment", type, +ti, +idx).then(refresh);
+    else if (act === "del") call("remove_segments", [k], Store.state.rippleOn).then(() => { selectKey(null); refresh(); });
+    else if (act === "clear") clearSelection();
+  });
   // 整组缩放把手（pointer-events 仅 .gh 可点；mousedown 已 stopPropagation 不冒泡到 tlContent）
   $("groupHandleL").addEventListener("mousedown", e => onGroupHandleDown(e, "left"));
   $("groupHandleR").addEventListener("mousedown", e => onGroupHandleDown(e, "right"));
