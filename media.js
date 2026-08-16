@@ -201,7 +201,11 @@ const PlayerManager = {
     // 起播前 seek 确认：v1.4.1 是全局 await seek 再 play（媒体慢拖死播放头），
     // 这里只对当前 target 确认（_waitSeekSettled 80ms 轮询 + 700ms 安全网），
     // 确认期间挂 _seekConfirmKeys 让 drift 不打断（修"seek/play/drift 每帧自我震荡"）。
-    if (el._seekTarget != null) {
+    // 2026-08-16 真机修复：**WebView2 在元素 paused 时设置 currentTime 会被吞**——不触发 seeking/seeked，
+    // currentTime 不变（日志实锤：readyState=4 但 cur=0 死等 2.5s 超时）。"等 seek 落位"在此环境永远等不到
+    // → 播放头墙钟超前 → 跨段错位。正确顺序：设 currentTime（吞了就吞了）→ 立即 play()（play 触发浏览器应用位置）
+    // → 落后由 drift 校准。故删除 seek 确认等待（_seekConfirmKeys 保留空 Set，drift 检查无害）。
+    if (false && el._seekTarget != null) {
       _seekConfirmKeys.add(t.key);
       try { await _waitSeekSettled(el); } finally { _seekConfirmKeys.delete(t.key); }
       if (!session.isCurrent()) return;                       // 等待期间 session 被换/取消
