@@ -85,6 +85,7 @@ function renderPreview(s) {
     let rec = previewState.visualEls.get(layerKey);
     if (!rec) {
       const wrap = _makeVisualEl(h.seg.type);
+      wrap.id = layerKey;   // 2026-08-16：wrap 必须带 id（_setVisualContent 用 wrap.id 作 layerKey，空 id → "video:?" → setMediaSrc/destroy key 错位）
       stack.appendChild(wrap);
       rec = { el: wrap, key: layerKey };
       previewState.visualEls.set(layerKey, rec);

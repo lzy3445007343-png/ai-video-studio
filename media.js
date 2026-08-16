@@ -462,7 +462,7 @@ const PlayerManager = {
     const t = Math.max(srcStartUs / 1e6, Math.min(srcEndUs / 1e6, (srcStartUs + localUs) / 1e6));
     console.log("[seek]", el.tagName || "?", "to=" + t.toFixed(3), "cur=" + (el.currentTime || 0).toFixed(3), "ready=" + el.readyState);
     try {
-      if (Math.abs((el.currentTime || 0) - t) > 0.05) el.currentTime = t;
+      if (Math.abs((el.currentTime || 0) - t) > 0.05) { el.currentTime = t; el._lastSeekAt = performance.now(); }   // 静默期起点：seek 后 1s 内 drift 不碰（2026-08-16 真机修复）
     } catch (e) {}
     // Round F2：把目标时间挂在元素上，供 _waitSeekSettled 验证 seek 是否真正落位（WebView2 下 seeked 可能提前触发）。
     el._seekTarget = t;

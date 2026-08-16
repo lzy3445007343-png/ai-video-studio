@@ -401,6 +401,12 @@ function correctActiveMediaDrift(us) {
     if (!el || el.paused || el.seeking) return;   // 暂停/seek 中不打扰，避免与跨段 seek 抢
     if (el._seekPending) return;                   // B.5.5-2：内部 seek barrier 在跑，drift 跳过（防并发自激振荡）
     if (_seekConfirmKeys.has(rec.key)) return;    // B.5.5：起播前 seek 确认期间，drift 不打断（修 seek/play/drift 每帧自我震荡）
+    // 2026-08-16 机制修复（真机死循环根因）：drift 每 200ms 一次 seek，会把正在缓冲的元素（readyState=1）
+    // 反复打断 → cur 永远追不上 → 又 seek → 448 次 playing 死循环。两个守卫：
+    //  ① 静默期：该元素最近一次 seek 后 1s 内不再碰它（给浏览器完整缓冲时间，自然追上播放头）
+    //  ② readyState<2（仅有 metadata 还在加载）时不 seek（seek 会打断加载，永远到不了可播状态）
+    if (el._lastSeekAt && now - el._lastSeekAt < 1000) return;
+    if (el.readyState < 2) return;   // HAVE_METADATA 以下：元素还在加载，seek 只会打断，交给 play 路径自己追上
     const s = rec.seg; if (!s) return;
     const srcStartUs = s.src_start || 0;
     const srcEndUs = s.src_end || (srcStartUs + s.duration);
@@ -413,11 +419,12 @@ function correctActiveMediaDrift(us) {
     // B.5.5-hotfix：drift 用纯软 seek（PlayerManager.seek），禁止 seekBarrier（pause/play 会重启播放）。
     if (ct < ssSec - 0.1 || ct > endSec + 0.1) {
       PlayerManager.seek(el, s, us);
+      el._lastSeekAt = now;   // 记录静默期起点
       return;
     }
     const mapped = s.start + (ct * 1e6 - srcStartUs);  // 媒体当前位置映射回时间轴
     if (mapped < s.start || mapped > s.start + s.duration) return;  // 映射过期（跨段未刷新）→ 跳过，交给 _handleCrossSegment
-    if (Math.abs(mapped - us) > 100000) PlayerManager.seek(el, s, us);      // 仅 >100ms 大漂移才纠正；绝不反写播放头
+    if (Math.abs(mapped - us) > 100000) { PlayerManager.seek(el, s, us); el._lastSeekAt = now; }  // 仅 >100ms 大漂移才纠正；绝不反写播放头
   };
   for (const h of hits) {
     if (h.type === "video") consider(previewState.visualEls.get("video:" + h.ti), "video");
@@ -545,12 +552,13 @@ function playTick() {
   // 绝不允许媒体时钟反写 playheadUs（这是过去“跳/双播/回弹”的根因）。
   const wallUs = playStartUs + (now - playStartWall) * 1000;
   let us = wallUs;
-  // D: mediaClockReady 超时回退 —— 跨段/初次 seek 后若 800ms 内媒体仍未 playing，重试播放，避免永久脱节
+  // D: mediaClockReady 超时回退 —— 跨段/初次 seek 后若 2.5s 内媒体仍未 playing，重试播放，避免永久脱节
+  // 2026-08-16：800→2500ms，对齐 _waitSeekSettled 安全网（WebView2 大文件加载慢，800ms 内重试会打断缓冲）
   if (!mediaClockReady) {
     if (!_mcrWaitAt) _mcrWaitAt = now;
-    else if (now - _mcrWaitAt > 800) {
+    else if (now - _mcrWaitAt > 2500) {
       playAllMedia();            // 重试播放（sticky-activation 下通常能成）
-      _mcrWaitAt = now;          // 重置计时，避免每帧重试；只等下一次 800ms 窗口
+      _mcrWaitAt = now;          // 重置计时，避免每帧重试；只等下一次 2.5s 窗口
     }
   } else { _mcrWaitAt = 0; }
   if (us >= maxUs) {
