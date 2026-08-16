@@ -87,7 +87,7 @@ function renderPreview(s) {
       const wrap = _makeVisualEl(h.seg.type);
       wrap.id = layerKey;   // 2026-08-16：wrap 必须带 id（_setVisualContent 用 wrap.id 作 layerKey，空 id → "video:?" → setMediaSrc/destroy key 错位）
       stack.appendChild(wrap);
-      rec = { el: wrap, key: layerKey };
+      rec = { el: wrap, key: layerKey, prepare: null, slotState: "EMPTY" };   // C.5：双槽结构初始化（prepare=后台预加载槽，slotState=状态机）
       previewState.visualEls.set(layerKey, rec);
     }
     const changed = _setVisualContent(rec.el, h.seg.type, resolveSegPath(h.seg), isTrackMuted(h.type, h.ti) || h.seg.muted, h.seg.volume);
