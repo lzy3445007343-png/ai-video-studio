@@ -464,7 +464,8 @@ const PlayerManager = {
     const localUs = Math.max(0, us - seg.start);
     // B2-A：上界必须是源绝对结束 srcEndUs（而非段时长）。旧写法对 src_start>0 的右段会反复从切点重播。
     const t = Math.max(srcStartUs / 1e6, Math.min(srcEndUs / 1e6, (srcStartUs + localUs) / 1e6));
-    console.log("[seek]", el.tagName || "?", "to=" + t.toFixed(3), "cur=" + (el.currentTime || 0).toFixed(3), "ready=" + el.readyState);
+    // DIAG-2026-08-16：打印换算用的段字段（排查"to=时间轴秒"疑点——若 seg.start/src_start 为 0 则前端 draft 是旧数据）
+    console.log("[seek]", el.tagName || "?", "to=" + t.toFixed(3), "cur=" + (el.currentTime || 0).toFixed(3), "ready=" + el.readyState, "seg{start=" + ((seg.start || 0) / 1e6).toFixed(1) + " ss=" + (srcStartUs / 1e6).toFixed(1) + " se=" + (srcEndUs / 1e6).toFixed(1) + "} us=" + (us / 1e6).toFixed(3));
     try {
       if (Math.abs((el.currentTime || 0) - t) > 0.05) { el.currentTime = t; el._lastSeekAt = performance.now(); }   // 静默期起点：seek 后 1s 内 drift 不碰（2026-08-16 真机修复）
     } catch (e) {}
