@@ -21,6 +21,19 @@ Timeline(draft JSON)  ←── Command/MCP 层可改（未来 AI 入口）
 
 **时间权威铁律：播放头墙钟是 master，视频/音频都是 follower，自己追上播放头。** 媒体时钟（video.currentTime / AudioContext.currentTime）只做辅助校准，绝不反写播放头。
 
+### 时间源唯一性核查（2026-08-16 核验，外部 GPT 建议"统一 MasterClock"——已提前做到）
+
+playTick 每帧：`us = wallUs`（唯一时间源）→ 写 `Store.state.playheadUs` → 喂 `AudioEngine.setPlayhead(us)` → 调 `applyKfLiveAll()`。所有时间敏感层**同一帧、从同一个 us 取时间**：
+
+| 层 | 时间来源 | 代码锚点 |
+|----|---------|---------|
+| 视频 seek | 播放头 us → 源秒换算（PlayerManager.seek 内部） | media.js:474 |
+| 音频调度 | 播放头 us 实时锚定（ctx.currentTime - playheadUs） | audio-engine.js:59 |
+| 关键帧动画 | `Store.state.playheadUs`（applyKfLiveAll 内读） | renderer.js:655 |
+
+**单位纪律：内部一律微秒整数（us），媒体 API 边界换算秒**（video.currentTime / ctx.currentTime）。不要"统一成秒"——浮点秒有精度问题（日志里 `5004799.9999998` 就是浮点征兆），us 整数是刻意选择。显示层（timecode/帧）另算。
+**未来元素铁律：字幕/特效/任何新动画层，只允许从 `Store.state.playheadUs` 取时间，禁止自建 setTimeout/RAF 时钟**（否则必然出现"视频正常、字幕慢半拍"）。
+
 ---
 
 ## 1. 媒体数据通道（本次根治的根基）
