@@ -152,13 +152,14 @@
   .kfpanel .head .head-close:hover, .maskpanel .head .head-close:hover, .subpanel .head .head-close:hover, .stickerpanel .head .head-close:hover { background: var(--panel-2); color: var(--text); }
   .kfpanel .body { flex: 1; overflow: auto; padding: 10px; min-width: 0; }
   .kfpanel .empty { text-align: center; color: var(--muted); font-size: 11px; padding: 24px 8px; line-height: 1.6; }
-  #kfRows { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; min-width: 0; }
-  .kf-row { display: flex; align-items: center; gap: 3px; background: var(--panel-2); border: 1px solid var(--border); border-radius: 5px; padding: 3px 4px; min-width: 0; }
-  .kf-row .tog { width: 14px; height: 16px; border-radius: 3px; border: 1px solid var(--border); background: var(--panel); color: var(--muted); cursor: pointer; flex: none; font-size: 9px; line-height: 1; }
+  /* 关键帧面板（2026-08-16 极简风：一行一字段 + 滑块，对齐 OpenCut PropertiesPanel） */
+  #kfRows { display: block; min-width: 0; }
+  .kf-row { display: flex; align-items: center; gap: 6px; background: var(--panel-2); border: 1px solid var(--border); border-radius: 6px; padding: 5px 8px; margin-bottom: 6px; min-width: 0; }
+  .kf-row .tog { width: 20px; height: 20px; border-radius: 4px; border: 1px solid var(--border); background: var(--panel); color: var(--muted); cursor: pointer; flex: none; font-size: 10px; line-height: 1; }
   .kf-row .tog.on { background: var(--primary); color: #fff; border-color: var(--primary); }
-  .kf-row .lab { width: 24px; font-size: 9px; color: var(--text); flex: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .kf-row .val { width: 32px; background: var(--panel); border: 1px solid var(--border); border-radius: 3px; color: var(--text); font-size: 10px; padding: 1px 2px; min-width: 0; }
-  .kf-row .add { flex: none; width: 16px; font-size: 10px; padding: 0; border-radius: 3px; border: 1px solid var(--border); background: var(--panel); color: var(--text); cursor: pointer; line-height: 1; }
+  .kf-row .lab { width: 52px; font-size: 11px; color: var(--text); flex: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .kf-row .val { width: 56px; background: var(--panel); border: 1px solid var(--border); border-radius: 4px; color: var(--text); font-size: 11px; padding: 2px 4px; min-width: 0; }
+  .kf-row .add { flex: none; width: 22px; font-size: 12px; padding: 1px 0; border-radius: 4px; border: 1px solid var(--border); background: var(--panel); color: var(--text); cursor: pointer; line-height: 1; }
   .kf-row .add:hover { border-color: var(--primary); }
   .kf-graph { position: relative; height: 70px; margin: 8px 0; background: var(--panel-2); border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
   .kf-graph .kf-axis { position: absolute; left: 0; right: 0; top: 50%; border-top: 1px dashed var(--border); }
@@ -332,13 +333,13 @@
     <div class="hsplit" id="hsplitR" title="拖动调整参数区宽度"></div>
     <div class="tools" id="toolsPanel">
       <div class="tools-rail" id="toolsRail">
-        <button class="rail-btn active" data-tab="kf" title="关键帧">🎞</button>
-        <button class="rail-btn" data-tab="audio" title="音频">🔊</button>
-        <button class="rail-btn" data-tab="speed" title="速度">⏱</button>
-        <button class="rail-btn" data-tab="mask" title="遮罩">🎭</button>
-        <button class="rail-btn" data-tab="sub" title="字幕">💬</button>
-        <button class="rail-btn" data-tab="sticker" title="贴纸">⭐</button>
-        <button class="rail-btn" data-tab="effects" title="特效">✨</button>
+        <button class="rail-btn active" data-tab="kf" title="关键帧">🎞 关键帧</button>
+        <button class="rail-btn" data-tab="audio" title="音频">🔊 音频</button>
+        <button class="rail-btn" data-tab="speed" title="速度">⏱ 速度</button>
+        <button class="rail-btn" data-tab="mask" title="遮罩">🎭 遮罩</button>
+        <button class="rail-btn" data-tab="sub" title="字幕">💬 字幕</button>
+        <button class="rail-btn" data-tab="sticker" title="贴纸">⭐ 贴纸</button>
+        <button class="rail-btn" data-tab="effects" title="特效">✨ 特效</button>
       </div>
       <div class="tools-content">
     <div class="kfpanel" id="kfPanel">
@@ -513,7 +514,10 @@
     .sticker-layer img { width:100%; height:100%; display:block; }
     /* 右侧工具栏：单栏 + 竖排图标页签（对齐 OpenCut PropertiesPanel） */
     .tools { width: var(--tools-w, 280px); flex:none; display:flex; flex-direction:row; background:var(--panel); border-left:1px solid var(--border); overflow:hidden; min-height:0; }
-    .tools-rail { width:46px; flex:none; display:flex; flex-direction:column; gap:6px; padding:10px 5px; background:#181b21; border-right:1px solid var(--border); }
+    .tools-rail { width:72px; flex:none; display:flex; flex-direction:column; gap:4px; padding:10px 6px; background:#181b21; border-right:1px solid var(--border); }
+    .tools-rail .rail-btn { width:100%; padding:6px 4px; border-radius:6px; border:1px solid transparent; background:none; color:var(--muted); font-size:11px; cursor:pointer; display:flex; flex-direction:column; align-items:center; gap:2px; line-height:1.2; }
+    .tools-rail .rail-btn:hover { background:#2a2e37; color:var(--text); }
+    .tools-rail .rail-btn.active { background:var(--primary-dim); border-color:var(--primary); color:var(--primary); }
     .rail-btn { width:36px; height:36px; border-radius:8px; background:transparent; border:1px solid transparent; color:var(--muted); font-size:17px; cursor:pointer; display:flex; align-items:center; justify-content:center; }
     .rail-btn:hover { background:#262932; color:var(--fg); }
     .rail-btn.active { background:#34343c; color:var(--text); border-color:var(--border); }
