@@ -627,6 +627,134 @@ def _seg_speed(seg):
     return max(MIN_SPEED, min(MAX_SPEED, float(rate)))
 
 
+# ===================== Playback Graph 语义层（Phase A，与 playback-graph.js 逐字段对拍） =====================
+# 规范见 docs/architecture/playback-rootfix-bundled.md §3。
+# 对拍保险丝：tools/graph_consistency.py 同一 draft 跑两端，平铺结果必须逐字段一致。
+# 浏览器端实现：playback-graph.js buildPlaybackGraph() —— 两端实现必须逐行对齐！
+
+
+def _seg_num(v, dflt):
+    """数值兜底：非数值 / NaN → 返回 dflt（与 playback-graph.js _num 对齐）。"""
+    if isinstance(v, bool) or not isinstance(v, (int, float)):
+        return dflt
+    return v if v == v else dflt
+
+
+def _graph_clamp_speed(v):
+    """变速 clamp：与 playback-graph.js _clampSpeed 对齐。"""
+    if isinstance(v, bool) or not isinstance(v, (int, float)) or v <= 0 or not (v == v):
+        return DEFAULT_SPEED
+    return max(MIN_SPEED, min(MAX_SPEED, float(v)))
+
+
+def _graph_volume(v):
+    """音量兜底：能转数值就转，否则 1（与 playback-graph.js _graphVolume 对齐）。"""
+    if v is None or v == "":
+        return 1
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return 1
+    return f if f == f else 1
+
+
+def _resolve_seg_path(seg, materials):
+    """素材解析：material_id → materials[].uid 查 path；失败 fallback seg.path（与 store.js resolveSegPath / playback-graph.js _resolvePath 同构）。"""
+    if not isinstance(seg, dict):
+        return None
+    mid = seg.get("material_id")
+    if mid:
+        for m in (materials or []):
+            if isinstance(m, dict) and m.get("uid") == mid and m.get("path"):
+                return m["path"]
+    return seg.get("path") or None
+
+
+def _graph_resolve_gain(track_muted, seg_muted, seg_volume):
+    """§3.4 第一层：两端共享（播放 + 导出都用）—— 不含 previewMuted。"""
+    if track_muted:
+        return 0
+    if seg_muted:
+        return 0
+    return _graph_volume(seg_volume)
+
+
+def _flatten_video(seg, ti, idx, track_muted, track_hidden, materials):
+    """video 轨段 → VideoNode（含内嵌声），字段与 playback-graph.js _flattenVideo 一致。"""
+    if not isinstance(seg, dict):
+        return None
+    start_us = _seg_num(seg.get("start"), 0)
+    duration_us = _seg_num(seg.get("duration"), 0)
+    src_start_us = _seg_num(seg.get("src_start"), 0)
+    src_end_us = _seg_num(seg.get("src_end"), src_start_us + duration_us)
+    return {
+        "key": "video:%d:%d" % (ti, idx),
+        "trackKey": "video:%d" % ti,
+        "startUs": start_us,
+        "durationUs": duration_us,
+        "srcStartUs": src_start_us,
+        "srcEndUs": src_end_us,
+        "speed": _graph_clamp_speed(seg.get("speed")),
+        "gain": _graph_resolve_gain(track_muted, bool(seg.get("muted")), seg.get("volume")),
+        "muted": bool(seg.get("muted")),
+        "path": _resolve_seg_path(seg, materials),
+        "hidden": bool(track_hidden) or bool(seg.get("hidden")),
+    }
+
+
+def _flatten_audio(seg, ti, idx, track_muted, materials):
+    """audio 轨段 → AudioClip，字段与 playback-graph.js _flattenAudio 一致。"""
+    if not isinstance(seg, dict):
+        return None
+    start_us = _seg_num(seg.get("start"), 0)
+    duration_us = _seg_num(seg.get("duration"), 0)
+    src_start_us = _seg_num(seg.get("src_start"), 0)
+    src_end_us = _seg_num(seg.get("src_end"), src_start_us + duration_us)
+    return {
+        "key": "audio:%d:%d" % (ti, idx),
+        "trackKey": "audio:%d" % ti,
+        "startUs": start_us,
+        "durationUs": duration_us,
+        "srcStartUs": src_start_us,
+        "srcEndUs": src_end_us,
+        "speed": _graph_clamp_speed(seg.get("speed")),
+        "gain": _graph_resolve_gain(track_muted, bool(seg.get("muted")), seg.get("volume")),
+        "path": _resolve_seg_path(seg, materials),
+    }
+
+
+def _playback_graph(draft, materials=None):
+    """Python 版语义层：输出 audioClips / videoNodes，字段与 §3.2 完全一致。
+
+    与 playback-graph.js buildPlaybackGraph 逐字段对拍（tools/graph_consistency.py）。
+    内建：兼容兜底（§3.3）+ resolveGain（§3.4，不含 previewMuted）+ 素材解析。
+    """
+    materials = materials or []
+    draft = draft or {}
+    meta = draft.get("_track_meta") or {}
+    audio_clips = []
+    video_nodes = []
+
+    for ti, track in enumerate(draft.get("video") or []):
+        tmeta = (meta.get("video") or [])[ti] if ti < len(meta.get("video") or []) else {}
+        track_muted = bool(tmeta.get("muted"))
+        track_hidden = bool(tmeta.get("hidden"))
+        for idx, seg in enumerate(track):
+            node = _flatten_video(seg, ti, idx, track_muted, track_hidden, materials)
+            if node is not None:
+                video_nodes.append(node)
+
+    for ti, track in enumerate(draft.get("audio") or []):
+        tmeta = (meta.get("audio") or [])[ti] if ti < len(meta.get("audio") or []) else {}
+        track_muted = bool(tmeta.get("muted"))
+        for idx, seg in enumerate(track):
+            clip = _flatten_audio(seg, ti, idx, track_muted, materials)
+            if clip is not None:
+                audio_clips.append(clip)
+
+    return {"audioClips": audio_clips, "videoNodes": video_nodes}
+
+
 # ===================== 关键帧 / 动画（对齐 OpenCut ElementAnimations） =====================
 # 数据模型：seg["animations"] = { propertyPath: {"keys": [{id, t, v, seg}]} }
 # - propertyPath 形如 "transform.positionX" / "transform.scaleX" / "transform.rotate" / "transform.opacity"

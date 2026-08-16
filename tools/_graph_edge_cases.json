@@ -1,0 +1,38 @@
+{
+  "draft": {
+    "video": [
+      [
+        { "name": "edge_1", "path": "C:\\edge\\a.mp4", "type": "video", "start": 0, "duration": 5000000 },
+        { "name": "edge_2", "path": "C:\\edge\\b.mp4", "type": "video", "start": 6000000, "duration": 3000000, "src_start": 1000000, "src_end": 4000000, "speed": 2, "volume": 0.5, "muted": true },
+        { "name": "edge_3", "path": "C:\\edge\\c.mp4", "type": "video", "start": 10000000, "duration": 5000000, "src_start": 0, "src_end": 10000000, "speed": 0.5, "volume": "0.7" },
+        { "name": "edge_4", "path": "C:\\edge\\d.mp4", "type": "video", "start": 16000000, "duration": 2000000, "speed": 4, "volume": 2, "hidden": true }
+      ],
+      [
+        { "name": "edge_5", "path": "C:\\edge\\e.mp4", "type": "video", "start": 0, "duration": 2000000, "volume": 1.5 },
+        { "name": "edge_6", "type": "video", "material_id": "uid_a", "start": 3000000, "duration": 2000000 }
+      ]
+    ],
+    "audio": [
+      [
+        { "name": "edge_a1", "path": "C:\\edge\\a.mp3", "type": "audio", "start": 0, "duration": 5000000, "volume": 0.8 },
+        { "name": "edge_a2", "path": "C:\\edge\\b.mp3", "type": "audio", "start": 6000000, "duration": 2000000, "src_start": 1000000, "muted": true },
+        { "name": "edge_a3", "path": "C:\\edge\\c.mp3", "type": "audio", "start": 9000000, "duration": 5000000, "speed": 1.5, "volume": 0 },
+        { "name": "edge_a4", "path": "C:\\edge\\d.mp3", "type": "audio", "start": 15000000, "duration": 3000000 }
+      ]
+    ],
+    "_track_meta": {
+      "video": [
+        { "muted": false, "hidden": false },
+        { "muted": true, "hidden": false }
+      ],
+      "audio": [
+        { "muted": true, "hidden": false }
+      ]
+    }
+  },
+  "materials": [
+    { "name": "a", "path": "C:\\edge\\a.mp4", "type": "video", "uid": "uid_a" },
+    { "name": "b", "path": "C:\\edge\\b.mp4", "type": "video", "uid": "uid_b" },
+    { "name": "a3", "path": "C:\\edge\\a.mp3", "type": "audio", "uid": "uid_a3" }
+  ]
+}
