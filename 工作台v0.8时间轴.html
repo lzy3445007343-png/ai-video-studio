@@ -203,8 +203,11 @@
   .tl-content { position: relative; min-width: 100%; }
   .ruler { height: 28px; position: sticky; top: 0; background: var(--panel); border-bottom: 1px solid var(--border);
     z-index: 5; cursor: pointer; }
-  .ruler .tick { position: absolute; top: 0; bottom: 0; border-left: 1px solid var(--border); }
-  .ruler .tick span { position: absolute; top: 6px; left: 4px; font-size: 10px; color: var(--muted); }
+  /* 两级刻度（2026-08-16 对齐 OpenCut）：minor 顶部短竖线（细刻度），major 贯穿长线（主刻度带文字） */
+  .ruler .tick { position: absolute; top: 0; border-left: 1px solid var(--border); }
+  .ruler .tick.minor { height: 8px; top: 20px; border-color: var(--border); opacity: .55; }
+  .ruler .tick.major { bottom: 0; }
+  .ruler .tick span { position: absolute; top: 6px; left: 4px; font-size: 10px; color: var(--muted); white-space: nowrap; }
   .track { height: var(--track-h); border-bottom: 1px solid var(--border); position: relative; }
   .track.track-hidden { opacity: .45; }
   .track.track-muted.audio .seg { opacity: .55; }
@@ -611,15 +614,7 @@ function repositionTimelineZoom() {
   });
   // 标尺刻度跟随新 pps 重画（renderTimeline 冻结期不会重画，否则刻度留旧比例）
   const ruler = $("ruler"), totalSec = ($("tlContent").offsetWidth) / p;
-  const step = rulerStep(p);
-  ruler.innerHTML = "";
-  for (let t = 0; t <= totalSec; t += step) {
-    const tick = document.createElement("div");
-    tick.className = "tick";
-    tick.style.left = (t * p) + "px";
-    tick.innerHTML = "<span>" + rulerLabel(t * 1e6, p) + "</span>";
-    ruler.appendChild(tick);
-  }
+  renderRuler(p, totalSec);
   renderGroupBox();   // 选中态包围盒跟随缩放
 }
 function usToTime(us) {

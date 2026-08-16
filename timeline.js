@@ -16,9 +16,39 @@ function forEachSeg(fn) {
   });
 }
 
-// UI 对齐 OpenCut 标尺（2026-08-15）：刻度密度随缩放自适应细分 + 短标签（mm:ss，高缩放才带毫秒）。
-function rulerStep(p) {
-  return p >= 200 ? 1 : p >= 80 ? 2 : p >= 30 ? 5 : 10;   // 秒
+// UI 对齐 OpenCut 标尺（2026-08-16 两级刻度版）：label 主刻度（120px 间隔带文字）+ tick 细分刻度（18px 间隔）
+// 算法对齐 OpenCut ruler-utils.ts：findOptimalInterval 取满足最小像素间距的最密档。
+const RULER_LABEL_MULT = [1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600]; // 秒
+const RULER_TICK_DIV = [10, 5, 4, 2, 1];  // tick = label / 10 / 5 / 4 / 2 / 1（保证整除，label 永远落在 tick 上）
+function _findRulerInterval(p, minPx, mults) {
+  for (const m of mults) { if (p * m >= minPx) return m; }
+  return mults[mults.length - 1];
+}
+function rulerConfig(p) {
+  const labelInterval = _findRulerInterval(p, 120, RULER_LABEL_MULT);
+  let tickInterval = labelInterval;
+  for (const d of RULER_TICK_DIV) {
+    const c = labelInterval / d;
+    if (p * c >= 18) { tickInterval = c; break; }
+  }
+  return { labelInterval, tickInterval };
+}
+// 渲染两级刻度：细刻度 .tick.minor（无文字）+ 主刻度 .tick.major（带 mm:ss 文字）
+function renderRuler(p, totalSec) {
+  const ruler = document.getElementById("ruler");
+  if (!ruler) return;
+  const { labelInterval, tickInterval } = rulerConfig(p);
+  ruler.innerHTML = "";
+  const n = Math.ceil(totalSec / tickInterval) + 1;
+  for (let i = 0; i <= n; i++) {
+    const t = i * tickInterval;
+    const isLabel = Math.abs(t / labelInterval - Math.round(t / labelInterval)) < 1e-6;
+    const tick = document.createElement("div");
+    tick.className = isLabel ? "tick major" : "tick minor";
+    tick.style.left = (t * p) + "px";
+    if (isLabel) tick.innerHTML = "<span>" + rulerLabel(t * 1e6, p) + "</span>";
+    ruler.appendChild(tick);
+  }
 }
 function rulerLabel(us, p) {
   const s = us / 1e6, m = Math.floor(s / 60), sec = s - m * 60;
@@ -158,14 +188,7 @@ function renderTimeline(s) {
   ruler.style.width = w + "px";
   ruler.innerHTML = "";
   const totalSec = w / pps();
-  const step = rulerStep(pps());
-  for (let t = 0; t <= totalSec; t += step) {
-    const tick = document.createElement("div");
-    tick.className = "tick";
-    tick.style.left = (t * pps()) + "px";
-    tick.innerHTML = "<span>" + rulerLabel(t * 1e6, pps()) + "</span>";
-    ruler.appendChild(tick);
-  }
+  renderRuler(pps(), totalSec);
   // 书签标记（对齐 OpenCut bookmarks.tsx：标尺顶部小红旗，点击跳转、双击切换、右键删除）
   (Store.state.bookmarks || []).forEach(b => {
     const bm = document.createElement("div");
