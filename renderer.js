@@ -32,18 +32,21 @@ function _makeVisualEl(mtype) {
 // ============================================================
 
 
-function _setVisualContent(wrap, mtype, path, muted) {
-  if (wrap.dataset.mtype === mtype && wrap.dataset.path === path && wrap.dataset.muted === String(muted)) return false; // 无变化
+function _setVisualContent(wrap, mtype, path, muted, volume) {
+  const volKey = (volume == null ? "" : String(volume));
+  if (wrap.dataset.mtype === mtype && wrap.dataset.path === path && wrap.dataset.muted === String(muted) && wrap.dataset.vol === volKey) return false; // 无变化
   wrap.innerHTML = "";
   wrap.dataset.mtype = mtype;
   wrap.dataset.path = path;
   wrap.dataset.muted = String(muted);
+  wrap.dataset.vol = volKey;
   if (mtype === "video") {
     const layerKey = wrap.id || "video:?";
     const v = PlayerManager.create("video", wrap, layerKey);
     setMediaSrc(v, fileURL(path), "render-visual", layerKey);
     // 轨道静音 或 全局预览静音 → 关闭该视频段的内嵌音频
     setMediaMute(v, !!muted || previewMuted, "render-visual", (path || "visual"));
+    v.volume = (volume == null ? 1 : volume);   // 段级音量（2026-08-16）
     v.playsInline = true;
   } else if (mtype === "image") {
     const img = document.createElement("img");
@@ -86,7 +89,7 @@ function renderPreview(s) {
       rec = { el: wrap, key: layerKey };
       previewState.visualEls.set(layerKey, rec);
     }
-    const changed = _setVisualContent(rec.el, h.seg.type, resolveSegPath(h.seg), isTrackMuted(h.type, h.ti) || h.seg.muted);
+    const changed = _setVisualContent(rec.el, h.seg.type, resolveSegPath(h.seg), isTrackMuted(h.type, h.ti) || h.seg.muted, h.seg.volume);
     rec.el.style.display = "";
     rec.el.style.zIndex = 10 + h.ti;
     rec.key = h.key;
@@ -220,6 +223,7 @@ function renderPreview(s) {
     if (!rec) {
       const a = PlayerManager.create("audio", $("audioPool"), layerKey);
       setMediaMute(a, previewMuted, "pool-create", layerKey);
+      a.volume = (h.seg.volume == null ? 1 : h.seg.volume);   // 段级音量（2026-08-16）
       rec = { el: a, key: layerKey };
       previewState.audioEls.set(layerKey, rec);
     }

@@ -445,6 +445,7 @@
       <div class="ph-icon" id="phIcon">🔧</div>
       <div class="ph-title" id="phTitle">暂未实现</div>
       <div class="empty-hint" id="phHint">该面板开发中</div>
+      <div id="phContent"></div>
     </div>
       </div>
     </div>
@@ -917,12 +918,84 @@ function renderPropertyPanel() {
     const h = document.getElementById("phHint");
     if (t) t.textContent = PLACEHOLDER_TITLES[activeTab] || "暂未实现";
     if (h) h.textContent = "已加入路线图，后续版本实现";
+    // audio/speed tab 实装（2026-08-16）：音量/变速控件（对齐 OpenCut AudioTab/SpeedTab）
+    if (activeTab === "audio") renderAudioTab();
+    else if (activeTab === "speed") renderSpeedTab();
+    else { const c = $("phContent"); if (c) c.innerHTML = ""; }
   }
 
   if (activePanel === "kfPanel") renderKfPanel();
   else if (activePanel === "maskPanel") renderMaskPanel();
   else if (activePanel === "subPanel") renderSubPanel();
   else if (activePanel === "stickerPanel") renderStickerPanel();
+}
+
+// 音频面板（2026-08-16 对齐 OpenCut AudioTab）：段级音量滑块 + 静音开关
+function renderAudioTab() {
+  const s = selectedSeg();
+  const c = $("phContent");
+  if (!s || !c) return;
+  const vol = (s.volume == null ? 1 : s.volume);
+  c.innerHTML =
+    '<div class="row" style="display:flex;align-items:center;gap:8px;margin:6px 0">' +
+      '<label style="width:44px;font-size:12px;color:var(--muted)">音量</label>' +
+      '<input type="range" id="segVol" min="0" max="2" step="0.05" value="' + vol + '" style="flex:1">' +
+      '<span id="segVolVal" style="width:28px;text-align:right;font-size:11px;color:var(--text)">' + Math.round(vol * 100) / 100 + '</span>' +
+    '</div>' +
+    '<div class="row" style="display:flex;align-items:center;gap:8px;margin:6px 0">' +
+      '<label style="width:44px;font-size:12px;color:var(--muted)">静音</label>' +
+      '<button id="segMuteBtn" class="gen" style="flex:1;padding:5px;background:' + (s.muted ? "#ff4d4f33" : "var(--panel-2)") + ';border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:12px;cursor:pointer">' + (s.muted ? "🔇 已静音（点击恢复）" : "🔊 正常（点击静音）") + '</button>' +
+    '</div>';
+  const volEl = $("segVol");
+  if (volEl) volEl.addEventListener("input", () => {
+    const v = parseFloat(volEl.value);
+    const vv = $("segVolVal"); if (vv) vv.textContent = Math.round(v * 100) / 100;
+    s.volume = v;   // 本地预览即时生效（Store seg 直接改 + 局部重绘）
+    const k = Store.state.selectedKey; if (!k) return;
+    const [type, ti, idx] = k.split(":");
+    renderPreview();
+    clearTimeout(volEl._t);
+    volEl._t = setTimeout(() => call("set_segment_volume", type, +ti, +idx, v).then(refresh), 250);
+  });
+  const muteEl = $("segMuteBtn");
+  if (muteEl) muteEl.addEventListener("click", () => {
+    const k = Store.state.selectedKey; if (!k) return;
+    const [type, ti, idx] = k.split(":");
+    call("set_segment_flag", type, +ti, +idx, "muted", !s.muted).then(refresh);
+  });
+}
+
+// 速度面板（2026-08-16 对齐 OpenCut SpeedTab）：变速下拉 + 保持音调开关
+function renderSpeedTab() {
+  const s = selectedSeg();
+  const c = $("phContent");
+  if (!s || !c) return;
+  if (s.type !== "video" && s.type !== "audio") { c.innerHTML = '<div class="empty-hint" style="padding:16px;text-align:center">仅视频/音频段可变速</div>'; return; }
+  const sp = s.speed || 1;
+  const opts = [0.5, 0.75, 1, 1.25, 1.5, 2, 3].map(x =>
+    '<option value="' + x + '"' + (Math.abs(sp - x) < 0.01 ? " selected" : "") + '>' + x + 'x</option>').join("");
+  c.innerHTML =
+    '<div class="row" style="display:flex;align-items:center;gap:8px;margin:6px 0">' +
+      '<label style="width:44px;font-size:12px;color:var(--muted)">速度</label>' +
+      '<select id="segSpeed" style="flex:1;background:var(--panel-2);color:var(--text);border:1px solid var(--border);border-radius:5px;padding:4px;font-size:12px">' + opts + '</select>' +
+    '</div>' +
+    '<div class="row" style="display:flex;align-items:center;gap:8px;margin:6px 0">' +
+      '<label style="width:44px;font-size:12px;color:var(--muted)">音调</label>' +
+      '<button id="segPitchBtn" class="gen" style="flex:1;padding:5px;background:' + (s.change_pitch ? "#ffd24d33" : "var(--panel-2)") + ';border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:12px;cursor:pointer">' + (s.change_pitch ? "🎵 变调（原速感）" : "🎵 保持原调") + '</button>' +
+    '</div>' +
+    '<div class="empty-hint" style="margin-top:6px">变速改变时间轴时长，预览/导出均生效</div>';
+  const spEl = $("segSpeed");
+  if (spEl) spEl.addEventListener("change", () => {
+    const k = Store.state.selectedKey; if (!k) return;
+    const [type, ti, idx] = k.split(":");
+    call("set_segment_speed", type, +ti, +idx, parseFloat(spEl.value)).then(refresh);
+  });
+  const pitchEl = $("segPitchBtn");
+  if (pitchEl) pitchEl.addEventListener("click", () => {
+    const k = Store.state.selectedKey; if (!k) return;
+    const [type, ti, idx] = k.split(":");
+    call("set_segment_speed", type, +ti, +idx, s.speed || 1, !s.change_pitch).then(refresh);
+  });
 }
 
 /* =====================================================================

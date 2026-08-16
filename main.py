@@ -1947,6 +1947,25 @@ class Api:
             "src_end": se_,
         }
 
+    def set_segment_volume(self, track_type, track_index, index, volume):
+        """段级音量（OpenCut: AudioElement volume 参数）。0~2，默认 1。
+        预览时 video 内嵌音频/audio 段的 volume 应用；导出剪映映射 volume。
+        """
+        self._reload()
+        self._push_undo()
+        if track_type not in self.draft:
+            return {"ok": False, "error": f"未知轨道类型：{track_type}"}
+        tracks = self.draft[track_type]
+        if not isinstance(track_index, int) or track_index < 0 or track_index >= len(tracks):
+            return {"ok": False, "error": f"{track_type} 没有第 {track_index} 条轨道（共 {len(tracks)} 条）"}
+        segs = tracks[track_index]
+        if not isinstance(index, int) or index < 0 or index >= len(segs):
+            return {"ok": False, "error": f"{track_type}[{track_index}] 没有第 {index} 段（共 {len(segs)} 段）"}
+        v = max(0.0, min(2.0, float(volume)))
+        segs[index]["volume"] = round(v, 2)
+        save_state(self.state)
+        return {"ok": True, "track_type": track_type, "track_index": track_index, "index": index, "volume": segs[index]["volume"]}
+
     # ---------- 关键帧 / 动画 CRUD（对齐 OpenCut upsertKeyframe / removeKeyframe / retimeKeyframe） ----------
     def _kf_resolve_seg(self, track_type, track_index, index):
         """取关键帧编辑目标段，返回 (seg, None) 或 (None, error)。"""
