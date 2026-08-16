@@ -1,8 +1,16 @@
 # 播放器根治 · 捆绑版实施方案（Playback Graph 原子切换包）
 
-> 版本：v1.0（2026-08-16）
-> 依据：OpenCut 三份源码全扒（audio-manager.ts / scene-builder.ts / audio-state.ts / media/audio.ts collectAudioClips）+ 我们现状三链代码级侦察
+> 版本：**v1.1 审查修正版**（2026-08-16，经独立 Agent 代码级审查后修正）
+> 依据：OpenCut 三份源码全扒（audio-manager.ts / scene-builder.ts / audio-state.ts / media/audio.ts collectAudioClips）+ 我们现状三链代码级侦察 + **独立审查报告（agent-c32a318f，逐项代码证据）**
 > 定位：**不是补丁，是把"同一份时间轴数据被多套逻辑各自算"收成"一套语义层 + 所有消费方同步切换"**。中途状态必然不一致，所以 6 件必须同批改完，统一验收。
+>
+> **v1.1 修正记录**（审查打脸 → 已修）：
+> 1. ❌→✅ §1.1：跨段**不是** setMediaSrc+seek+play，是**同元素只 seek+play、src 恒定**（player.js:416-417 明令"绝不复建/改 src"）——"不换 src"是现有纪律，Phase C 将其翻转，两套纪律必须一次收敛（§5.1）
+> 2. ❌→✅ §1.2：导出**就是在自己算第二套换算**（不是"读字段"）——对拍 diff 面比 v1.0 预估大
+> 3. 🆕 §1.1：**预览播放从不变速**（全项目无 playbackRate）——speed 只影响 UI 面板+导出；V2 验收实质依赖 B 落地
+> 4. ❌→✅ §1.4：缩略图**前端已实现**（timeline.js:130-139 background-image 瓦片）——Phase F 改为只修 material_id 缺口，不重复实现
+> 5. 🆕 §4.2：Phase B 前置 **CORS 坑**——本地服务器 main.py:69-93 无 ACAO 头，fetch decodeAudioData 会被拦截，先加头
+> 6. ✅ 修正：destroy() 实际在 media.js:38-41（非 L67），且 pool 是死代码（grep 无任何调用）
 
 ---
 
@@ -10,40 +18,42 @@
 
 对测试项目（`粗剪_IMG_4379_v2.mp4` 3 段 + `王悦辰.mp3` 3 段，17s，上下对齐）：
 
-| # | 验收项 | 通过标准 |
-|---|--------|---------|
-| V1 | 跨段播放 | 播放 17s 全程：有画面、不卡帧、**跨段有声**（原冻结项消失） |
-| V2 | 变速+音量 | 段变速 2x / 音量 0.5：预览听感 = 导出到剪映后听感（比例一致） |
-| V3 | 静音链 | 全局静音 / 轨静音 / 段静音 三档各自生效，且预览=导出 |
-| V4 | AI 播放中修改 | 播放中 MCP 加/删/移段，播放器 1 秒内反映新时间轴（不中断播放头） |
-| V5 | 老存档兼容 | 缺 src_start/speed/material_id 的旧段：正常播放、正常导出 |
-| V6 | 缩略图 | 时间轴上视频段显示缩略图平铺 |
+| # | 验收项 | 通过标准 | 依赖 |
+|---|--------|---------|------|
+| V1 | 跨段播放 | 播放 17s 全程：有画面、不卡帧、**跨段有声**（原冻结项消失） | B+C |
+| V2 | 变速+音量 | 段变速 2x / 音量 0.5：预览听感 = 导出到剪映后听感（比例一致） | **B 落地后才可验收**（预览不变速是现状缺口，v1.1 已记录） |
+| V3 | 静音链 | 全局静音 / 轨静音 / 段静音 三档各自生效，且预览=导出 | B+D |
+| V4 | AI 播放中修改 | 播放中 MCP 加/删/移段，播放器 1 秒内反映新时间轴（不中断播放头） | E |
+| V5 | 老存档兼容 | 缺 src_start/speed/material_id 的旧段：正常播放、正常导出 | A 兜底 |
+| V6 | 缩略图 | material_id 场景下时间轴视频段显示缩略图（常规场景已实现，v1.1 修正） | F |
 
 ---
 
 ## 1. 现状画像（代码级事实，侦察于 2026-08-16）
 
 ### 1.1 播放链（player.js，546 行）
-- `resolveHits(us)`（L40）：**每帧**遍历全部轨道找命中段 —— 大时间轴逐帧全扫
+- `resolveHits(us)`（L40）：**每帧**遍历全部轨道找命中段（playTick L539 每帧调）—— 大时间轴逐帧全扫
 - `playTick()`（L500）：墙钟推进播放头 ✅（此层已对齐 OpenCut，不动）
-- 跨段 = `keySig` 变化 → `PlayerManager.handleCrossSegment(us)` → 同元素 `setMediaSrc + seek + play`（**状态机竞态源**）
-- `PlayerManager`（media.js L17）：媒体池 `pool: Map()` 但 **`destroy()` 是 TODO 空壳**（L67）—— 元素从不销毁，跨段全靠"复用+换内容"，状态残留无法清除
+- **跨段现状（审查实锤，v1.0 描述有误）**：`keySig` 变化 → `PlayerManager.handleCrossSegment`（media.js:494）→ `_handleCrossSegment`（player.js:475）→ `seekActiveMediaToPlayhead` + `playAllMedia(HANDOFF)`——**同元素只 seek+play，src 恒定**（player.js:416-417 明令"绝不复建/改 src/重跑 render"）。`setMediaSrc` 只发生在 renderPreview，而播放期 renderPreview 冻结 → **播放中跨段从不换内容**
+  - ⚠️ 推论：**同轨相邻段若来自不同素材文件，播放器会播错内容**（旧 src 的偏移画面）——现有"不换 src"纪律的固有缺陷，Phase C 必须同时修
+- `PlayerManager`（media.js L17）：`destroy()` 是 **TODO 空壳**（media.js:38-41），`pool: Map()` 是**死代码**（grep 无任何 pool.set/get/delete/clear 调用）——元素永不销毁，元素生命周期实际挂在 previewState.visualEls/audioEls
 - 音频：`<audio>`/`<video>` 元素 play/pause/seek（WebView2 状态机 = 8 个补丁修不好的根源）
+- 🆕 **预览不变速（审查发现）**：全项目 JS **无 playbackRate**（grep 零命中）——speed 只在 UI 面板（HTML:1024 set_segment_speed 提交）和导出生效，**预览播放从不应用变速**。V2 验收（变速预览=导出）实质依赖 Phase B 落地
 
 ### 1.2 导出链（main.py export_draft，L3262）
-- 视频段（L3390 附近）：`Timerange(start, duration)` + `source_timerange(src_start, src_end-src_start)` + `volume`（轨静音||段静音→0，否则 seg.volume）+ `speed/change_pitch` + 关键帧 + 遮罩 —— **字段映射已经完整**
-- 音频段（L3410 附近）：同样完整
-- **结论：导出层已经是"读字段"，不是"再算一遍"** —— 它缺的不是映射，而是与播放器**共用同一套换算公式的保证**
+- 视频段（L3377-3387）：`ss = seg.get("src_start", 0)` + `se_ = seg.get("src_end", ss+duration)` + `Timerange(ss, se_-ss)` + `vol = 0.0 if (track_muted or seg.muted) else seg.volume` + `_seg_speed(seg)` + `change_pitch` + 关键帧 + 遮罩
+- 音频段（L3413-3421）：同构
+- **结论（审查实锤，v1.0 自相矛盾已修）**：导出层**就是在自己拼第二套换算**（default 兜底、se_-ss 差、_seg_speed clamp、轨/段静音判断）——不是"读字段"。它和播放器侧（media.js:445-457 PlayerManager.seek 的 src 偏移换算）是**两套独立实现的换算**，这正是"预览≠导出"的缝
 
 ### 1.3 音量链（三层分散）
-- 全局：`previewMuted`（player.js L19，写点 media.js L422 等 3+ 处）
+- 全局：`previewMuted`（player.js L19，**唯一写点** media.js:422 setGlobalMute 内，其余全为读取——审查修正"写点 3+ 处"）
 - 轨级：`isTrackMuted(type, ti)`（player.js L291）
 - 段级：`seg.muted` / `seg.volume`（renderer.js L92/L217/L226 应用）
-- 分散在 player.js / media.js / renderer.js 的 **10+ 处**，各自判断逻辑不统一
+- **判定逻辑不统一**（审查实锤）：`shouldMediaBeMuted`（previewMuted || autoplayUnlockPending || mediaMuteReasons）与 `wantSound`（!previewMuted && !isTrackMuted）两套判定并存；audio 轨静音段在 renderer.js:217 被 filter 掉**不建元素**，而 video 静音段建元素置 muted——行为模式不一致真实存在
 
 ### 1.4 缩略图
-- 后端：素材有 `thumbnail` 字段（已生成）✅
-- 前端：时间轴段渲染未用（显示层小 bug）
+- 后端：素材有 `thumbnail` 字段（已生成：main.py:1499 `_make_thumbnail` + import_media_by_paths 抽帧 + L3870 `_ensure_video_thumbnails`）✅
+- 前端：**已实现**（审查实锤）——timeline.js:130-139 makeSeg 用 `background-image:url(...)` 瓦片平铺 + 素材面板 HTML:788 也已用。**唯一真缺口**：makeSeg 用 `s.path` 而非 `resolveSegPath`，段仅含 material_id 无 path 时缩略图缺失（Phase F 只修这个）
 
 ---
 
@@ -89,7 +99,7 @@ function buildPlaybackGraph(draft) {
   trackKey: "audio:0",
   startUs, durationUs,       // 时间轴位置
   srcStartUs, srcEndUs,      // 源窗口（兼容兜底后）
-  speed,                     // 变速（default 1）
+  speed,                     // 变速（default 1）；⚠️ v1.1：预览端目前不变速（无 playbackRate），B 落地后本字段才在预览生效；导出端立即生效
   gain,                      // 统一音量解析结果（0~2）
   path,                      // resolveSegPath 结果（失效返回 null → 跳过）
 }
@@ -159,6 +169,8 @@ function resolveGain(previewMuted, trackMuted, segMuted, segVolume) {
 
 ### 4.2 引擎结构（对齐 OpenCut audio-manager.ts）
 
+> ⚠️ **v1.1 前置条件（审查发现）：CORS 坑** —— decodeAudioData 需要 `fetch` 媒体文件。当前本地服务器 `main.py:69-93` 是 `SimpleHTTPRequestHandler`，**无 `Access-Control-Allow-Origin` 头**，而页面是 file://（origin=null）→ fetch http://127.0.0.1 会被 CORS 拦截。**B 落码第一步：给本地服务器加 ACAO 头**（`send_response` 后 `send_header("Access-Control-Allow-Origin", "*")`）。若加头后 WebView2 仍拦，备选：走 pywebview 桥传 ArrayBuffer。
+
 ```js
 const AudioEngine = {
   ctx,                       // 复用现有 audioCtx（player.js L25 已有 + unlockAudio 手势解锁 ✅）
@@ -223,19 +235,32 @@ const AudioEngine = {
 
 ## 5. 视频独立元素（Phase C，改 media.js / renderer.js）
 
-### 5.1 原则：**跨段不复用，销毁重建**
+### 5.1 原则：**跨段不复用，销毁重建** —— ⚠️ v1.1：这是对现有"不换 src"纪律的**翻转**，必须一次收敛
 
-现状：`PlayerManager.destroy()` 是 TODO 空壳（media.js L67）——补实现：
+**审查实锤的纪律冲突**：现有跨段路径（player.js:416-417）明令"绝不复建/改 src"；setMediaSrc 只发生在 renderPreview（renderer.js:46/232），而播放期 renderPreview 冻结 → 播放中跨段**从不换内容**（同轨不同素材相邻会播错内容）。Phase C 改为"销毁重建 + 新元素 setMediaSrc"，行为翻转。
+
+**收敛要求（避免比现状更糟）**：
+```
+Phase C 落地时，把两条路径合并成单一策略：
+  ① renderPreview（renderer.js:46/232 的 setMediaSrc 点）—— 非播放期建元素
+  ② seekActiveMediaToPlayhead（player.js 复用纪律）—— 播放期跨段
+→ 统一为：元素只属于"一个段"，段变化 = 销毁旧 + 建新（含 setMediaSrc）
+→ 绝不存在"换 src 路径"与"不换 src 路径"并存
+```
+
+现状：`PlayerManager.destroy()` 是 TODO 空壳（media.js:38-41）——补实现（注意 pool 是死代码，元素实际在 previewState 里，destroy 要按 key 从 previewState 找元素）：
 
 ```js
 destroy(key) {
-  const el = this.pool.get(key);
+  // 元素在 previewState.visualEls / audioEls（pool 是死代码，v1.1 修正）
+  const rec = previewState.visualEls.get(key) || previewState.audioEls.get(key);
+  const el = rec ? (rec.el.firstElementChild || rec.el) : null;
   if (!el) return;
   el.pause();
   el.removeAttribute("src");   // 关键：清 src 触发元素彻底复位
   el.load();                   // 复位解码状态（消灭 WebView2 状态残留）
   el.remove();                 // 从 DOM 移除
-  this.pool.delete(key);
+  if (rec) previewState.visualEls.delete(key) || previewState.audioEls.delete(key);
 }
 ```
 
@@ -244,6 +269,8 @@ destroy(key) {
 旧 video 元素：保留显示最后一帧（CSS opacity 过渡遮闪）→ 新元素 ready 后移除
 新 video 元素：PlayerManager.create → setMediaSrc(新段源窗口) → seek 到源偏移 → play
 ```
+
+> 注意：VideoNode 里要带 path + 源窗口，跨段时据此判断"是否同素材同窗口"——若同素材同窗口（如同一 MP4 的相邻切片）可考虑轻量 seek 而非重建；不同素材才重建。**收敛策略里允许这个优化，但默认先全重建（简单、正确）**。
 
 ### 5.2 解决什么问题
 
@@ -312,10 +339,13 @@ refresh()（HTML L2316 附近）：
 
 ---
 
-## 8. 缩略图显示（Phase F，独立小项，同批顺手）
+## 8. 缩略图补缺（Phase F，独立小项，同批顺手）—— ⚠️ v1.1：已实现部分不重复做
 
-- 后端 `thumbnail` 已有 → 前端时间轴段渲染（renderer.js / timeline.js）加缩略图 `<img>`（宽 ~64px，video 段用，失败回落纯色）
-- 0.5h，不阻塞其它 Phase，但它是 V6 验收项，建议同批
+**审查实锤**：缩略图前端已实现（timeline.js:130-139 background-image 瓦片平铺 + 素材面板 HTML:788）。**Phase F 只修唯一真缺口**：
+
+- makeSeg（timeline.js）用 `s.path` 而非 `resolveSegPath` → 段仅含 material_id 无 path 时（store.js:86-96 未来去 path 化场景）缩略图缺失
+- 改法：makeSeg 缩略图取值改用 `resolveSegPath(s)`（与渲染层一致），~0.5h
+- 不重复实现 <img> 方案，不碰已有 background-image 瓦片
 
 ---
 
@@ -330,11 +360,11 @@ refresh()（HTML L2316 附近）：
   C. media.js destroy() 实现 + 跨段重建（video 路径切换）
   D. export_draft 切语义层（对拍 + 导出真机验证）
   E. 轮询重平铺（播放中修改）
-  F. 缩略图
-验收：V1~V6 统一跑（不中途验收 —— 中途状态必然不一致，会误导）
+  F. 缩略图补缺（只修 material_id 场景，不重复实现）
+验收：V1~V6 统一跑（不中途验收 —— 中途状态必然不一致，会误导）；V2 依赖 B/C 先落地
 ```
 
-### 9.2 风险与缓解
+### 9.2 风险与缓解（v1.1 新增 3 行 ⚠️）
 
 | 风险 | 缓解 |
 |------|------|
@@ -344,6 +374,9 @@ refresh()（HTML L2316 附近）：
 | 视频重建瞬间闪 | 旧元素最后一帧 + opacity 过渡遮闪（0.15s） |
 | 两端平铺不一致 | 对拍脚本进 tools/，每次改字段必跑 |
 | 音频变速音调 | change_pitch（保调）后置：先保证变速时长/节奏对 |
+| ⚠️ **CORS 拦截 fetch 解码**（审查发现） | B 落码第一步给本地服务器加 ACAO 头（main.py:69-93） |
+| ⚠️ **"换 src/不换 src"两套纪律并存**（审查发现） | Phase C 一次收敛成单一策略（§5.1），绝不留两套路径 |
+| ⚠️ **假对拍**：A 单独落地时对拍全绿但预览不变速（审查发现） | speed 字段标注"预览端待 B 接管"；V2 验收排在 B/C 后（§0 已标依赖） |
 
 ### 9.3 工期（诚实估计）
 
@@ -364,10 +397,12 @@ refresh()（HTML L2316 附近）：
 ```
 draft
   → buildPlaybackGraph（唯一换算点：源窗口/变速/音量/兼容）
-      ├── 播放：AudioEngine（audio 轨 Web Audio）+ 视频独立元素（video 内嵌声）
+      ├── 播放：AudioEngine（audio 轨 Web Audio，含变速 playbackRate）+ 视频独立元素（video 内嵌声）
       ├── 导出：export_draft 消费同一平铺结果
       └── 对拍：tools/graph_consistency.py 保证两端恒等
 → 预览 = 导出（同一语义）
 → 跨段无声/卡帧（状态机竞态）→ 架构消除
+→ 同轨不同素材相邻 → 播正确内容（v1.1：现有"不换 src"缺陷一并修）
+→ 预览变速 → 随 B 落地生效（v1.1：现状不变速缺口补上）
 → AI 播放中修改 → 实时反映
 ```
