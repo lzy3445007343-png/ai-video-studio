@@ -132,6 +132,13 @@ function renderPreview(s) {
     if (!activeVisualKeys.has(layerKey)) rec.el.style.display = "none";
   }
 
+  // C.5-2（MediaSlot 预加载）：每轨 active 命中后，调度后台 prepare 槽预加载"下一段"——
+  // 提前建元素+seek+等 ready（用户不可见），切段时 swap 无感（根治 WebView2 seek 到缓冲外触发管线重置）。
+  for (const h of visualHits) {
+    const rec = previewState.visualEls.get("video:" + h.ti);
+    if (rec) preloadNextVideoSlot(rec, h.ti, h.seg.start || 0);
+  }
+
   // 文本层：每条 text 轨道一个文本 div
   const activeTextKeys = new Set();
   for (const h of textHits) {
@@ -235,6 +242,83 @@ function renderPreview(s) {
 }
 
 /* ---------- 播放 / 暂停 ---------- */
+// C.5-2（MediaSlot 预加载调度，2026-08-16）：
+// 给轨 rec 的 prepare 槽加载"同轨 start 大于当前段的最小 start"段（下一段）。
+// 状态机：EMPTY→LOADING→READY（canplay 且 currentTime 到位）/ STUCK（失败，降级由切段兜底）。
+// 后台槽纪律：display:none + muted + 不参与 playAllMedia（playAllMedia 只遍历 rec.el active 槽）。
+// 数据源：buildPlaybackGraph(Store.state.draft, Store.state.materials).videoNodes（Playback Graph 平铺，含 startUs/srcStartUs/srcEndUs/path）。
+let _preloadSeq = 0;
+function preloadNextVideoSlot(rec, ti, currentStartUs) {
+  if (!rec) return;
+  // 1. 找下一段（同轨 start > 当前段 start 的最小 start）
+  let nextNode = null;
+  try {
+    const graph = buildPlaybackGraph(Store.state.draft, Store.state.materials);
+    for (const n of (graph.videoNodes || [])) {
+      if (n.trackKey !== "video:" + ti) continue;
+      if (n.startUs > currentStartUs && (!nextNode || n.startUs < nextNode.startUs)) nextNode = n;
+    }
+  } catch (e) { return; }
+  // 2. 无下一段：prepare 槽复位 EMPTY（清掉旧 prepare）
+  if (!nextNode) {
+    if (rec.prepare && rec.slotState !== "EMPTY") {
+      PlayerManager._destroyWrap(rec.prepare);
+      rec.prepare = null;
+      rec.slotState = "EMPTY";
+    }
+    return;
+  }
+  // 3. 已 READY 且目标没变：不动（避免每帧重建）
+  if (rec.slotState === "READY" && rec._preloadKey === nextNode.key) return;
+  // 4. 目标变了：清旧 prepare，重新走 LOADING
+  if (rec.prepare && rec._preloadKey !== nextNode.key) {
+    PlayerManager._destroyWrap(rec.prepare);
+    rec.prepare = null;
+  }
+  // 5. 建 prepare wrap（display:none 后台槽）
+  if (!rec.prepare) {
+    const wrap = _makeVisualEl("video");
+    wrap.id = "preload:" + ti;
+    wrap.style.display = "none";
+    const stack = $("previewStack");
+    if (stack) stack.appendChild(wrap);
+    rec.prepare = wrap;
+  }
+  rec._preloadKey = nextNode.key;
+  if (rec.slotState === "LOADING") return;   // 已在加载中，等 canplay 回调推进
+  rec.slotState = "LOADING";
+  // 6. 建 video 元素 + 设 src + muted（后台不发声）
+  let media = rec.prepare.firstElementChild;
+  if (!media || media.tagName !== "VIDEO") {
+    rec.prepare.innerHTML = "";
+    media = PlayerManager.create("video", rec.prepare, "preload:" + ti);
+    setMediaMute(media, true, "preload", "preload:" + ti);
+    media.playsInline = true;
+  }
+  const path = resolveSegPath({ material_id: null, path: nextNode.path });
+  if (!path) { rec.slotState = "STUCK"; return; }
+  setMediaSrc(media, fileURL(path), "preload", "preload:" + ti);
+  // 7. canplay 后 seek 到下一段源窗口起点（后台定位，用户不可见；seek 失败不影响当前播放）
+  const _seq = ++_preloadSeq;
+  media.oncanplay = () => {
+    if (rec.slotState !== "LOADING" || rec._preloadKey !== nextNode.key) return;
+    PlayerManager.seek(media, { start: nextNode.startUs, src_start: nextNode.srcStartUs, src_end: nextNode.srcEndUs, duration: nextNode.durationUs, speed: nextNode.speed }, nextNode.startUs);
+    // 等 seek 落位确认（canplay 后 readyState>=2，seek 生效）→ READY
+    const _s = _seq;
+    setTimeout(() => {
+      if (_s !== _preloadSeq) return;
+      if (rec.slotState !== "LOADING") return;
+      const ok = media.readyState >= 2 && Math.abs((media.currentTime || 0) - (nextNode.srcStartUs / 1e6)) < 0.15;
+      rec.slotState = ok ? "READY" : "STUCK";
+      if (ok) console.log("[MediaSlot] prepare READY", nextNode.key, "at", (nextNode.srcStartUs / 1e6).toFixed(1));
+      else console.warn("[MediaSlot] prepare STUCK", nextNode.key, "ready=", media.readyState, "cur=", (media.currentTime || 0).toFixed(3));
+    }, 400);
+  };
+  // 兜底：canplay 可能已过（同一文件已缓冲）→ 立即检查
+  if (media.readyState >= 2) media.oncanplay();
+}
+
+// 静音按钮状态同步（C.5-2 编辑时保护：updateMuteBtn 函数头）
 function updateMuteBtn() {
   const btn = $("muteBtn");
   if (!btn) return;
