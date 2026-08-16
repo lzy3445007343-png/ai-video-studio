@@ -475,14 +475,33 @@ function seekActiveMediaToPlayhead(us) {
     if (h.type === "video") {
       const v = previewState.visualEls.get("video:" + h.ti);
       rec = v; el = v ? v.el.firstElementChild : null;   // video 元素在 wrap 内，firstElementChild 即 <video>
-      // Phase C-fix v2（2026-08-16 真机 20:33）：跨段换内容 → 销毁重建。**判断用 key（轨:段索引）而非 path/对象引用**——
-      // ①轮询刷新（0.5s）key 不变 → 不重建（修 453b631 前"每 0.5s 重建卡顿"）
-      // ②跨段 key 必变（video:0:0→video:0:1）→ 重建（**为什么同素材相邻也重建**：WebView2 同元素 seek 在播放中
-      //   不可靠——currentTime 赋值被吞，元素从 0 起播、cur 卡 ~1s 反复播，日志实锤 [seek] to=6.063 cur=1.012）
-      // ③重建后 renderPreview 增量重建新元素，canplay 时（readyState>=2）才 seek → 位置正确
+      // C.5-3（MediaSlot swap，2026-08-16）：跨段时若 prepare 槽已 READY（后台预加载完成）→ **swap 无感**：
+      //   旧 active 元素转 prepare（隐藏，后台加载下一段 N+2），prepare 转 active（显示，直接播）
+      //   根治 WebView2"切段 destroy+重建→新元素加载慢→从 0 起播"（日志实锤 cur=0.002 反复播开头）。
+      //   仅当 prepare 未 READY/无 prepare 时，降级走原 destroy+重建（现有逻辑兜底）。
       if (rec && rec.el && rec.key !== h.key) {
-        PlayerManager.destroy("video:" + h.ti);
-        rec = null; el = null;
+        if (rec.prepare && rec.slotState === "READY") {
+          // swap：active ↔ prepare
+          const oldActive = rec.el;
+          rec.el = rec.prepare;
+          rec.prepare = oldActive;
+          rec.slotState = "ACTIVE";
+          rec.el.style.display = "";               // prepare 转 active：显示
+          rec.prepare.style.display = "none";      // 旧 active 转 prepare：隐藏（后台）
+          rec.prepare.dataset.path = "";           // 旧元素 path 清掉，防误判
+          rec.el.dataset.pendingSeek = "";         // prepare 已就位，无需 pendingSeek
+          el = rec.el.firstElementChild;
+          rec.seg = h.seg; rec.key = h.key;
+          // 旧 active 的 media 复位（清 src，避免后台残留解码）
+          const oldMedia = rec.prepare.firstElementChild;
+          if (oldMedia) { try { oldMedia.pause(); } catch (e2) {} try { oldMedia.removeAttribute("src"); } catch (e2) {} }
+          console.log("[MediaSlot] SWAP", "active=" + h.key, "prepare→active");
+          // swap 后补位：旧 active（现 prepare）立即开始加载下一段 N+2（播放期 renderPreview 不调，这里手动补）
+          try { if (typeof preloadNextVideoSlot === "function") preloadNextVideoSlot(rec, h.ti, h.seg.start || 0); } catch (e3) {}
+        } else {
+          PlayerManager.destroy("video:" + h.ti);   // 降级：prepare 未就绪 → 原 destroy+重建兜底
+          rec = null; el = null;
+        }
       }
     } else if (h.type === "audio") {
       const a = previewState.audioEls.get("audio:" + h.ti);
