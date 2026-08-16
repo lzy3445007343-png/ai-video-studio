@@ -68,29 +68,123 @@ ALLOWED_LOCAL_EXT = (".mp4", ".mov", ".avi", ".mkv", ".mp3", ".wav", ".m4a", ".a
 
 class _SilentHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
     protocol_version = "HTTP/1.1"   # 支持 Range 持久连接，避免视频缓冲中途断流卡顿
+    # ⚠️ 关键：Python 标准库 SimpleHTTPRequestHandler 不支持 Range（永远 200 全量）。
+    # WebView2/Chromium 在无 Range 的服务器上无法 seek 到当前缓冲范围外——跨段播放
+    # seek(5s/10s) 全被吞、从素材 0 秒起播、MediaSlot prepare 预加载卡 STUCK 无限循环。
+    # 因此 /local/ 代理路径由 _serve_file 完全接管，手动实现 206 Partial Content。
+    _RANGE_RE = re.compile(r"bytes[= ](\d*)-(\d*)\Z")
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=HERE, **kwargs)
     def log_message(self, format, *args):
         pass  # 关闭访问日志，保持控制台干净
+
+    # ---- Range 支持（206 Partial Content）----
+    def _parse_range(self, file_len):
+        """解析 Range 头。返回 (start, end) 闭区间；None=全量；'error'=416。"""
+        h = self.headers.get("Range")
+        if not h:
+            return None
+        m = self._RANGE_RE.match(h.strip())
+        if not m:
+            return None  # 非单段 bytes 范围（如 multipart/byteranges），忽略按全量返回
+        g1, g2 = m.group(1), m.group(2)
+        if g1 == "" and g2 == "":
+            return None
+        if g1 == "":
+            start = max(file_len - int(g2), 0)   # 后缀范围 bytes=-N
+            end = file_len - 1
+        else:
+            start = int(g1)
+            end = int(g2) if g2 else file_len - 1   # HTTP Range 含结束偏移：bytes=0-1023 → 0..1023 共 1024 字节
+        if start >= file_len:
+            return "error"
+        end = min(end, file_len - 1)
+        if end < start:
+            end = start
+        return (start, end)
+
+    def _serve_file(self, abs_path, head_only=False):
+        """按 Range 服务单个文件；不带 Range 时等价全量 200（行为与父类一致）。"""
+        try:
+            f = open(abs_path, "rb")
+        except OSError:
+            self.send_error(404, "File not found")
+            return
+        try:
+            fs = os.fstat(f.fileno())
+            file_len = fs.st_size
+            rng = self._parse_range(file_len)
+            if rng == "error":
+                f.close()
+                self.send_error(416, "Requested Range Not Satisfiable")
+                return
+            self.send_response(206 if rng else 200)
+            self.send_header("Content-type", self.guess_type(abs_path))
+            self.send_header("Accept-Ranges", "bytes")
+            if rng:
+                start, end = rng
+                self.send_header("Content-Range", f"bytes {start}-{end}/{file_len}")
+                self.send_header("Content-Length", str(end - start + 1))
+            else:
+                self.send_header("Content-Length", str(file_len))
+            self.send_header("Last-Modified", self.date_time_string(fs.st_mtime))
+            self.end_headers()
+            if head_only:
+                f.close()
+                return
+            if rng:
+                start, end = rng
+                f.seek(start)
+                remaining = end - start + 1
+                buf = 64 * 1024
+                while remaining > 0:
+                    chunk = f.read(min(buf, remaining))
+                    if not chunk:
+                        break
+                    try:
+                        self.wfile.write(chunk)
+                    except (BrokenPipeError, ConnectionResetError):
+                        break  # 客户端 seek 中断响应属正常（Chromium 高频 Range 行为）
+                    remaining -= len(chunk)
+            else:
+                try:
+                    shutil.copyfileobj(f, self.wfile)
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
+            f.close()
+        except Exception:
+            f.close()
+            raise
+
+    def _local_abs_path(self):
+        import urllib.parse
+        abs_path = urllib.parse.unquote(self.path[len("/local/"):])
+        abs_path = os.path.normpath(abs_path)
+        if os.path.isfile(abs_path) and abs_path.lower().endswith(ALLOWED_LOCAL_EXT):
+            return abs_path
+        return None
+
     def do_GET(self):
         # /local/ 前缀：代理任意本地绝对路径（导入剪映工程时引用原素材，避免大文件复制占空间）
         if self.path.startswith("/local/"):
-            import urllib.parse
-            abs_path = urllib.parse.unquote(self.path[len("/local/"):])
-            abs_path = os.path.normpath(abs_path)
-            if os.path.isfile(abs_path) and abs_path.lower().endswith(ALLOWED_LOCAL_EXT):
-                # 复用 SimpleHTTPRequestHandler 的 Range 能力：临时把服务目录切到文件父目录
-                orig_dir = self.directory
-                self.directory = os.path.dirname(abs_path)
-                self.path = "/" + os.path.basename(abs_path)
-                try:
-                    super().do_GET()
-                finally:
-                    self.directory = orig_dir
-                return
-            self.send_error(403, "Forbidden path")
+            abs_path = self._local_abs_path()
+            if abs_path:
+                self._serve_file(abs_path)
+            else:
+                self.send_error(403, "Forbidden path")
             return
         super().do_GET()
+
+    def do_HEAD(self):
+        if self.path.startswith("/local/"):
+            abs_path = self._local_abs_path()
+            if abs_path:
+                self._serve_file(abs_path, head_only=True)
+            else:
+                self.send_error(403, "Forbidden path")
+            return
+        super().do_HEAD()
 
 def _start_local_server(preferred=(8080, 8081, 8082, 8083, 8084, 8085)):
     """尝试绑定 preferred 端口，失败则随机选 8000-9000 内可用端口。"""
