@@ -354,12 +354,12 @@ async function startPlay() {
   $("playBtn").textContent = "⏸";
   lastHitSig = resolveHits(Store.state.playheadUs).map(h => h.key).join("|");
   renderPreview();            // 立即更新元素（新素材可能刚设置 src，还未加载完）
-  // Phase C-2（2026-08-16）：audio 轨交给 AudioEngine（Web Audio）——起播前喂平铺 clip 列表 + 锚定时钟。
-  // 调度是 lookahead 式的，到点自动出声；这里 attach 复用 audioCtx（手势解锁状态）并立即扫一次。
+  // Phase C-2-fix（2026-08-16 真机）：audio 轨交给 AudioEngine（Web Audio）。
+  // 只在这里 attach + 同步静音；**不再 setClips** —— 下方 seekActiveMediaToPlayhead(playheadUs)
+  // 内部会 setClips，若这里也调，二次 stopAll+epoch 会作废正在 decode 的调度 → 音频起不来。
   try {
     AudioEngine.attach(audioCtx);
     AudioEngine.setGlobalMuted(previewMuted);
-    AudioEngine.setClips(buildPlaybackGraph(Store.state.draft, Store.state.materials).audioClips, Store.state.playheadUs);
   } catch (e) { console.warn("[AudioEngine] startPlay 接线失败:", e); }
   const hits = resolveHits(Store.state.playheadUs);
   // 止血（B.5.5-STAB，2026-08-15 拍板）：Timeline Clock 是 master，绝不被媒体 await 阻塞。
@@ -460,11 +460,12 @@ function seekActiveMediaToPlayhead(us) {
     if (h.type === "video") {
       const v = previewState.visualEls.get("video:" + h.ti);
       rec = v; el = v ? v.el.firstElementChild : null;   // video 元素在 wrap 内，firstElementChild 即 <video>
-      // Phase C（2026-08-16，方案 §5.1）：跨段换内容 → 销毁重建，不再"同元素 seek 换内容"。
-      // 段对象变化（不同素材相邻 / split 后不同窗口）→ 旧元素状态残留无法清除（WebView2 卡帧/无声根因）。
-      // 销毁后 el=null → allReady=false → 下方 renderPreview 增量重建（dataset 缓存保证只重建删掉的轨），
-      // 新元素 canplay 后由 renderPreview 的 onReady 完成 seek。同段内播放头移动（rec.seg===h.seg）→ 轻量 seek 不重建。
-      if (rec && rec.seg && rec.seg !== h.seg) {
+      // Phase C-fix（2026-08-16 真机）：跨段换内容 → 销毁重建。**判断必须用内容指纹（path）而非对象引用**——
+      // 轮询刷新（0.5s）会把 draft 换成全新对象，引用比较永远不同 → 每 0.5s 重建一次 video → 画面一直卡。
+      // 同素材（path 相同，含同素材不同窗口的 split 段）→ 轻量 seek（PlayerManager.seek 内部按 src_start/src_end 换算）；
+      // 不同素材才销毁重建（清 WebView2 元素状态残留 + 修"同轨不同素材播错内容"）。
+      const needPath = resolveSegPath(h.seg);
+      if (rec && rec.el && rec.el.dataset.path && rec.el.dataset.path !== needPath) {
         PlayerManager.destroy("video:" + h.ti);
         rec = null; el = null;
       }
