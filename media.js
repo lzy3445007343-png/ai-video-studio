@@ -35,9 +35,24 @@ const PlayerManager = {
     parent.appendChild(el);
     return el;
   },
-  // 销毁：壳阶段未实现（后续 Phase 收口 removeAttribute("src")+load() 等销毁逻辑）
-  destroy(/* key */) {
-    // TODO(后续Phase): 统一销毁媒体节点，替代散落的 removeAttribute("src")/load()
+  // 销毁：Phase C（2026-08-16）实现 —— 跨段重建的基石。
+  // 元素在 previewState.visualEls/audioEls（pool 是死代码），key 形如 "video:0"（轨级）。
+  // 纪律：pause → 清 src → load() 复位解码状态（消灭 WebView2 状态残留）→ 从 DOM 移除 → 从 map 删除。
+  destroy(key) {
+    let rec = previewState.visualEls.get(key) || previewState.audioEls.get(key);
+    let el = rec ? (rec.el.firstElementChild || rec.el) : null;
+    if (!el) return;
+    try { el.pause(); } catch (e) {}
+    // 关键：清 src + load() 触发元素彻底复位（不带 src 的 load 会终止解码，不触发 error 恢复链）
+    try { el.removeAttribute("src"); } catch (e) {}
+    try { el.load(); } catch (e) {}
+    // 移除前清事件引用，防泄漏（onplaying/error 链在新元素上重建）
+    try { el.onplaying = null; el.onseeked = null; el.oncanplay = null; el.onloadedmetadata = null; } catch (e) {}
+    try { el.remove(); } catch (e) {}
+    if (rec) {
+      if (previewState.visualEls.get(key) === rec) previewState.visualEls.delete(key);
+      else if (previewState.audioEls.get(key) === rec) previewState.audioEls.delete(key);
+    }
   },
 
   // ---- 播放控制（Step 4：play/pause/全局静音逻辑已收口进 Player；顶层 playAllMedia/pausePlay/toggleMute 退化为薄包装）----

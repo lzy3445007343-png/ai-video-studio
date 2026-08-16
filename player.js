@@ -446,6 +446,14 @@ function seekActiveMediaToPlayhead(us) {
     if (h.type === "video") {
       const v = previewState.visualEls.get("video:" + h.ti);
       rec = v; el = v ? v.el.firstElementChild : null;   // video 元素在 wrap 内，firstElementChild 即 <video>
+      // Phase C（2026-08-16，方案 §5.1）：跨段换内容 → 销毁重建，不再"同元素 seek 换内容"。
+      // 段对象变化（不同素材相邻 / split 后不同窗口）→ 旧元素状态残留无法清除（WebView2 卡帧/无声根因）。
+      // 销毁后 el=null → allReady=false → 下方 renderPreview 增量重建（dataset 缓存保证只重建删掉的轨），
+      // 新元素 canplay 后由 renderPreview 的 onReady 完成 seek。同段内播放头移动（rec.seg===h.seg）→ 轻量 seek 不重建。
+      if (rec && rec.seg && rec.seg !== h.seg) {
+        PlayerManager.destroy("video:" + h.ti);
+        rec = null; el = null;
+      }
     } else if (h.type === "audio") {
       const a = previewState.audioEls.get("audio:" + h.ti);
       rec = a; el = a ? a.el : null;   // audio 元素本身直接存于 audioEls.el
@@ -453,6 +461,7 @@ function seekActiveMediaToPlayhead(us) {
     if (!el) { allReady = false; continue; }
     // B2-B：跨段只 seek 不复建元素，必须同步刷新 rec.seg/key，否则 playAllMedia 兜底仍用旧段元数据
     // 算时间轴位置 → 播放头反复判定跨段 → 来回 seek → 闪/卡/反复播。仅跨段（seg/key 变化）才写，避免每 tick 无效写对象。
+    // Phase C 注：同段内 rec.seg 不变（不触发 destroy），这里仍会因跨段刷新 rec.seg（h.seg 已是新段）。
     if (rec && (rec.seg !== h.seg || rec.key !== h.key)) { rec.seg = h.seg; rec.key = h.key; }
     PlayerManager.seek(el, h.seg, us);   // 唯一 seek 入口：timeline→source 换算在 PlayerManager.seek 内部完成，禁第二套逻辑
     seeked.push(el);            // Round D：记录待屏障元素
