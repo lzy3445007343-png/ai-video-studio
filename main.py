@@ -1962,6 +1962,15 @@ class Api:
         self._reload()
         return Api.cmd_mgr.redo(self)
 
+_TS_RE = re.compile(r"_(\d{6,})(?=\.[^.]+$)")
+def _strip_asset_ts(p):
+    """去掉 assets 副本文件名里 import 加的时间戳后缀（5月28日_1786963727.mp4 -> 5月28日.mp4），
+    用于把 Agent/脚本传入的「导入前原始路径」归一到 materials 里登记的 canonical 副本路径。"""
+    if not p:
+        return p
+    return _TS_RE.sub("", p.replace("\\", "/"))
+
+
     def add_to_timeline(self, name, path, mtype, track_index=None, at_time_us=None, insert_index=None):
         """把素材登记进草稿对应轨道（双击或拖拽都走这里，真实进轨）。
 
@@ -2015,14 +2024,26 @@ class Api:
             "change_pitch": False,
             "animations": {},
         }
-        # Step 3 Asset 分离：段关联素材 uid（materials 按 path 精确匹配；匹配不到不设，
-        # 保持无 material_id，前端 resolveSegPath 会 fallback seg.path，行为不变）。
-        # 标准链路（导入素材→拖入时间轴）走 materials[].path（assets 副本），可精确命中；
-        # MCP/脚本直接传原始路径时可能 miss，属可接受（旧数据兼容路径）。
+        # Step 3 Asset 分离：段关联素材 uid。
+        # 标准链路（导入素材→拖入时间轴）materials[].path 即 assets 副本（带时间戳后缀），
+        # 与拖入时传入的路径一致 → 精确命中。
+        # 但 MCP/脚本直接传「导入前的原始路径」时，materials 里是带后缀的副本路径，
+        # 精确匹配会 miss → material_id 缺失、thumbMap（按 materials.path 建键）查不到
+        # → 视频段降级纯色条、时间轴无胶片帧（2026-08-17 修复）。
+        # 兜底：去掉时间戳后缀按 stem 归一比较，命中则关联 material_id，并把 seg.path
+        # 改写为 materials 的 canonical 副本路径，保证 thumbMap 命中、渲染出帧且播放走同一文件。
+        _matched_material = None
         for _m in self.state.get("materials", []) or []:
-            if isinstance(_m, dict) and _m.get("path") == path and _m.get("uid"):
-                seg["material_id"] = _m["uid"]
-                break
+            if isinstance(_m, dict) and _m.get("uid"):
+                if _m.get("path") == path:
+                    _matched_material = _m
+                    break
+                if _strip_asset_ts(_m.get("path")) == _strip_asset_ts(path):
+                    _matched_material = _m  # 后缀归一命中（保留首个）
+        if _matched_material:
+            seg["material_id"] = _matched_material["uid"]
+            if _matched_material.get("path") != path:
+                seg["path"] = _matched_material["path"]
         # 视频段记录是否含音轨（提取原声按钮可用性；ffprobe 探测，仅视频类型）
         if mtype == "video":
             seg["has_audio"] = _has_audio_stream(path)
