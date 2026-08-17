@@ -10,7 +10,7 @@
 
 | 档 | 内容 | 决策 |
 |----|------|------|
-| **v1 本阶段** | 特效段活在独立轨道（lane），可拖拽/拉长/缩短；**逐片段特效**（filter 挂在指定素材层）+ **可选全局调色层**（多参数 grade，对齐剪映「调节」）；关键帧（参数时间曲线）；特效只作为"盖在上面的数据"，预览=导出同源；能直接导出 mp4（ffmpeg 烘焙 CSS 原语）。 | ✅ 做 |
+| **v1 本阶段** | 特效段活在独立轨道（lane），可拖拽/拉长/缩短；**逐片段特效**（filter 挂在指定素材层）+ **可选调整层（Adjustment Layer，多参数 grade，对齐 PR/剪映 调整层）**；关键帧（参数时间曲线）；特效只作为"盖在上面的数据"，预览=导出同源；能直接导出 mp4（ffmpeg 烘焙 CSS 原语）。 | ✅ 做 |
 | **v1 后置（本阶段不做 UI）** | 特效属性面板、关键帧编辑面板、遮罩区域把手面板、变速面板；文字动效面板。**注意：参数栏现有 UI 已知有 bug（关键帧/遮罩/变速），先记账、轨道做好后修。** | ⏸ 记账后置 |
 | **v2 后置（需 WebGL 后端）** | 绿幕抠像(chroma key)、扭曲/位移(warp)、粒子、高级蒙版(亮度/毛边/跟踪)。 | ❌ 不做（有开源底座可抄） |
 
@@ -47,7 +47,7 @@
 {
   "type": "effect",                 # 固定
   "effect_type": "filter",          # v1: "filter"(逐片段调色/模糊等) | "grade"(全局调色层)
-  "target": "global",               # "global"=盖整栈(调色层)；或 素材段 key 如 "video:0:0"=绑该片段
+  "target": {"type":"clip", "track":"video", "ti":0, "si":0},  # 绑指定素材段；type 还可为 "track"(整轨)/"adjustment"(调整层=盖整栈)。v1 索引式引用，后续升级稳定 clip id
   "start": 0,                       # 时间轴起点(us)，同其它段
   "duration": 2_000_000,            # 作用时长(us)；右拖拉长=纯时长(复用 _trim_core 非媒体分支)
   "src_start": 0, "src_end": 2_000_000,  # 占位，保持字段齐整（非媒体段不消费源窗口）
@@ -66,12 +66,43 @@
 }
 ```
 
-**设计取舍**：
-- **逐片段（`target=素材段key`）**：filter 挂到该素材层的 DOM 元素（video/image/text/sticker 各自的层），CSS filter 天然逐层模型，最顺手。
-- **全局调色层（`target="global"` + `effect_type="grade"`）**：filter 挂 `previewStack`（全部视觉层父容器），多参数 grade 盖整片，对齐剪映「调节」。
+**设计取舍（采纳 ChatGPT review：target 结构化 + 调整层命名）**：
+- **逐片段（`target:{type:"clip",track,ti,si}`）**：filter 挂到该素材层的 DOM 元素，CSS filter 天然逐层模型，最顺手。
+- **调整层 / Adjustment Layer（`target:{type:"adjustment"}`）**：filter 挂 `previewStack`（全部视觉层父容器），多参数 grade 盖整片。**术语对齐 PR/剪映「Adjustment Layer」，弃用易歧义的 "global"**。
 - **不做单效果全局开关**（用户明确否决）。
+- **target 结构化而非字符串**：避免 `video:0:0` 绑死；未来可扩展 `type:"track"`(整轨)/多目标/group/adjustment，Agent 操作更鲁棒。
+- **稳定 clip id（v1.x 跟进）**：v1 用 `track/ti/si` 索引引用；后续给每个 segment 发稳定 `id` 后升级为 `target:{type:"clip",id:"clip_xxx"}`，轨道重排不再打断绑定。
 - `keyframes` 是数据模型扩展，renderer 按播放头插值；DOM/CSS 与未来 WebGL 后端都能挂 —— 横切所有特效类。
 - 不变量同其它非媒体段：右拖拉长=纯时长（`_trim_core` 已支持），`src_start/src_end` 占位不消费。
+
+---
+
+## 2.1 Effect Schema 冻结（Agent 接口契约，落码前定死）
+
+> 采纳 ChatGPT review「必补 1」：先冻结类型，否则 Agent/MCP 接口会乱。与 ADR-001（护城河=Video DSL，Agent 可操作内核）同目标。
+
+```typescript
+EffectNode      // buildPlaybackGraph 平铺产物：{key, trackKey, target, effectType, params, keyframes, startUs, durationUs, hidden}
+EffectSegment   // draft.effect[t][i] 原始段：见 §2 数据模型
+EffectTarget    // {type:"clip"|"track"|"adjustment", track?, ti?, si?, id?}
+EffectParams    // {brightness,contrast,saturate,blur,grayscale,sepia,hue_rotate,invert,opacity} 数值字典
+EffectType      // "filter"(逐片段) | "grade"(调整层) ；预留 "transition"/"mask"/"text_anim"
+```
+- 每个 `EffectType` 在注册表声明：`render`(CSS 规格) + `ffmpeg`(滤镜规格) 双 adapter（见阶段 E），保证预览=导出同源。
+- 命名 + 字段一旦冻结，MCP `add_effect`/`update_effect` 严格按此契约，Agent 无需知道 DOM/ffmpeg 差异。
+
+## 2.2 Effect 生命周期（采纳 ChatGPT review「必补 2」）
+
+明确特效段从生到出的全阶段，MCP/前端/导出各阶段只调对应入口：
+```
+create   → add_effect / 导入映射         （写 draft.effect）
+update   → update_effect / trim / 拖拽    （改 params/target/时间）
+activate → buildPlaybackGraph 平铺         （生效到 effectNodes，预览=导出同源）
+render   → renderer 消费 effectNodes       （DOM/CSS 计算 filter/opacity/mask）
+serialize→ draft_state.json 落盘           （人和 AI 共用同一份）
+export   → export_video 读 effectNodes      （经注册表 ffmpeg adapter 烘焙 mp4）
+```
+- 原则：**activate 之后的 render/export 只读 effectNodes，不回头碰 draft**（与 ADR-001「Agent 永不直接碰 Timeline」一致，特效也只是 Graph 上的一个 Node）。
 
 ---
 
@@ -91,12 +122,26 @@
 - `_flattenEffect(seg, ti, idx)`：`{key, trackKey:"effect:"+ti, target, effectType, params, keyframes, startUs, durationUs, hidden}`。
 - **顺带把 text/sticker 也平铺进 `textNodes`/`stickerNodes`**（修 A1 缺陷），语义层完整，`tools/graph_consistency.py` 对拍脚本才覆盖全。
 
-### 阶段 C — renderer 合成（JS · renderer.js，核心：特效显示出来）
-- `renderPreview`（`renderer.js:68-242`）在 visual/text/sticker 之后新增 effect 分支：
-  - 按播放头算激活特效段；`target="global"` → 合并到 `previewStack.style.filter`+`opacity`；`target=素材段key` → 定位该素材层 DOM 元素挂 `filter`。
+### 阶段 C — renderer 合成（JS，核心：特效显示出来，且不让 renderer.js 膨胀）
+> 采纳 ChatGPT review「阶段 C 收紧」：特效只是 Graph 上的一个 Node，不反向侵入播放核心；不要把 renderEffect/renderMask 内联进 renderer.js 堆成 5000 行。
+
+- **抽独立模块 `effects.js`**（不参与播放内核）：纯函数 `computeEffectStyle(effectNodes, playheadUs) → {layerFilters:Map<segKey,filter>, stackFilter, stackOpacity, masks:Map<segKey,clipPath>}`。
+  - renderer.js 只调用 `computeEffectStyle` 并把结果应用到 DOM，**自身不写滤镜逻辑**——保持 `Timeline Kernel → Playback Graph → Renderer` 单向，特效=Node。
+- **应用管线顺序（顺序错结果就错，必须冻结）**：
+  ```
+  Source Layer(视频/图)
+    → Clip Transform(位移/缩放/旋转, 素材层 transform)
+    → Clip Effect(blur/filter, 素材层 filter)      ← 先模糊
+    → Mask(clip-path/mask-image, 素材层)           ← 后裁剪(模糊溢出的部分被裁掉)
+    → Adjustment Layer(previewStack.filter, 整栈)   ← 调色层最后盖
+    → Composite → Canvas/Video
+  ```
+  ⚠️ `blur→mask`（模糊再裁）≠ `mask→blur`（裁后再模糊边缘糊），CSS 天然 `filter` 先于 `clip-path` 合成，顺序天然正确，但文档显式冻结避免未来 WebGL 后端搞反。
+- `computeEffectStyle` 细节：
+  - 按播放头算激活特效段；`target.type="adjustment"` → 合并到 `stackFilter`+`stackOpacity`；`target.type="clip"` → 定位该素材层（需 `layerBySegKey` 映射，落码时补）挂 `layerFilters`。
   - 多段叠加：filter 函数拼接 + opacity 相乘；无激活段 → `filter="none"; opacity=1` 复位。
-  - **关键帧插值**：`applyKeyframes(params, keyframes, relUs)` 算当前时间点参数值（linear/easing），驱动调色渐变、遮罩移动。
-  - 几何遮罩（`target` 层用 `clip-path`/`mask-image`）：v1 先支持圆/椭圆/矩形/多边形 + 渐变羽化（固定参数，区域把手 UI 后置）。
+  - **关键帧插值**：`applyKeyframes(params, keyframes, relUs)` 算当前时间点参数值（linear/easing）。
+  - 几何遮罩：`target` 层用 `clip-path`/`mask-image`，v1 先支持圆/椭圆/矩形/多边形 + 渐变羽化（区域把手 UI 后置）。
 - 隐藏/失活：`isTrackHidden`/`h.seg.hidden` 直接复用。
 
 ### 阶段 D — 前端特效泳道（HTML/JS · 工作台v0.8时间轴.html）
@@ -104,20 +149,29 @@
 - `makeSeg`（`timeline.js:111` 附近）补 effect 段渲染（占位条 + 名称 + 选中把手），**复用 video/text/sticker 的通用选中/拖动/裁剪路径**（`relocate_segment`/`trim_segment` 已是 `draft[track_type]` 泛型，天然支持 effect）—— 这就是用户要的"能拉长缩短做显示时间"。
 - **本阶段不建属性面板**：新增特效段用后端默认 params（如 brightness 1.0=无效果，先用脚本/MCP 给一个有可见效果的默认值让特效"显示出来"）；`effects:"placeholderPanel"`(`915`) 暂保留占位，面板后置。
 
-### 阶段 E — 导出 mp4（Python · main.py，预览=导出同源）
-- 读 `effectNodes` → 生成 ffmpeg filter 图（CSS 原语→ffmpeg 等价）：
-  - `eq=brightness/contrast` / `gblur`(blur) / `saturation`(saturate) / `hue`(hue_rotate) / `colorbalance` / `fade`(opacity 渐入渐出)。
-  - 几何遮罩 → ffmpeg `crop`/`mask`；逐片段 filter → 该流 overlay/滤镜；grade 层 → 整片滤镜。
-  - 关键帧 → 分段 filter 或 `enable` 表达式。
-- **铁律**：预览（renderer 用的 effectNodes）与导出（同 effectNodes）同源于 `buildPlaybackGraph`，不各写一套。
-- 当前 `main.py` 仅 `export_draft`→剪映，但已集成 ffmpeg（`_ffmpeg_bin`/转码/抽音轨），新增 `export_video`（直出 mp4）复用同一 ffmpeg。
+### 阶段 E — 导出 mp4（Python · main.py，预览=导出同源，经 Schema 注册表双 adapter）
+> 采纳 ChatGPT review「别太早做 ffmpeg export / 别让 JSON 直接映射 ffmpeg」：预览(Web)与导出(ffmpeg)是两套实现，易漂（预览蓝、导出色不同）。解法=**每个 EffectType 在注册表声明 `render`(CSS) + `ffmpeg`(滤镜) 双 adapter，二者读同一 Schema**，从根上保证预览=导出同源。
+
+- **`EFFECT_REGISTRY`**（落 `effects.js` 或 `effects_schema.py` 共享定义）：
+  ```python
+  EFFECT_REGISTRY = {
+    "brightness": {"css": lambda v: f"brightness({v})", "ffmpeg": lambda v: f"eq=brightness={v}"},
+    "blur":       {"css": lambda v: f"blur({v}px)",     "ffmpeg": lambda v: f"gblur=sigma={v}"},
+    # ... contrast/saturate/hue_rotate/grayscale/sepia/invert/opacity 同理
+  }
+  ```
+  - renderer 用 `css` adapter 拼 `filter`；`export_video` 用 `ffmpeg` adapter 拼滤镜图。**改一个特效类型只动注册表一处**。
+- 导出映射：逐片段 `clip` 目标 → 该流滤镜；`adjustment` 目标 → 整片 `stackFilter`；几何遮罩 → ffmpeg `crop`/`mask`；关键帧 → 分段 filter 或 `enable` 表达式。
+- **v1 出口策略（采纳 ChatGPT：先简单支持）**：仅对 9 个 CSS 原语做注册表双 adapter；blur/invert 个别 ffmpeg 等价（`gblur`/`negate`）验证后开通；花哨转场/WebGL 特效留 v2。
+- **验收硬指标**：同一组 effectNodes，预览渲染 vs 导出 mp4 逐帧比对无色差（预览=导出同源铁律的对拍项）。
+- 当前 `main.py` 仅 `export_draft`→剪映，已集成 ffmpeg（`_ffmpeg_bin`/转码/抽音轨），新增 `export_video`（直出 mp4）复用同一 ffmpeg。
 
 ### 阶段 F — 开源可商用特效/花字素材接入（调研 + 集成）
 > 用户硬需求："去 GitHub 找可商用的开源"。本阶段把特效目录从"手写 CSS 原语"扩成"可复用开源库/预设"。
 
-- **调研清单（落码前 sign-off 时定具体选型）**：
-  - 文字动效/花字(kinetic typography)：`anime.js`(MIT)、`textillate.js`(MIT)、`GSAP`(现 MIT，Webflow 收购后开源)、`Motion Canvas`(MIT，代码即时间轴+实时预览+ffmpeg 锁帧导出，范式参考)。
-  - 特效/滤镜：`kampos`(MIT，~4KB WebGL 滤镜/转场)、`gl-transitions`(MIT，现成转场 GLSL)。
+- **调研清单（落码前 sign-off 时定具体选型；采纳 ChatGPT 优先级）**：
+  - **特效/滤镜（v1 可接）**：`gl-transitions`(MIT，转场 GLSL)、`kampos`(MIT，~4KB WebGL 滤镜/转场管线)。
+  - **花字/文字动效/粒子（重点看 `pixi.js`，MIT）**：其 `Filter/Container/Sprite/RenderTexture` 思想非常适合后续花字/粒子/动效；`anime.js`(MIT)/`textillate.js`(MIT)/`GSAP`(MIT)/`Motion Canvas`(MIT，代码即时间轴+实时预览+ffmpeg 锁帧导出) 作预设范式参考。**pixi.js 偏 WebGL，v1(DOM/CSS) 不直接依赖，作为 v2 花字/粒子底座重点研究**。
   - 抠像(v2 用)：`gl-chromakey`/`greenscreenstream`(MIT，WebGL2 像素着色器+ML 分割)。
   - 图节点合成(v2 架构对齐)：`VideoContext`(BBC, Apache-2.0)——与 `buildPlaybackGraph` 同构孪生。
 - **v1 集成目标**：把花字/文字动效做成"预设包"（一组 CSS/transform/opacity 关键帧模板），agent 可 `add_effect(effect_type="text_anim", params={preset:"typewriter"})` 调用；框架/组件从上面 MIT 库择一接入。
@@ -165,3 +219,17 @@
 
 ## 7. MVP 定义（钉死）
 **能剪出一条完整的口播视频 = MVP 达成。** 阶段 A~E（逐片段调色 + 框人遮罩 + 文字动效 + 渐入渐出 + 关键帧 + 直出 mp4）足以支撑，无需 v2。阶段 F 扩充可商用特效目录，阶段 G/H 后置优化。
+
+---
+
+## 8. 外部架构 review 采纳记录（2026-08-17 ChatGPT 评审）
+
+用户把路线交给外部 GPT 评审，结论与 ADR-001 高度一致（特效=Graph 上的 Node，不侵入播放核心）。采纳项：
+- ✅ **target 结构化**（弃 `video:0:0` 字符串，改 `{type,track,ti,si}`）+ 稳定 clip id 路线。
+- ✅ **术语统一**：global → **Adjustment Layer（调整层）**，对齐 PR/剪映。
+- ✅ **阶段 C 抽 `effects.js` 独立模块**，renderer.js 只调用不内联，防 5000 行膨胀；冻结应用管线顺序（Transform→Effect→Mask→Adjustment→Composite）。
+- ✅ **阶段 E 改 Schema 注册表双 adapter**（render+ffmpeg 读同一 Schema），防预览/导出漂移；v1 先简单支持 9 原语。
+- ✅ **必补 Effect Schema 冻结（§2.1）+ Effect 生命周期（§2.2）**，服务 Agent 可操作内核。
+- ✅ **阶段 F 把 `pixi.js`(MIT) 列为花字/粒子重点研究对象**（v2 WebGL 底座）。
+- ⚠️ **部分采纳**：ChatGPT 建议完整 OOP 渲染器分层（LayerRenderer/EffectRenderer/...）。v1 仅抽 `effects.js` 纯函数模块，不做全类层级重写（避免过度工程，等特效类型增多再演进）。
+- ⏸ ChatGPT sign-off：A/B/C ✅、D ⚠️、E ⏸先简单、F ✅、G/H ⏸后置 —— 与本项目纪律一致。
