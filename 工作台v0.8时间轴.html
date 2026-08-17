@@ -1767,6 +1767,15 @@ function onRulerDown(e) {
   window.addEventListener("mousemove", onPhMove);
   window.addEventListener("mouseup", onPhUp);
 }
+let _scrubPreviewTimer = 0;
+function scheduleScrubPreview() {
+  // 播放头拖动期间：媒体预览 seek 节流（~80ms 一次），避免 <video> 解码跟不上、主线程被预览重建占满。
+  if (_scrubPreviewTimer) return;
+  _scrubPreviewTimer = setTimeout(() => {
+    _scrubPreviewTimer = 0;
+    if (_phScrub) renderPreviewMaybe(Store.state);  // 节流后的预览重建 + 确定性 seek
+  }, 80);
+}
 function onPhMove(e) {
   if (!_phScrub) return;
   let us = clientXToUs(e.clientX);
@@ -1775,15 +1784,24 @@ function onPhMove(e) {
     us = r.snapped;
     r.point ? showSnapGuide(r.point.time) : hideSnapGuide();
   } else hideSnapGuide();
-  Store.set({ playheadUs: us });
+  // 拖动期间不走 Store.set → 不触发全局 renderAll（整条时间轴重建 + 媒体 seek），
+  // 否则每 mousemove 一次全量重绘，主线程被打满、红线追不上鼠标。
+  // 改走「逐帧拖拽」模式：直接改真相源（不 _emit）+ 只做三件便宜的事：
+  Store.state.playheadUs = us;          // 改真相源（不 _emit，不触发订阅者）
+  positionPlayhead();                   // 只挪红线 style.left（亚毫秒级）
+  renderTimecode();                     // 改时间码文本
+  syncOverlayVisibility(Store.state);   // 按播放头显隐叠层图/字幕（不重建、不 seek）
+  scheduleScrubPreview();               // 预览 seek 节流，避免解码跟不上
 }
 function onPhUp() {
   if (!_phScrub) return;
   _phScrub = false;
+  if (_scrubPreviewTimer) { clearTimeout(_scrubPreviewTimer); _scrubPreviewTimer = 0; }
   $("playheadHandle").classList.remove("dragging");
   hideSnapGuide();              // 播放头拖拽结束：隐藏吸附参考线
   window.removeEventListener("mousemove", onPhMove);
   window.removeEventListener("mouseup", onPhUp);
+  Store.set({ playheadUs: Store.state.playheadUs });  // 提交：走一次完整 renderAll（含 renderPreview 确定性 seek）
 }
 /* 播放头出视野时自动滚回（播放/拖拽到边界时调用） */
 let _userScrollUntil = 0;   // 用户手动滚动时间轴后，短时间内不自动追播放头
