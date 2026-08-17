@@ -17,6 +17,7 @@
     --seg-video: #3a5a40;
     --seg-audio: #4a3a5a;
     --seg-text: #4a4a2a;
+    --seg-effect: #2a5a5a;   /* 特效轨段：青绿，区分于视频(绿)/音频(紫)/文本(橄榄) */
   --wave: #c9b6f5;        /* 音频波形条颜色（亮紫，衬深紫音频轨） */
     --track-h: 48px;
     --label-w: 132px;
@@ -251,6 +252,8 @@
   .seg .handle { position: absolute; top: 0; bottom: 0; width: 7px; cursor: ew-resize; background: rgba(61,169,255,.35); }
   .seg .handle.l { left: 0; } .seg .handle.r { right: 0; }
   .seg .handle:hover { background: rgba(61,169,255,.65); }
+  .seg.effect { border-top: 2px dashed rgba(255,255,255,.28); }   /* 图层语义：虚线顶边 = 这是盖在素材上的「层」 */
+  .seg.effect .hdr { font-style: italic; }
   /* 变速倍率徽章：段上显示当前 speed（对齐 OpenCut speed 标签），speed=1 不显示 */
   .seg .speed-badge { position: absolute; right: 4px; bottom: 2px; font-size: 9px; line-height: 1;
     background: rgba(0,0,0,.55); color: #fff; padding: 1px 3px; border-radius: 3px; pointer-events: none;
@@ -1383,7 +1386,7 @@ function doSetSpeed() {
 // 收集吸附点：所有段的 start/end + 播放头位置（微秒）。excludeKey 排除正在拖的段，避免吸到自己。
 function buildSnapPoints(excludeKey, excludePlayhead) {
   const pts = [];
-  for (const type of ["video", "audio", "text", "sticker"]) {
+  for (const type of ["video", "audio", "text", "sticker", "effect"]) {
     const tracks = Store.state.draft[type] || [];
     tracks.forEach((segs, ti) => segs.forEach((s, idx) => {
       const k = type + ":" + ti + ":" + idx;
@@ -1501,7 +1504,10 @@ function onPointerMove(e) {
     // 命中同类型已有轨 → 落到该轨；视频拖到空白/异类型 → 一律新建覆盖轨(显示在 main 上方)；
     // 音频/文本拖到空白 → 新建轨(追加到末尾)。
     const ht = hitTrack(e);
-    if (ht && ht.type === d.type) { d.targetType = ht.type; d.targetTi = ht.ti; d.newAboveMain = false; }
+    if (d.type === "effect") {
+      // 特效段只在特效轨内移动/缩放：不跨到视频/音频轨，也不因拖到空白而新建轨
+      d.targetType = "effect"; d.targetTi = d.ti; d.newAboveMain = false;
+    } else if (ht && ht.type === d.type) { d.targetType = ht.type; d.targetTi = ht.ti; d.newAboveMain = false; }
     else if (d.type === "video") { d.targetType = "video"; d.targetTi = -1; d.newAboveMain = true; }
     else { d.targetType = d.type; d.targetTi = -1; d.newAboveMain = false; }
   } else if (d.side === "left") {
@@ -1556,7 +1562,10 @@ function onPointerUp() {
   Store.set({ drag: null });   // 退出临时态 → 回到真实草稿位置
   if (d && d.moved) {
     if (d.mode === "move") {
-      if (d.isGroup) {
+      if (d.type === "effect") {
+        // 特效段落库走 update_effect（range 优先），不调 move_segment/relocate_segment
+        call("update_effect", d.ti, d.idx, { range: { startUs: Math.round(d.curLeftUs), endUs: Math.round(d.curLeftUs + d.s0.duration) } }).then(refresh);
+      } else if (d.isGroup) {
         // 整组移动：锚点 d.key 的 delta 同步到所有选中段，保持相对时间/轨道布局（对齐 OpenCut resolveGroupMove）
         const anchorNewTi = (d.targetTi >= 0) ? d.targetTi : d.ti;   // 整组不新建轨，落点回退到原轨
         const deltaTrack = anchorNewTi - d.ti;
@@ -1597,8 +1606,15 @@ function onPointerUp() {
         }
       }
     } else {
-      const val = d.side === "left" ? Math.round(d.curLeftUs) : Math.round(d.curRightUs);
-      call("trim_segment", d.type, d.ti, d.idx, d.side, val, Store.state.rippleOn).then(refresh);
+      if (d.type === "effect") {
+        // 特效段裁剪走 update_effect(range)：左拖改 start，右拖改 duration（endUs-start）
+        const startUs = d.side === "left" ? Math.round(d.curLeftUs) : d.s0.start;
+        const endUs = d.side === "left" ? (d.s0.start + d.s0.duration) : Math.round(d.curRightUs);
+        call("update_effect", d.ti, d.idx, { range: { startUs, endUs } }).then(refresh);
+      } else {
+        const val = d.side === "left" ? Math.round(d.curLeftUs) : Math.round(d.curRightUs);
+        call("trim_segment", d.type, d.ti, d.idx, d.side, val, Store.state.rippleOn).then(refresh);
+      }
     }
   }
 }

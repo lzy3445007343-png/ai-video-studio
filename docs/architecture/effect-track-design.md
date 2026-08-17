@@ -202,10 +202,15 @@ EFFECT_REGISTRY = {
   - 几何遮罩：`target` 层用 `clip-path`/`mask-image`，v1 先支持圆/椭圆/矩形/多边形 + 渐变羽化（区域把手 UI 后置）。
 - 隐藏/失活：`isTrackHidden`/`h.seg.hidden` 直接复用。
 
-### 阶段 D — 前端特效泳道（HTML/JS · 工作台v0.8时间轴.html）
-- lane 循环加入 `"effect"`：`for (const type of ["video","audio","text","sticker","effect"])`（`1353`）。
-- `makeSeg`（`timeline.js:111` 附近）补 effect 段渲染（占位条 + 名称 + 选中把手），**复用 video/text/sticker 的通用选中/拖动/裁剪路径**（`relocate_segment`/`trim_segment` 已是 `draft[track_type]` 泛型，天然支持 effect）—— 这就是用户要的"能拉长缩短做显示时间"。
-- **本阶段不建属性面板**：新增特效段用后端默认 params（先用脚本/MCP 给一个有可见效果的默认值让特效"显示出来"）；`effects:"placeholderPanel"`(`915`) 暂保留占位，面板后置。
+### 阶段 D — 前端特效泳道（HTML/JS · 工作台v0.8时间轴.html）  ✅ 已完成（2026-08-17）
+- **落码位置**：`timeline.js`（buildTracks / makeSeg / contentWidth / showHide）+ `工作台v0.8时间轴.html`（CSS 变量 `--seg-effect`、`.seg.effect` 样式、buildSnapPoints、onPointerMove、onPointerUp）。
+- **lane 渲染**：`buildTracks` 在 text→sticker 之后、video 之前插入 effect 轨（`for (const type of ["video","audio","text","sticker","effect"])` 同步 buildSnapPoints）。
+- **段渲染**：`makeSeg` 补 `type==="effect"` 分支——`.seg.effect` 类名（青绿 `--seg-effect` + 虚线顶边图层语义），header 显示 `✦ 特效名 · 目标`（调整层/片段ti:si/轨ti/全局）；复用 video/text/sticker 通用选中/拖动/裁剪路径。
+- **拖拽/裁剪约束**：`onPointerMove` 中 `d.type==="effect"` 强制 `targetType="effect"`/`targetTi=d.ti`/`newAboveMain=false`（只在本轨内移动，不跨视频/音频轨、不新建轨）；`onPointerUp` 的 move & resize 分支都路由到 `update_effect(range)`，不调 `move_segment`/`relocate_segment`/`trim_segment`。
+- **几何**：`contentWidth` 纳入 effect 段算最大时长；`showHide` 放开 effect 轨显隐。
+- **复用验证**：`findSeg`/`selectKey`/`renderKfPanel` 原生已 handle `effect` 类型（renderKfPanel 对非 video/audio 返空面板，不崩），故本阶段零新增交互逻辑。
+- **本阶段不建属性面板**：新增特效段用后端默认 params（先用 MCP `add_effect` 建段让条显示出来）；`effects:"placeholderPanel"` 暂保留占位，面板后置（阶段 G）。
+- **单测**：node vm 沙箱 `ALL_PHASE_D_TIMELINE_TESTS_PASS`（effect 轨生成、显示顺序 effect<video、className 含 effect、header `✦`+`调整层`/`片段0:0`、dataset.key `effect:0:0`）+ `contentWidth` 含 effect 段（2200px>视频1200px）；4 JS 文件 `node --check` 全过。
 
 ### 阶段 E — 导出 mp4（Python · main.py，预览=导出同源，经 Schema 注册表双 adapter）
 > 采纳 ChatGPT review「别让 JSON 直接映射 ffmpeg」：预览(Web)与导出(ffmpeg)是两套实现，易漂（预览蓝、导出色不同）。解法=**每个 effect_type 在注册表声明 `render`(CSS) + `ffmpeg`(滤镜) 双 adapter，二者读同一 Schema**（§2.3 已在 A 定义）。

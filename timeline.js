@@ -58,6 +58,10 @@ function rulerLabel(us, p) {
 function contentWidth() {
   let maxUs = 10e6;
   forEachSeg(s => { const end = s.start + s.duration; if (end > maxUs) maxUs = end; });
+  // 特效段也可能比视频长（如整片调整层），纳入内容宽度计算，避免条被裁到画布外
+  (Store.state.draft.effect || []).forEach(track => (track || []).forEach(s => {
+    const end = s.start + s.duration; if (end > maxUs) maxUs = end;
+  }));
   return Math.max((maxUs / 1e6) * pps() + 200, $("tlScroll").clientWidth);
 }
 function buildTracks() {
@@ -75,6 +79,11 @@ function buildTracks() {
   const st = d.sticker || [];
   for (let i = 0; i < st.length; i++) {
     if (st[i] && st[i].length > 0) out.push({ type: "sticker", ti: i, label: "贴纸轨" + (i + 1), segs: st[i] });
+  }
+  // 特效轨：显示在贴纸轨之下、视频轨之上（特效是盖在素材上的图层，时间轴顺序与预览 z 序一致：文本>贴纸>特效>视频）
+  const ef = d.effect || [];
+  for (let i = 0; i < ef.length; i++) {
+    if (ef[i] && ef[i].length > 0) out.push({ type: "effect", ti: i, label: "特效轨" + (i + 1), segs: ef[i] });
   }
   const v = d.video || [];
   // 先叠加轨(i>0，仅非空显示，高索引在上)，再主轨(i=0，恒显示)
@@ -114,7 +123,7 @@ function makeSeg(s, type, ti, idx, overrideLeftUs, forceDragging) {
   const leftUs = (overrideLeftUs != null) ? overrideLeftUs : g.leftUs;
   const dragging = !!forceDragging || (Store.state.drag && Store.state.drag.mode === "move" && Store.state.drag.moved && Store.state.drag.key === key);
   const seg = document.createElement("div");
-  seg.className = "seg" + (Store.state.selectedKeys.includes(key) ? " sel" : "") + (dragging ? " dragging" : "");
+  seg.className = "seg" + (type === "effect" ? " effect" : "") + (Store.state.selectedKeys.includes(key) ? " sel" : "") + (dragging ? " dragging" : "");
   seg.dataset.key = key;
   seg.dataset.leftUs = leftUs;        // 缩放重定位用：存原始时间值，避免播放期重建 timeline DOM
   seg.dataset.widthUs = g.widthUs;
@@ -162,8 +171,19 @@ function makeSeg(s, type, ti, idx, overrideLeftUs, forceDragging) {
     } else {
       bgStyle = "background:" + getCssVar("--seg-text");
     }
+  } else if (type === "effect") {
+    bgStyle = "background:" + getCssVar("--seg-effect");
   }
-  const headerTxt = type === "text" ? (s.text || s.name || "文本") : (s.name || "");
+  let headerTxt;
+  if (type === "effect") {
+    // 头部显示「特效类型 · 作用目标」：调整层=盖整栈；clip=绑某素材段
+    const tgt = (s.target && s.target.type === "adjustment") ? "调整层"
+              : (s.target && s.target.type === "clip") ? ("片段" + (s.target.ti || 0) + ":" + (s.target.si || 0))
+              : (s.target && s.target.type === "track") ? ("轨" + (s.target.ti || 0)) : "全局";
+    headerTxt = "✦ " + (s.name || s.effect_type || "特效") + " · " + tgt;
+  } else {
+    headerTxt = type === "text" ? (s.text || s.name || "文本") : (s.name || "");
+  }
   const speedBadge = (s.speed && s.speed !== 1) ? ('<div class="speed-badge">' + s.speed + 'x</div>') : '';
   const stBadge = (type === "sticker") ? '<div class="badge">贴</div>' : '';
   const fillHtml = waveCanvas || ('<div class="fill" style="' + bgStyle + '"></div>');
@@ -224,7 +244,7 @@ function renderTimeline(s) {
     const meta = ((Store.state.draft._track_meta || {})[tr.type] || []);
     const m = meta[tr.ti] || {};
     const showMute = tr.type === "video" || tr.type === "audio";
-    const showHide = tr.type === "video" || tr.type === "text" || tr.type === "sticker";
+    const showHide = tr.type === "video" || tr.type === "text" || tr.type === "sticker" || tr.type === "effect";
     let icons = "";
     if (showMute) {
       const on = !m.muted;
