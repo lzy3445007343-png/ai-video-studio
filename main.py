@@ -2671,14 +2671,20 @@ class Api:
             seg["src_start"] = ss + int(round(delta * speed))
             seg["duration"] = dur - delta
         elif edge == "right":
-            # 2026-08-17 真机修复：右拉上限必须拿「素材真实时长」兜底——seg.src_end 可能是脏数据
-            # （旧拉长残留），信任它会导致 src_end 超素材、seek 到不存在的源位置 → 黑屏/无声。
+            # 2026-08-17 修复（v2，对比 OpenCut/FableCut 后）：右拉上限必须用「素材真实全长」。
+            # 旧代码（含 v1 的 min(se_,real)）把上限卡在当前 src_end——先裁剪再拉长时，
+            # 恢复不了被裁掉的素材（用户实测：'拉长应该恢复之前的片段，但恢复不了'）。
+            # FableCut 语义：maxDur = (media.duration - in) / speed（永远用素材全长）。
+            # 仅当 src_end 超过素材真实时长（旧脏数据）时拉回素材边界。
             real = get_media_duration(seg.get("path")) if seg.get("type") in ("video", "audio") else None
-            se_real = min(se_, int(real * 1_000_000)) if real else se_
-            max_dur = int((se_real - ss) / speed)
+            real_us = int(real * 1_000_000) if real else None
+            if real_us is not None and se_ > real_us:
+                se_ = real_us
+            max_dur = int(((real_us if real_us is not None else se_) - ss) / speed)
             delta = max(MIN - dur, min(new_edge - (start + dur), max_dur - dur))
             seg["duration"] = dur + delta
-            seg["src_end"] = se_ + int(round(delta * speed))
+            new_se = se_ + int(round(delta * speed))
+            seg["src_end"] = min(new_se, real_us) if real_us is not None else new_se
         else:
             raise ValueError("edge 必须是 left 或 right")
         seg["animations"] = _clamp_animations_to_duration(_seg_anims(seg), seg["duration"])
