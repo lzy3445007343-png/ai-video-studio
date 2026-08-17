@@ -80,6 +80,7 @@
   .media-card { background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px;
     overflow: hidden; cursor: grab; position: relative; }
   .media-card:active { cursor: grabbing; }
+  .eff-hint { font-size: 10px; color: var(--muted); padding: 0 4px 6px; line-height: 1.3; }
   .media-card .thumb { height: 56px; background: #15151a center/cover no-repeat; display: flex;
     align-items: center; justify-content: center; color: var(--muted); font-size: 22px; }
   .media-card .name { padding: 4px 6px; font-size: 11px; color: var(--muted);
@@ -140,6 +141,7 @@
 
   /* PropertiesPanel（2026-08-15 重构：4 面板统一加宽 280px + 空状态/多选/占位面板样式） */
   .tools-content .kfpanel, .tools-content .maskpanel, .tools-content .subpanel, .tools-content .stickerpanel,
+  .tools-content .effectpanel,
   .tools-content .empty-panel, .tools-content .multi-panel, .tools-content .placeholder-panel {
     display: none; border-top: none; width: 100%; flex: none; min-width: 0;
     background: var(--panel); border-left: 1px solid var(--border); overflow: hidden;
@@ -155,11 +157,10 @@
   .placeholder-panel .ph-title { font-size: 13px; font-weight: 500; color: var(--text); margin-bottom: 4px; }
   .rail-btn[disabled] { opacity: .3; pointer-events: none; }
   .rail-btn.active { background: var(--primary-dim); border-color: var(--primary); color: var(--primary); }
-  .kfpanel .head { padding: 10px; border-bottom: 1px solid var(--border); font-weight: 600; font-size: 12px; display: flex; align-items: center; gap: 6px; }
-  .kfpanel .head .seg { color: var(--muted); font-weight: 400; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
-  .kfpanel .head .head-close, .maskpanel .head .head-close, .subpanel .head .head-close, .stickerpanel .head .head-close,
-  .empty-panel .head-close, .multi-panel .head-close, .placeholder-panel .head-close { width: 22px; height: 22px; border-radius: 4px; border: 1px solid var(--border); background: var(--panel); color: var(--muted); cursor: pointer; flex: none; font-size: 13px; line-height: 1; padding: 0; }
-  .kfpanel .head .head-close:hover, .maskpanel .head .head-close:hover, .subpanel .head .head-close:hover, .stickerpanel .head .head-close:hover { background: var(--panel-2); color: var(--text); }
+  .kfpanel > .head, .maskpanel > .head, .subpanel > .head, .stickerpanel > .head, .effectpanel > .head { padding: 10px; border-bottom: 1px solid var(--border); font-weight: 600; font-size: 12px; display: flex; align-items: center; gap: 6px; }
+  .tools-content .head .seg { color: var(--muted); font-weight: 400; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+  .tools-content .head .head-close { width: 22px; height: 22px; border-radius: 4px; border: 1px solid var(--border); background: var(--panel); color: var(--muted); cursor: pointer; flex: none; font-size: 13px; line-height: 1; padding: 0; }
+  .tools-content .head .head-close:hover { background: var(--panel-2); color: var(--text); }
   .kfpanel .body { flex: 1; overflow: auto; padding: 10px; min-width: 0; }
   .kfpanel .empty { text-align: center; color: var(--muted); font-size: 11px; padding: 24px 8px; line-height: 1.6; }
   /* 关键帧面板（2026-08-16 极简风：一行一字段 + 滑块，对齐 OpenCut PropertiesPanel） */
@@ -171,6 +172,29 @@
   .kf-row .val { width: 56px; background: var(--panel); border: 1px solid var(--border); border-radius: 4px; color: var(--text); font-size: 11px; padding: 2px 4px; min-width: 0; }
   .kf-row .add { flex: none; width: 22px; font-size: 12px; padding: 1px 0; border-radius: 4px; border: 1px solid var(--border); background: var(--panel); color: var(--text); cursor: pointer; line-height: 1; }
   .kf-row .add:hover { border-color: var(--primary); }
+  /* Inspector 统一体系（v0.9 P1：特效面板等新建面板复用，删重复 CSS） */
+  .insp { display: flex; flex-direction: column; min-width: 0; }
+  .insp-head { display: flex; align-items: center; gap: 6px; padding: 10px; border-bottom: 1px solid var(--border); font-weight: 600; font-size: 12px; }
+  .insp-head .seg { color: var(--muted); font-weight: 400; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+  .insp-head .head-close { width: 22px; height: 22px; border-radius: 4px; border: 1px solid var(--border); background: var(--panel); color: var(--muted); cursor: pointer; flex: none; font-size: 13px; line-height: 1; padding: 0; }
+  .insp-head .head-close:hover { background: var(--panel-2); color: var(--text); }
+  .insp-body { flex: 1; overflow: auto; padding: 10px; min-width: 0; }
+  .insp-row { display: flex; align-items: center; gap: 8px; margin: 6px 0; font-size: 12px; }
+  .insp-row label { width: 44px; color: var(--muted); flex: none; }
+  .insp-row input[type=range] { flex: 1; min-width: 0; }
+  .insp-row select, .insp-row input[type=text], .insp-row input[type=number], .insp-row input[type=file] { flex: 1; min-width: 0; background: var(--panel-2); color: var(--text); border: 1px solid var(--border); border-radius: 5px; padding: 4px; font-size: 12px; }
+  .insp-row .val { width: 44px; text-align: right; color: var(--text); font-variant-numeric: tabular-nums; flex: none; }
+  .insp-gen { margin-top: 8px; width: 100%; padding: 6px; background: var(--primary); color: #fff; border: none; border-radius: 5px; cursor: pointer; font-size: 12px; }
+  .insp-gen:hover { background: #2a9bef; }
+  .insp-gen:disabled { background: #3a3f4a; color: #888; cursor: default; }
+  .insp-chk { display: flex; align-items: center; gap: 6px; margin: 6px 0; font-size: 12px; color: var(--muted); }
+  .insp-status { margin-top: 6px; font-size: 11px; color: #9fb4c8; line-height: 1.4; min-height: 14px; }
+  .insp-tf { display: flex; align-items: center; gap: 6px; margin: 4px 0; font-size: 12px; }
+  .insp-tf label { width: 52px; color: var(--muted); flex: none; }
+  .insp-tf input[type=range] { flex: 1; }
+  .insp-tf .val { width: 40px; text-align: right; color: var(--text); font-variant-numeric: tabular-nums; flex: none; }
+  .insp-seg { font-size: 12px; color: var(--text); word-break: break-all; }
+  .insp-sub { font-size: 11px; color: #caa56b; margin: 8px 0 2px; }
   .kf-graph { position: relative; height: 70px; margin: 8px 0; background: var(--panel-2); border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
   .kf-graph .kf-axis { position: absolute; left: 0; right: 0; top: 50%; border-top: 1px dashed var(--border); }
   .kf-graph .kf-diamond { position: absolute; width: 11px; height: 11px; background: var(--primary); transform: translate(-50%, -50%) rotate(45deg); cursor: pointer; border-radius: 2px; }
@@ -319,6 +343,7 @@
         <div class="tab" data-f="audio">音频</div>
         <div class="tab" data-f="image">图片</div>
         <div class="tab" data-f="text">文本</div>
+        <div class="tab" data-f="effect">特效</div>
       </div>
       <div class="media-list-wrapper">
         <div class="media-list" id="mediaList"></div>
@@ -353,13 +378,34 @@
     <div class="hsplit" id="hsplitR" title="拖动调整参数区宽度"></div>
     <div class="tools" id="toolsPanel">
       <div class="tools-rail" id="toolsRail">
-        <button class="rail-btn active" data-tab="kf" title="关键帧">🎞 关键帧</button>
-        <button class="rail-btn" data-tab="audio" title="音频">🔊 音频</button>
-        <button class="rail-btn" data-tab="speed" title="速度">⏱ 速度</button>
-        <button class="rail-btn" data-tab="mask" title="遮罩">🎭 遮罩</button>
-        <button class="rail-btn" data-tab="sub" title="字幕">💬 字幕</button>
-        <button class="rail-btn" data-tab="sticker" title="贴纸">⭐ 贴纸</button>
-        <button class="rail-btn" data-tab="effects" title="特效">✨ 特效</button>
+        <button class="rail-btn active" data-tab="kf" title="关键帧">
+          <svg viewBox="0 0 20 20" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><path d="M10 2l8 8-8 8-8-8z"/></svg>
+          <span>关键帧</span>
+        </button>
+        <button class="rail-btn" data-tab="audio" title="音频">
+          <svg viewBox="0 0 20 20" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M3 8v4M7 4v12M11 7v6M15 5v10M19 9v2"/></svg>
+          <span>音频</span>
+        </button>
+        <button class="rail-btn" data-tab="speed" title="速度">
+          <svg viewBox="0 0 20 20" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><circle cx="10" cy="10" r="7"/><path d="M10 6v4l3 2"/></svg>
+          <span>速度</span>
+        </button>
+        <button class="rail-btn" data-tab="mask" title="遮罩">
+          <svg viewBox="0 0 20 20" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="4" y="4" width="12" height="12" rx="2"/><circle cx="10" cy="10" r="3"/></svg>
+          <span>遮罩</span>
+        </button>
+        <button class="rail-btn" data-tab="sub" title="字幕">
+          <svg viewBox="0 0 20 20" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><rect x="3" y="5" width="14" height="10" rx="2"/><path d="M6 9h8M6 12h5"/></svg>
+          <span>字幕</span>
+        </button>
+        <button class="rail-btn" data-tab="sticker" title="贴纸">
+          <svg viewBox="0 0 20 20" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><path d="M10 2l2.2 4.6 5 .7-3.6 3.5.9 5L10 13.8 5.5 16.3l.9-5-3.6-3.5 5-.7z"/></svg>
+          <span>贴纸</span>
+        </button>
+        <button class="rail-btn" data-tab="effects" title="特效">
+          <svg viewBox="0 0 20 20" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><path d="M10 2l1.8 5.5L17 9l-5.2 1.5L10 16l-1.8-5.5L3 9l5.2-1.5z"/></svg>
+          <span>特效</span>
+        </button>
       </div>
       <div class="tools-content">
     <div class="kfpanel" id="kfPanel">
@@ -430,10 +476,10 @@
             <label>图片</label>
             <button id="stPick" class="gen" style="background:#2a2e37">选择图片…</button>
           </div>
-          <div class="row"><label>已选</label><span id="stPickName" class="src" style="flex:1;color:var(--fg);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">未选择</span></div>
+          <div class="row"><label>已选</label><span id="stPickName" class="src" style="flex:1;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">未选择</span></div>
           <div class="row">
             <label>时长</label>
-            <input type="number" id="stDur" min="0.1" step="0.1" value="3" style="width:70px"> <span style="color:var(--fg2)">秒</span>
+            <input type="number" id="stDur" min="0.1" step="0.1" value="3" style="width:70px"> <span style="color:var(--muted)">秒</span>
           </div>
           <button id="stAddAtPlayhead" class="gen">▶ 添加到播放头</button>
           <div class="status" id="stStatus"></div>
@@ -468,64 +514,60 @@
       <div class="empty-hint" id="phHint">该面板开发中</div>
       <div id="phContent"></div>
     </div>
+    <div class="effectpanel" id="effectPanel">
+      <div class="head">特效 <span class="seg" id="effSegName"></span><button class="head-close" id="effClose" title="取消选择（Esc）">✕</button></div>
+      <div class="insp-body" id="effBody">
+        <div class="empty" id="effEmpty">选中特效段可调整参数</div>
+        <div id="effCtrls" style="display:none"></div>
+      </div>
+    </div>
       </div>
     </div>
       </div>
     </div>
     <style>
-    .maskpanel { border-top:1px solid var(--bd); }
-    .maskpanel .head { font-size:12px; padding:6px 8px; color:var(--fg2); background:#1c1f26; }
-    .maskpanel .body { padding:8px; }
-    .subpanel { border-top:1px solid var(--bd); }
-    .subpanel .head { font-size:12px; padding:6px 8px; color:var(--fg2); background:#1c1f26; }
-    .subpanel .body { padding:8px; }
-    .subpanel .row { display:flex; align-items:center; gap:6px; margin:5px 0; font-size:12px; }
-    .subpanel .row label { width:34px; color:var(--fg2); flex:none; }
-    .subpanel .row select, .subpanel .row input[type=file] { flex:1; background:#2a2e37; color:var(--fg); border:1px solid var(--bd); border-radius:4px; padding:3px; font-size:12px; }
-    .subpanel .row .src { color:var(--fg); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1; }
-    .subpanel .row .val { width:24px; text-align:right; color:var(--fg); font-variant-numeric:tabular-nums; }
-    .subpanel .gen { margin-top:6px; width:100%; padding:6px; background:#1f6feb; color:#fff; border:none; border-radius:4px; cursor:pointer; font-size:13px; }
-    .subpanel .gen:hover { background:#2a7dfb; }
-    .subpanel .gen:disabled { background:#3a3f4a; color:#888; cursor:default; }
-    .subpanel .chk { display:flex; align-items:center; gap:6px; margin:6px 0; font-size:12px; color:var(--fg2); }
-    .subpanel .status { margin-top:6px; font-size:11px; color:#9fb4c8; line-height:1.4; min-height:14px; }
-    .asr-loading { position:fixed; inset:0; background:rgba(0,0,0,.55); display:flex; align-items:center; justify-content:center; z-index:9999; color:#fff; font-size:14px; text-align:center; }
-    .asr-loading .box { background:#1c1f26; border:1px solid var(--bd); border-radius:8px; padding:18px 22px; max-width:320px; line-height:1.6; }
-    .mask-shapes { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:8px; }
-    .mask-shapes button { font-size:12px; padding:4px 8px; background:#2a2e37; color:var(--fg); border:1px solid var(--bd); border-radius:4px; cursor:pointer; }
-    .mask-shapes button:hover { background:#343a45; }
-    .mask-ctrls .row { display:flex; align-items:center; gap:6px; margin:4px 0; font-size:12px; }
-    .mask-ctrls .row label { width:42px; color:var(--fg2); flex:none; }
-    .mask-ctrls .row input[type=range] { flex:1; }
-    .mask-ctrls .row .val { width:42px; text-align:right; color:var(--fg); font-variant-numeric:tabular-nums; }
-    .mask-ctrls .chk { display:flex; align-items:center; gap:6px; margin:6px 0; font-size:12px; color:var(--fg2); }
-    .mask-ctrls .rm { margin-top:8px; width:100%; padding:5px; background:#3a2326; color:#ff9b9b; border:1px solid #5a2a2e; border-radius:4px; cursor:pointer; }
-    .mask-ctrls .rm:hover { background:#4a2a2e; }
-    .mask-ctrls .expnote { font-size:11px; color:#caa56b; margin-top:6px; line-height:1.4; }
+    .maskpanel, .subpanel, .stickerpanel { border-top: 1px solid var(--border); }
+    .maskpanel .body, .subpanel .body, .stickerpanel .body { padding: 10px; }
+    .subpanel .row { display: flex; align-items: center; gap: 8px; margin: 6px 0; font-size: 12px; }
+    .subpanel .row label { width: 44px; color: var(--muted); flex: none; }
+    .subpanel .row select, .subpanel .row input[type=file] { flex: 1; background: var(--panel-2); color: var(--text); border: 1px solid var(--border); border-radius: 5px; padding: 4px; font-size: 12px; }
+    .subpanel .row .src { color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+    .subpanel .row .val { width: 44px; text-align: right; color: var(--text); font-variant-numeric: tabular-nums; flex: none; }
+    .subpanel .gen, .stickerpanel .gen { margin-top: 8px; width: 100%; padding: 6px; background: var(--primary); color: #fff; border: none; border-radius: 5px; cursor: pointer; font-size: 12px; }
+    .subpanel .gen:hover, .stickerpanel .gen:hover { background: #2a9bef; }
+    .subpanel .gen:disabled, .stickerpanel .gen:disabled { background: #3a3f4a; color: #888; cursor: default; }
+    .subpanel .chk, .stickerpanel .chk { display: flex; align-items: center; gap: 6px; margin: 6px 0; font-size: 12px; color: var(--muted); }
+    .subpanel .status, .stickerpanel .status { margin-top: 6px; font-size: 11px; color: #9fb4c8; line-height: 1.4; min-height: 14px; }
+    .asr-loading { position: fixed; inset: 0; background: rgba(0,0,0,.55); display: flex; align-items: center; justify-content: center; z-index: 9999; color: #fff; font-size: 14px; text-align: center; }
+    .asr-loading .box { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 18px 22px; max-width: 320px; line-height: 1.6; }
+    .mask-shapes { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+    .mask-shapes button { font-size: 12px; padding: 4px 8px; background: var(--panel-2); color: var(--text); border: 1px solid var(--border); border-radius: 4px; cursor: pointer; }
+    .mask-shapes button:hover { background: var(--border); }
+    .mask-shapes button.on { background: var(--primary-dim); border-color: var(--primary); color: var(--primary); }
+    .mask-ctrls .row { display: flex; align-items: center; gap: 8px; margin: 6px 0; font-size: 12px; }
+    .mask-ctrls .row label { width: 44px; color: var(--muted); flex: none; }
+    .mask-ctrls .row input[type=range] { flex: 1; }
+    .mask-ctrls .row .val { width: 44px; text-align: right; color: var(--text); font-variant-numeric: tabular-nums; flex: none; }
+    .mask-ctrls .chk { display: flex; align-items: center; gap: 6px; margin: 6px 0; font-size: 12px; color: var(--muted); }
+    .mask-ctrls .rm { margin-top: 8px; width: 100%; padding: 5px; background: #3a2326; color: #ff9b9b; border: 1px solid #5a2a2e; border-radius: 4px; cursor: pointer; }
+    .mask-ctrls .rm:hover { background: #4a2a2e; }
+    .mask-ctrls .expnote { font-size: 11px; color: #caa56b; margin-top: 6px; line-height: 1.4; }
     .mask-overlay { position:absolute; inset:0; width:100%; height:100%; z-index:40; pointer-events:none; overflow:visible; }
     .mask-overlay .mhandle { fill:#fff; stroke:#222; stroke-width:1.2; cursor:move; pointer-events:auto; }
     .mask-overlay .mhandle.rot { fill:#ffd166; }
     .mask-overlay .mhandle.scale { fill:#06d6a0; }
     .mask-overlay .mbox { fill:none; stroke:#fff; stroke-width:1.4; stroke-dasharray:5 4; pointer-events:none; }
     .mask-overlay .mrotline { stroke:#ffd166; stroke-width:1.2; pointer-events:none; }
-    .stickerpanel { border-top:1px solid var(--bd); }
-    .stickerpanel .head { font-size:12px; padding:6px 8px; color:var(--fg2); background:#1c1f26; }
-    .stickerpanel .body { padding:8px; }
-    .stickerpanel .empty { font-size:12px; color:#8a93a0; line-height:1.5; }
-    .stickerpanel .row { display:flex; align-items:center; gap:6px; margin:5px 0; font-size:12px; }
-    .stickerpanel .row label { width:40px; color:var(--fg2); flex:none; }
-    .stickerpanel .row input[type=number], .stickerpanel .row select { flex:1; background:#2a2e37; color:var(--fg); border:1px solid var(--bd); border-radius:4px; padding:3px; font-size:12px; }
-    .stickerpanel .gen { margin-top:6px; width:100%; padding:6px; background:#1f6feb; color:#fff; border:none; border-radius:4px; cursor:pointer; font-size:13px; }
-    .stickerpanel .gen:hover { background:#2a7dfb; }
-    .stickerpanel .gen:disabled { background:#3a3f4a; color:#888; cursor:default; }
-    .stickerpanel .chk { display:flex; align-items:center; gap:6px; margin:6px 0; font-size:12px; color:var(--fg2); }
-    .stickerpanel .status { margin-top:6px; font-size:11px; color:#9fb4c8; line-height:1.4; min-height:14px; }
-    .stickerpanel .sub { font-size:11px; color:#caa56b; margin:8px 0 2px; }
-    .stickerpanel .seg-name { font-size:12px; color:var(--fg); word-break:break-all; }
-    .stickerpanel .tf { display:flex; align-items:center; gap:6px; margin:4px 0; font-size:12px; }
-    .stickerpanel .tf label { width:52px; color:var(--fg2); flex:none; }
-    .stickerpanel .tf input[type=range] { flex:1; }
-    .stickerpanel .tf .val { width:40px; text-align:right; color:var(--fg); font-variant-numeric:tabular-nums; }
+    .stickerpanel .empty { font-size: 12px; color: var(--muted); line-height: 1.5; }
+    .stickerpanel .row { display: flex; align-items: center; gap: 8px; margin: 6px 0; font-size: 12px; }
+    .stickerpanel .row label { width: 44px; color: var(--muted); flex: none; }
+    .stickerpanel .row input[type=number], .stickerpanel .row select { flex: 1; background: var(--panel-2); color: var(--text); border: 1px solid var(--border); border-radius: 5px; padding: 4px; font-size: 12px; }
+    .stickerpanel .sub { font-size: 11px; color: #caa56b; margin: 8px 0 2px; }
+    .stickerpanel .seg-name { font-size: 12px; color: var(--text); word-break: break-all; }
+    .stickerpanel .tf { display: flex; align-items: center; gap: 6px; margin: 4px 0; font-size: 12px; }
+    .stickerpanel .tf label { width: 52px; color: var(--muted); flex: none; }
+    .stickerpanel .tf input[type=range] { flex: 1; }
+    .stickerpanel .tf .val { width: 40px; text-align: right; color: var(--text); font-variant-numeric: tabular-nums; flex: none; }
     /* 时间轴贴纸段：缩略图 + 贴纸角标 */
     .seg.sticker .fill { background-size:contain; background-position:center; background-repeat:no-repeat; }
     .seg.sticker .badge { position:absolute; top:2px; right:3px; font-size:9px; background:#7b5cff; color:#fff; border-radius:3px; padding:0 3px; line-height:14px; }
@@ -538,11 +580,9 @@
     .tools-rail .rail-btn { width:100%; padding:6px 4px; border-radius:6px; border:1px solid transparent; background:none; color:var(--muted); font-size:11px; cursor:pointer; display:flex; flex-direction:column; align-items:center; gap:2px; line-height:1.2; }
     .tools-rail .rail-btn:hover { background:#2a2e37; color:var(--text); }
     .tools-rail .rail-btn.active { background:var(--primary-dim); border-color:var(--primary); color:var(--primary); }
-    .rail-btn { width:36px; height:36px; border-radius:8px; background:transparent; border:1px solid transparent; color:var(--muted); font-size:17px; cursor:pointer; display:flex; align-items:center; justify-content:center; }
-    .rail-btn:hover { background:#262932; color:var(--fg); }
-    .rail-btn.active { background:#34343c; color:var(--text); border-color:var(--border); }
+    /* 统一 .tools-rail .rail-btn 已覆盖；此处旧 .rail-btn 规则删除（v0.9 P1，消除与 538 行的冲突） */
     .tools-content { flex:1; min-width:0; overflow-y:auto; }
-    .tools-content .kfpanel, .tools-content .maskpanel, .tools-content .subpanel, .tools-content .stickerpanel { display:none; border-top:none; }
+    .tools-content .kfpanel, .tools-content .maskpanel, .tools-content .subpanel, .tools-content .stickerpanel, .tools-content .effectpanel { display:none; border-top:none; }
     .tools-content .panel-active { display:block; }
     /* Skill 弹窗（顶栏按钮触发） */
     .modal-mask { position:fixed; inset:0; background:rgba(0,0,0,.5); display:flex; align-items:center; justify-content:center; z-index:9000; }
@@ -788,6 +828,7 @@ function removeDragGhost() {
 /* ---------- 渲染：素材面板（只读 Store） ---------- */
 let _mediaSig = "";
 function renderMedia(s) {
+  if (s.filter === "effect") { renderEffectLibrary(s, $("mediaList")); return; }
   const list = (s.filter === "all" ? s.materials : s.materials.filter(m => m.type === s.filter));
   const sig = s.filter + "|" + list.map(m => (m.uid || m.path) + ":" + m.name + ":" + m.type).join(",");
   // 仅在素材列表/筛选真正变化时重建 DOM；平时轮询只刷新选中态。
@@ -840,6 +881,46 @@ function renderMedia(s) {
     });
     box.appendChild(card);
   }
+}
+
+// 特效库（v0.9 P0）：左栏「特效」tab，卡片来自后端 get_effect_registry(EFFECT_META)，点击加特效。
+function renderEffectLibrary(s, box) {
+  const reg = Store.state.effects || {};
+  const keys = Object.keys(reg);
+  const sig = "effect|" + keys.join(",");
+  if (sig === _mediaSig) return;
+  _mediaSig = sig;
+  box.classList.remove("view-list");
+  box.innerHTML = "";
+  if (!keys.length) { box.innerHTML = '<div class="empty" style="grid-column:1/-1;padding:20px;text-align:center;color:var(--muted)">特效注册表为空</div>'; return; }
+  for (const type of keys) {
+    const meta = reg[type];
+    const label = meta.label || type;
+    const pnames = meta.params ? Object.keys(meta.params) : [];
+    const hint = pnames.map(p => (meta.params[p].label || p) + (meta.params[p].unit ? "(" + meta.params[p].unit + ")" : "")).join("、");
+    const card = document.createElement("div");
+    card.className = "media-card effect-card";
+    card.innerHTML =
+      '<div class="thumb" style="display:flex;align-items:center;justify-content:center;font-size:22px">✦</div>' +
+      '<div class="name">' + label + '</div>' +
+      '<div class="eff-hint">' + (hint || "无参数") + '</div>';
+    card.addEventListener("click", () => addEffectFromLibrary(type));
+    box.appendChild(card);
+  }
+}
+// 从特效库点卡片：有选中媒体段 → 绑定该段(clip)；否则整段调整层(adjustment)。建段后选中并打开参数面板。
+function addEffectFromLibrary(type) {
+  const sel = selectedSeg();
+  let target = { type: "adjustment" };
+  if (sel && (sel.type === "video" || sel.type === "image" || sel.type === "audio" || sel.type === "sticker")) {
+    const k = (Store.state.selectedKey || "").split(":");
+    const ti = parseInt(k[1]), si = parseInt(k[2]);
+    if (!isNaN(ti) && !isNaN(si)) target = { type: "clip", track: ti, ti: ti, si: si };
+  }
+  call("add_effect", 0, type, target).then(r => {
+    if (r && r.ok) { refresh(); selectKey("effect:" + r.track_index + ":" + r.index); showToolTab("effects"); }
+    else alert("添加特效失败：" + (r && r.error ? r.error : "未知"));
+  });
 }
 
 /* ---------- 渲染：时间轴（只读 Store，含拖拽临时态） ---------- */
@@ -933,13 +1014,14 @@ const PROPERTY_TABS_BY_TYPE = {
   audio:   ["audio", "speed", "kf"],
   text:    ["sub"],
   sticker: ["sticker", "kf", "effects"],
+  effect:  ["effects"],
 };
 const PROPERTY_DEFAULT_TAB_BY_TYPE = {
-  video: "kf", image: "kf", audio: "audio", text: "sub", sticker: "sticker",
+  video: "kf", image: "kf", audio: "audio", text: "sub", sticker: "sticker", effect: "effects",
 };
 const TAB_TO_PANEL = {
   kf: "kfPanel", mask: "maskPanel", sub: "subPanel", sticker: "stickerPanel",
-  audio: "placeholderPanel", speed: "placeholderPanel", effects: "placeholderPanel",
+  audio: "placeholderPanel", speed: "placeholderPanel", effects: "effectPanel",
 };
 const PLACEHOLDER_TITLES = { audio: "音频面板", speed: "速度面板", effects: "特效面板" };
 
@@ -968,7 +1050,7 @@ function renderPropertyPanel() {
     activePanel = TAB_TO_PANEL[activeTab] || "kfPanel";
   }
 
-  ["kfPanel", "maskPanel", "subPanel", "stickerPanel", "emptyPanel", "multiPanel", "placeholderPanel"].forEach(id => {
+  ["kfPanel", "maskPanel", "subPanel", "stickerPanel", "effectPanel", "emptyPanel", "multiPanel", "placeholderPanel"].forEach(id => {
     const el = document.getElementById(id);
     if (!el) return;        // 防御：id 找不到跳过，不影响其他面板
     if (id === activePanel) el.classList.add("panel-active");
@@ -1002,7 +1084,86 @@ function renderPropertyPanel() {
   else if (activePanel === "maskPanel") renderMaskPanel();
   else if (activePanel === "subPanel") renderSubPanel();
   else if (activePanel === "stickerPanel") renderStickerPanel();
+  else if (activePanel === "effectPanel") renderEffectPanel();
 }
+
+// 特效属性面板（v0.9 P0）：选中特效段 → 由 Store.state.effects(EFFECT_META) 自动生成参数滑块 → 防抖调 update_effect。
+// 数据驱动：开源特效包只需在后端 EFFECT_REGISTRY+EFFECT_META 注册，面板自动长出控件（Stage F 落点）。
+function renderEffectPanel() {
+  const nameEl = $("effSegName"), emptyEl = $("effEmpty"), ctrlsEl = $("effCtrls");
+  const s = selectedSeg();
+  if (!s || s.type !== "effect") { emptyEl.style.display = ""; ctrlsEl.style.display = "none"; nameEl.textContent = ""; return; }
+  emptyEl.style.display = "none"; ctrlsEl.style.display = "";
+  const meta = (Store.state.effects && Store.state.effects[s.effect_type]) || null;
+  nameEl.textContent = (meta ? meta.label : s.effect_type) || "";
+  const tgt = s.target || { type: "adjustment" };
+  const tgtLabel = tgt.type === "adjustment" ? "调整层（整段时间轴）"
+                : tgt.type === "clip" ? ("绑定片段 " + (tgt.track != null ? tgt.track : 0) + ":" + (tgt.si != null ? tgt.si : 0))
+                : tgt.type === "track" ? ("轨 " + (tgt.ti != null ? tgt.ti : 0)) : "全局";
+  const key = Store.state.selectedKey || "";
+  const parts = key.split(":");
+  const ti = parts[1] != null ? parseInt(parts[1]) : null;
+  const idx = parts[2] != null ? parseInt(parts[2]) : null;
+
+  let html = '<div class="insp-sub">作用对象：' + tgtLabel + '</div>';
+  if (meta && meta.params) {
+    html += '<div class="insp-sub">参数</div>';
+    const cur = s.params || {};
+    for (const pname in meta.params) {
+      const pm = meta.params[pname];
+      const rr = parseRange(pm.range); const mn = rr[0], mx = rr[1];
+      const step = rangeStep(mn, mx);
+      const def = (pm.default != null) ? pm.default : mn;
+      const val = (cur[pname] != null) ? cur[pname] : def;
+      const unit = pm.unit || "";
+      html += '<div class="insp-row" data-p="' + pname + '" data-unit="' + unit + '">'
+        + '<label>' + (pm.label || pname) + '</label>'
+        + '<input type="range" min="' + mn + '" max="' + mx + '" step="' + step + '" value="' + val + '">'
+        + '<span class="val">' + fmtVal(val) + (unit ? " " + unit : "") + '</span>'
+        + '</div>';
+    }
+  } else {
+    html += '<div class="insp-status">该特效暂无可调参数。</div>';
+  }
+  html += '<button class="insp-gen" id="effRemove" style="background:#3a2326;color:#ff9b9b">删除特效</button>';
+  ctrlsEl.innerHTML = html;
+
+  ctrlsEl.querySelectorAll(".insp-row input[type=range]").forEach(inp => {
+    inp.addEventListener("input", () => {
+      const row = inp.closest(".insp-row");
+      const pname = row.dataset.p; const unit = row.dataset.unit || "";
+      const v = parseFloat(inp.value);
+      const valEl = row.querySelector(".val");
+      if (valEl) valEl.textContent = fmtVal(v) + (unit ? " " + unit : "");
+      if (ti == null || idx == null) return;
+      clearTimeout(inp._t);
+      inp._t = setTimeout(() => {
+        call("update_effect", ti, idx, { params: { [pname]: v } }).then(refresh);
+      }, 250);
+    });
+  });
+  const rm = $("effRemove");
+  if (rm) rm.addEventListener("click", () => {
+    if (ti == null || idx == null) return;
+    call("remove_effect", ti, idx).then(() => { selectKey(null); refresh(); });
+  });
+}
+// range "0~20" / "0~1" → [min,max]
+function parseRange(r) {
+  if (!r) return [0, 1];
+  const m = String(r).split("~");
+  if (m.length === 2) { const a = parseFloat(m[0]), b = parseFloat(m[1]); if (!isNaN(a) && !isNaN(b)) return [a, b]; }
+  const n = parseFloat(r); if (!isNaN(n)) return [0, n];
+  return [0, 1];
+}
+function rangeStep(mn, mx) {
+  const span = mx - mn;
+  if (span <= 1) return 0.01;
+  if (span <= 10) return 0.1;
+  if (span <= 100) return 1;
+  return 1;
+}
+function fmtVal(v) { return Math.round(v * 100) / 100; }
 
 // 字幕属性面板（点选 text 段时右侧属性栏）：防止 renderSubPanel is not defined 崩溃。
 // v0.1 没有后端 update_text，当前只做只读展示，后续可接编辑命令。
@@ -2049,7 +2210,7 @@ function hideImportLoading() { const el = $("importLoading"); if (el) el.style.d
 /* ---------- 事件绑定（一次性） ---------- */
 function bindEvents() {
   // 4 面板头部 ✕ 取消选择（更直观的取消入口；Esc 兜底）
-  ["kfClose", "maskClose", "subClose", "stClose"].forEach(id => {
+  ["kfClose", "maskClose", "subClose", "stClose", "effClose"].forEach(id => {
     const b = $(id); if (!b) return;
     b.addEventListener("click", e => { e.stopPropagation(); clearSelection(); });
   });
@@ -2486,10 +2647,10 @@ function boot() {
   // 先拿本地 HTTP 服务器地址，素材才能走 http（WebView2 下 video/audio 不能读 file://）
   call("get_server_url").then(url => {
     if (url) window.MEDIA_BASE = url;
-    try { bindEvents(); initSplit(); initHSplit("L"); initHSplit("R"); refresh(); }
+    try { bindEvents(); initSplit(); initHSplit("L"); initHSplit("R"); refresh(); call("get_effect_registry").then(r => { if (r && r.ok) Store.set({ effects: r.meta }); }); }
     catch (e) { showFatal("init: " + (e && e.stack || e)); }
   }).catch(() => {
-    try { bindEvents(); initSplit(); initHSplit("L"); initHSplit("R"); refresh(); }
+    try { bindEvents(); initSplit(); initHSplit("L"); initHSplit("R"); refresh(); call("get_effect_registry").then(r => { if (r && r.ok) Store.set({ effects: r.meta }); }); }
     catch (e) { showFatal("init(fallback): " + (e && e.stack || e)); }
   });
 }

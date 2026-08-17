@@ -3439,6 +3439,13 @@ class Api:
             idx = track_index
         return tracks, idx
 
+    def get_effect_registry(self):
+        """返回特效注册表（EFFECT_META）供前端渲染特效库与参数面板。
+
+        单一真源：前端不硬编码特效列表/参数，避免与 EFFECT_REGISTRY/EFFECT_META 漂移。
+        前端在 init 时拉一次存入 Store.state.effects；特效库卡片与参数面板滑块均由它自动生成。"""
+        return {"ok": True, "meta": EFFECT_META}
+
     def add_effect(self, track_index, effect_type, target=None, start_us=0, duration_us=2_000_000,
                    params=None, keyframes=None, name=None):
         """新增一个特效段到特效轨（Effect DSL 节点）。
