@@ -2662,29 +2662,42 @@ class Api:
         speed = _seg_speed(seg)
         new_edge = int(new_edge_us)
         if edge == "left":
-            # 2026-08-17 真机修复：左拉必须同时满足 src_start≥0（素材头）与 start≥0（时间轴起点）。
-            # 旧代码只 clamp src_start——当 src_start>start 时左拉，start 变负（日志铁证音频段 start=-0.5s
-            # → AudioEngine src.start(-0.5) RangeError → 拉长后无声）。负方向取两者较紧约束。
+            # 2026-08-17 真机修复 v2：双向公式改成"反算"——任何 trim 操作后必须严格保持
+            # `(se_ - ss) / speed == dur`（源窗口精确匹配时间长度）。
+            # 旧公式 ss += delta*speed 是累加，多次裁剪再拉长后会失同步（用户实测音频段
+            # dur=36.69s 但 se=6.19s）——左右都改，杜绝同步漂移。
             left_limit = max(int(-ss / speed), -start)
             delta = max(left_limit, min(new_edge - start, dur - MIN))
-            seg["start"] = start + delta
-            seg["src_start"] = ss + int(round(delta * speed))
-            seg["duration"] = dur - delta
+            new_start = start + delta
+            new_dur = dur - delta
+            new_ss = ss + int(round(delta * speed))
+            new_se = new_ss + int(round(new_dur * speed))
+            seg["start"] = new_start
+            seg["src_start"] = new_ss
+            seg["duration"] = new_dur
+            seg["src_end"] = new_se
         elif edge == "right":
-            # 2026-08-17 修复（v2，对比 OpenCut/FableCut 后）：右拉上限必须用「素材真实全长」。
-            # 旧代码（含 v1 的 min(se_,real)）把上限卡在当前 src_end——先裁剪再拉长时，
-            # 恢复不了被裁掉的素材（用户实测：'拉长应该恢复之前的片段，但恢复不了'）。
-            # FableCut 语义：maxDur = (media.duration - in) / speed（永远用素材全长）。
-            # 仅当 src_end 超过素材真实时长（旧脏数据）时拉回素材边界。
+            # 2026-08-17 修复 v3（根治"拉长恢复被裁片段"+"src 窗口不漂移"）：
+            # ① 上限用素材真实全长（FableCut 语义：maxDur = (media.duration - in) / speed）
+            # ② 反算公式 new_se = new_ss + new_dur * speed（保证 (se-ss)/speed == dur 永不漂移）
+            # ③ se 上限兜底 clamp 到素材边界（防旧脏数据越界）
             real = get_media_duration(seg.get("path")) if seg.get("type") in ("video", "audio") else None
             real_us = int(real * 1_000_000) if real else None
             if real_us is not None and se_ > real_us:
                 se_ = real_us
             max_dur = int(((real_us if real_us is not None else se_) - ss) / speed)
             delta = max(MIN - dur, min(new_edge - (start + dur), max_dur - dur))
-            seg["duration"] = dur + delta
-            new_se = se_ + int(round(delta * speed))
-            seg["src_end"] = min(new_se, real_us) if real_us is not None else new_se
+            new_dur = dur + delta
+            new_se = ss + int(round(new_dur * speed))
+            if real_us is not None:
+                new_se = min(new_se, real_us)
+                # 同步缩 dur（极端边界：delta 把 new_se 顶到素材边界，dur 要对应收缩）
+                new_dur = int((new_se - ss) / speed)
+                if new_dur < MIN:
+                    new_dur = MIN
+                    new_se = ss + int(round(new_dur * speed))
+            seg["duration"] = new_dur
+            seg["src_end"] = new_se
         else:
             raise ValueError("edge 必须是 left 或 right")
         seg["animations"] = _clamp_animations_to_duration(_seg_anims(seg), seg["duration"])
