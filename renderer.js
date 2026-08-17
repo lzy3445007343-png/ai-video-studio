@@ -656,7 +656,7 @@ function onMaskHandleUp() {
 
 /* 关键帧动画（Step 2b 收尾：从 HTML 迁入，纯搬移）——updateKfLiveValues/applyKfTransform/applyKfLiveAll */
 function updateKfLiveValues() {
-  const s = selectedSeg(); if (!s || (s.type !== "video" && s.type !== "audio")) return;
+  const s = selectedSeg(); if (!s || !["video", "image", "sticker"].includes(s.type)) return;
   const anims = s.animations || {};
   const rowsEl = $("kfRows"); if (!rowsEl || rowsEl.style.display === "none") return;
   const local = Math.max(0, Math.min(Store.state.playheadUs - s.start, s.duration));

@@ -1215,8 +1215,11 @@ function renderSpeedTab() {
   if (!s || !c) return;
   if (s.type !== "video" && s.type !== "audio") { c.innerHTML = '<div class="empty-hint" style="padding:16px;text-align:center">仅视频/音频段可变速</div>'; return; }
   const sp = s.speed || 1;
-  const opts = [0.5, 0.75, 1, 1.25, 1.5, 2, 3].map(x =>
-    '<option value="' + x + '"' + (Math.abs(sp - x) < 0.01 ? " selected" : "") + '>' + x + 'x</option>').join("");
+  const PRESETS = [0.5, 0.75, 1, 1.25, 1.5, 2, 3];
+  const inPreset = PRESETS.some(x => Math.abs(sp - x) < 0.01);
+  const opts = PRESETS.map(x =>
+    '<option value="' + x + '"' + (Math.abs(sp - x) < 0.01 ? " selected" : "") + '>' + x + 'x</option>').join("")
+    + (inPreset ? "" : '<option value="' + sp + '" selected>' + sp + 'x（自定义）</option>');
   c.innerHTML =
     '<div class="row" style="display:flex;align-items:center;gap:8px;margin:6px 0">' +
       '<label style="width:44px;font-size:12px;color:var(--muted)">速度</label>' +
@@ -1352,10 +1355,22 @@ function renderKfPanel() {
   const nameEl = $("kfSegName"), rowsEl = $("kfRows"), graphEl = $("kfGraph"),
         selEl = $("kfSel"), emptyEl = $("kfEmpty"), hintEl = $("kfHint");
   const s = selectedSeg();
-  if (!s || (s.type !== "video" && s.type !== "audio")) {
-    emptyEl.style.display = ""; rowsEl.style.display = "none"; graphEl.style.display = "none";
-    selEl.style.display = "none"; hintEl.style.display = "none"; nameEl.textContent = "";
-    selectedKf = { path: null, id: null }; return;
+  const KF_VISUAL = ["video", "image", "sticker"];   // 视觉元素支持 transform 关键帧
+  if (!s || !KF_VISUAL.includes(s.type)) {
+    // 非视觉类型：audio 无画面位移；text 字段在字幕面板；其他不支持 transform 关键帧
+    selectedKf = { path: null, id: null };
+    nameEl.textContent = "";
+    selEl.style.display = "none"; hintEl.style.display = "none"; graphEl.style.display = "none";
+    if (s && s.type === "audio") {
+      emptyEl.style.display = "none"; rowsEl.style.display = "";
+      rowsEl.innerHTML = '<div style="padding:16px 8px;font-size:11px;color:var(--muted);text-align:center;line-height:1.6">音频段不支持位移/缩放/旋转关键帧（无画面）；调音量请切到 🔊 audio tab。</div>';
+    } else if (s && s.type === "text") {
+      emptyEl.style.display = "none"; rowsEl.style.display = "";
+      rowsEl.innerHTML = '<div style="padding:16px 8px;font-size:11px;color:var(--muted);text-align:center;line-height:1.6">文本段的字号/颜色等字段在字幕面板（💬 sub tab），不在 transform 关键帧里。</div>';
+    } else {
+      emptyEl.style.display = ""; rowsEl.style.display = "none";
+    }
+    return;
   }
   emptyEl.style.display = "none"; rowsEl.style.display = ""; graphEl.style.display = "";
   hintEl.style.display = ""; nameEl.textContent = s.name || "";
@@ -1364,24 +1379,16 @@ function renderKfPanel() {
   // 按 type 过滤 KF_PATHS（2026-08-16：audio/text 无 transform 概念）
   const paths = KF_PATHS_BY_TYPE[s.type] || [];
   let html = "";
-  for (const [path, lab] of paths) {
+  for (const [path, lab, step, def] of paths) {
     const on = !!(anims[path] && anims[path].keys && anims[path].keys.length);
     const cur = kfVal(anims, path, local);
-    const def = paths.find(p => p[0] === path)[3];
     const shown = cur == null ? def : cur;
     html += '<div class="kf-row" data-path="' + path + '">'
       + '<button class="tog' + (on ? ' on' : '') + '" data-act="tog" title="开/关该属性动画">◆</button>'
       + '<span class="lab">' + lab + '</span>'
-      + '<input class="val" data-act="val" value="' + round2(shown) + '" step="0.1">'
+      + '<input class="val" data-act="val" value="' + round2(shown) + '" step="' + step + '">'
       + '<button class="add" data-act="add" title="在播放头处添加关键帧">＋</button>'
       + '</div>';
-  }
-  // audio/text 类型无 transform 关键帧时显示引导
-  if (paths.length === 0) {
-    const tip = s.type === "audio"
-      ? "音频段不支持位移/缩放/旋转关键帧（无画面）；调音量请切到 🔊 audio tab。"
-      : "文本段的字号/颜色等字段在字幕生成面板（💬 sub tab），不在 transform 关键帧里。";
-    html = '<div style="padding:16px 8px;font-size:11px;color:var(--muted);text-align:center;line-height:1.6">' + tip + '</div>';
   }
   rowsEl.innerHTML = html;
   rowsEl.querySelectorAll(".kf-row").forEach(row => {
@@ -1404,14 +1411,15 @@ function renderKfGraph(s) {
   graphEl.querySelectorAll(".kf-diamond").forEach(d => d.remove());
   const anims = s.animations || {};
   const dur = s.duration || 1;
-  KF_PATHS.forEach(([path], lane) => {
+  const lanes = KF_PATHS_BY_TYPE[s.type] || KF_PATHS;
+  lanes.forEach(([path], lane) => {
     const ch = anims[path]; if (!ch || !ch.keys) return;
     for (const k of ch.keys) {
       const x = (k.t / dur) * 100;
       const d = document.createElement("div");
       d.className = "kf-diamond" + (selectedKf.path === path && selectedKf.id === k.id ? " sel" : "");
       d.style.left = x + "%";
-      d.style.top = ((lane + 0.5) / KF_PATHS.length * 100) + "%";
+      d.style.top = ((lane + 0.5) / lanes.length * 100) + "%";
       d.dataset.path = path; d.dataset.id = k.id;
       d.title = path + " @ " + (k.t / 1e6).toFixed(2) + "s = " + round2(k.v);
       d.addEventListener("mousedown", e => onKfDiamondDown(e, path, k.id, dur));
