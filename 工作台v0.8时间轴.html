@@ -248,9 +248,9 @@
   .seg .hdr { position: absolute; top: 0; left: 0; right: 0; height: 18px; display: flex; align-items: center;
     padding: 0 6px; font-size: 10px; color: rgba(255,255,255,.8); background: linear-gradient(to bottom, rgba(0,0,0,.35), transparent);
     pointer-events: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .seg .handle { position: absolute; top: 0; bottom: 0; width: 7px; cursor: ew-resize; }
+  .seg .handle { position: absolute; top: 0; bottom: 0; width: 7px; cursor: ew-resize; background: rgba(61,169,255,.35); }
   .seg .handle.l { left: 0; } .seg .handle.r { right: 0; }
-  .seg .handle:hover { background: rgba(61,169,255,.4); }
+  .seg .handle:hover { background: rgba(61,169,255,.65); }
   /* 变速倍率徽章：段上显示当前 speed（对齐 OpenCut speed 标签），speed=1 不显示 */
   .seg .speed-badge { position: absolute; right: 4px; bottom: 2px; font-size: 9px; line-height: 1;
     background: rgba(0,0,0,.55); color: #fff; padding: 1px 3px; border-radius: 3px; pointer-events: none;
@@ -1680,7 +1680,8 @@ function renderGroupBox() {
   const gb = $("groupBox");
   const keys = Store.state.selectedKeys;
   const d = Store.state.drag;
-  if (!keys || keys.length === 0 || (d && d.moved && !d.isGroup)) { gb.style.display = "none"; return; }
+  // 单片段不显示 group-box：它自己的修剪把手已足够；多选才需要整组缩放框。
+  if (!keys || keys.length === 0 || keys.length === 1 || (d && d.moved && !d.isGroup)) { gb.style.display = "none"; return; }
   const cRect = $("tlContent").getBoundingClientRect();
   let minL = Infinity, maxR = -Infinity, minT = Infinity, maxB = -Infinity, any = false;
   keys.forEach(k => {
@@ -1697,14 +1698,6 @@ function renderGroupBox() {
   gb.style.top = (minT - cRect.top) + "px";
   gb.style.width = (maxR - minL) + "px";
   gb.style.height = (maxB - minT) + "px";
-  // 单片段选中时禁用整组缩放把手：拖边缘=纯修剪（补回/减少源素材，速度不变），
-  // 否则 .gh.r(z-index:6) 会盖住片段自带修剪把手抢走事件→误触发 scale_group 改 speed。
-  // 仅多选(>=2)才启用整组缩放（对齐 OpenCut group-resize 语义）。
-  const multi = keys.length >= 2;
-  const ghL = $("groupHandleL"), ghR = $("groupHandleR");
-  const ghDisp = multi ? "block" : "none", ghPE = multi ? "auto" : "none";
-  if (ghL) { ghL.style.display = ghDisp; ghL.style.pointerEvents = ghPE; }
-  if (ghR) { ghR.style.display = ghDisp; ghR.style.pointerEvents = ghPE; }
 }
 /* ---------- 播放头定位 / 拖拽（对齐 OpenCut TimelinePlayhead） ---------- */
 /* 屏幕 X → 微秒：ruler 与 playhead 同在 tlContent 坐标系，ruler 的 rect.left 已随横向滚动偏移，
