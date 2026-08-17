@@ -1486,9 +1486,10 @@ function onPointerMove(e) {
   } else {
     const right = d.s0.start + d.s0.duration;
     const speed = d.s0.speed || 1;
-    // 素材尾对应时间轴位置（拖过素材尾没有素材可补，对齐后端 clamp）；
-    // 旧段缺 src_end 时用当前时长兜底（= 当前位置，不能拖长但不锁死）
-    const srcEnd = d.s0.src_end || (d.s0.src_start || 0) + (d.s0.duration || 0) * speed;
+    // 2026-08-17 根治（v4 一致性）：拖拽限位器必须用「推导 src_end」= src_start + duration×speed，
+    // 与播放端/波形端同一来源。旧代码直读 d.s0.src_end —— 脏数据(src_end=6.19 但 duration=36.69)会让
+    // maxRight 卡在 6.19s，用户拖不动去修复，误判"还是不对"。推导后限位=真实素材窗口，拖拽与播放一致。
+    const srcEnd = deriveSrcEndUs(d.s0.src_start || 0, d.s0.duration || 0, speed);
     const maxRight = d.s0.start + (srcEnd - (d.s0.src_start || 0)) / speed;
     let r2 = Math.max(d.s0.start + 0.2e6, Math.min(maxRight, right + dUs));
     if (Store.state.snapOn) {
