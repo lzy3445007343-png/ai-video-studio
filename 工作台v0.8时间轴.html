@@ -1697,6 +1697,14 @@ function renderGroupBox() {
   gb.style.top = (minT - cRect.top) + "px";
   gb.style.width = (maxR - minL) + "px";
   gb.style.height = (maxB - minT) + "px";
+  // 单片段选中时禁用整组缩放把手：拖边缘=纯修剪（补回/减少源素材，速度不变），
+  // 否则 .gh.r(z-index:6) 会盖住片段自带修剪把手抢走事件→误触发 scale_group 改 speed。
+  // 仅多选(>=2)才启用整组缩放（对齐 OpenCut group-resize 语义）。
+  const multi = keys.length >= 2;
+  const ghL = $("groupHandleL"), ghR = $("groupHandleR");
+  const ghDisp = multi ? "block" : "none", ghPE = multi ? "auto" : "none";
+  if (ghL) { ghL.style.display = ghDisp; ghL.style.pointerEvents = ghPE; }
+  if (ghR) { ghR.style.display = ghDisp; ghR.style.pointerEvents = ghPE; }
 }
 /* ---------- 播放头定位 / 拖拽（对齐 OpenCut TimelinePlayhead） ---------- */
 /* 屏幕 X → 微秒：ruler 与 playhead 同在 tlContent 坐标系，ruler 的 rect.left 已随横向滚动偏移，
