@@ -1883,6 +1883,15 @@ def _extract_text_content(mat):
     return str(obj)
 
 
+_TS_RE = re.compile(r"_(\d{6,})(?=\.[^.]+$)")
+def _strip_asset_ts(p):
+    """去掉 assets 副本文件名里 import 加的时间戳后缀（5月28日_1786963727.mp4 -> 5月28日.mp4），
+    用于把 Agent/脚本传入的「导入前原始路径」归一到 materials 里登记的 canonical 副本路径。"""
+    if not p:
+        return p
+    return _TS_RE.sub("", p.replace("\\", "/"))
+
+
 class Api:
     """暴露给前端（HTML）调用的 Python 能力。一个方法 = 一个原子能力。"""
 
@@ -1961,15 +1970,6 @@ class Api:
             return {"ok": False, "error": "重做系统未就绪"}
         self._reload()
         return Api.cmd_mgr.redo(self)
-
-_TS_RE = re.compile(r"_(\d{6,})(?=\.[^.]+$)")
-def _strip_asset_ts(p):
-    """去掉 assets 副本文件名里 import 加的时间戳后缀（5月28日_1786963727.mp4 -> 5月28日.mp4），
-    用于把 Agent/脚本传入的「导入前原始路径」归一到 materials 里登记的 canonical 副本路径。"""
-    if not p:
-        return p
-    return _TS_RE.sub("", p.replace("\\", "/"))
-
 
     def add_to_timeline(self, name, path, mtype, track_index=None, at_time_us=None, insert_index=None):
         """把素材登记进草稿对应轨道（双击或拖拽都走这里，真实进轨）。
