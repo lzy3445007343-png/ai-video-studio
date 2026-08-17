@@ -159,6 +159,40 @@ def delete_text_track(track_index: int) -> str:
 
 
 @mcp.tool()
+def add_effect(track_index: int, effect_type: str, target: dict = None, start_us: int = 0,
+               duration_us: int = 2000000, params: dict = None, keyframes: list = None, name: str = None) -> str:
+    """新增一个特效段到特效轨（Effect DSL 节点，预览=导出同源）。
+
+    effect_type: 注册表 key（blur/brightness/contrast/saturate/hue_rotate/grayscale/sepia/invert/opacity）。
+    target: {"type":"clip","track":int,"ti":int,"si":int} 绑素材段；省略=调整层（盖整栈）。
+    start_us/duration_us: 微秒（段在特效轨上的时间区间）。
+    params: 该 effect_type 的原语参数 dict（如 blur→{"radius":12}，brightness→{"value":1.2}）。
+    keyframes: 参数时间曲线 [{param,time(us,相对段起点),value,easing}]，省略=静态。
+    返回结果 JSON（含新建段的 id）。"""
+    return _exec("add_effect", {"track_index": track_index, "effect_type": effect_type, "target": target,
+                                "start_us": start_us, "duration_us": duration_us, "params": params,
+                                "keyframes": keyframes, "name": name})
+
+
+@mcp.tool()
+def update_effect(track_index: int, index: int, patch: dict = None) -> str:
+    """更新特效段：patch 可含 effect_type/target/params(合并)/keyframes/range{startUs,endUs}/start/duration/name/hidden。"""
+    return _exec("update_effect", {"track_index": track_index, "index": index, "patch": patch})
+
+
+@mcp.tool()
+def remove_effect(track_index: int, index: int) -> str:
+    """删除特效轨第 index 段。"""
+    return _exec("remove_effect", {"track_index": track_index, "index": index})
+
+
+@mcp.tool()
+def duplicate_effect(track_index: int, index: int) -> str:
+    """复制特效段到同轨紧接其后（重发 id）。"""
+    return _exec("duplicate_effect", {"track_index": track_index, "index": index})
+
+
+@mcp.tool()
 def set_track_meta(track_type: str, track_index: int, field: str, value: bool) -> str:
     """设置某条轨道的预览元数据（前端轨道上「👁/🔊」开关用）。
 

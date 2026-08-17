@@ -487,7 +487,7 @@ def load_state():
     empty = {
         "materials": [],
         "draft": {
-            "video": [[]], "audio": [[]], "text": [[]],
+            "video": [[]], "audio": [[]], "text": [[]], "effect": [[]],
             "canvas": {"ratio": DEFAULT_CANVAS, "locked": False},
         },
         "version": 0,
@@ -498,7 +498,7 @@ def load_state():
         with open(STATE_PATH, "r", encoding="utf-8") as f:
             s = json.load(f)
         s.setdefault("materials", [])
-        s.setdefault("draft", {"video": [[]], "audio": [[]], "text": [[]]})
+        s.setdefault("draft", {"video": [[]], "audio": [[]], "text": [[]], "effect": [[]]})
         s["draft"].setdefault("canvas", {"ratio": DEFAULT_CANVAS, "locked": False})
         s.setdefault("version", 0)
         # 兼容历史脏数据：materials 偶尔会被写成 dict（空对象 {}），统一归一化为 list
@@ -509,7 +509,7 @@ def load_state():
         draft = s["draft"]
         draft.setdefault("_track_meta", {})
         meta = draft["_track_meta"]
-        for key in ("video", "audio", "text"):
+        for key in ("video", "audio", "text", "effect"):
             draft.setdefault(key, [[]])
             data = draft[key]
             # 迁移：如果是扁平列表（元素是片段 dict），按不重叠拆成多轨
@@ -693,6 +693,32 @@ def _ensure_seg_ids(draft):
             for seg in segs:
                 if isinstance(seg, dict) and "id" not in seg:
                     seg["id"] = uuid.uuid4().hex
+
+
+# ---- Effect Registry（Effect DSL 双 adapter：预览 css + 导出 ffmpeg，读同一份 params 规格）----
+# 阶段 A 即定义；阶段 C 的 effects.js 镜像同一 key（css 端），阶段 E 的 export_video 消费 ffmpeg 端。
+# 改一个特效类型只动本表一处（跨语言镜像两份，但 key+语义同源于此冻结表）。
+# 无操作（默认参数）返回 ""，避免叠加无效滤镜——renderer/export 跳过空串即可。
+EFFECT_REGISTRY = {
+    "blur":       {"css": lambda p: (f"blur({p.get('radius', 0)}px)" if p.get('radius', 0) > 0 else ""),
+                   "ffmpeg": lambda p: (f"gblur=sigma={p.get('radius', 0)}" if p.get('radius', 0) > 0 else "")},
+    "brightness": {"css": lambda p: (f"brightness({p.get('value', 1)})" if p.get('value', 1) != 1 else ""),
+                   "ffmpeg": lambda p: (f"eq=brightness={p.get('value', 1)}" if p.get('value', 1) != 1 else "")},
+    "contrast":   {"css": lambda p: (f"contrast({p.get('value', 1)})" if p.get('value', 1) != 1 else ""),
+                   "ffmpeg": lambda p: (f"eq=contrast={p.get('value', 1)}" if p.get('value', 1) != 1 else "")},
+    "saturate":   {"css": lambda p: (f"saturate({p.get('value', 1)})" if p.get('value', 1) != 1 else ""),
+                   "ffmpeg": lambda p: (f"eq=saturation={p.get('value', 1)}" if p.get('value', 1) != 1 else "")},
+    "hue_rotate": {"css": lambda p: (f"hue-rotate({p.get('value', 0)}deg)" if p.get('value', 0) else ""),
+                   "ffmpeg": lambda p: (f"hue={p.get('value', 0)}" if p.get('value', 0) else "")},
+    "grayscale":  {"css": lambda p: (f"grayscale({p.get('value', 0)})" if p.get('value', 0) else ""),
+                   "ffmpeg": lambda p: (f"colorchannelmixer=rr=0.3:gg=0.59:bb=0.11:aa=1" if p.get('value', 0) else "")},
+    "sepia":      {"css": lambda p: (f"sepia({p.get('value', 0)})" if p.get('value', 0) else ""),
+                   "ffmpeg": lambda p: (f"colorchannelmixer=rr=0.393:rg=0.769:rb=0.189:gr=0.349:gg=0.686:gb=0.168:br=0.272:bg=0.131:bb=0.131" if p.get('value', 0) else "")},
+    "invert":     {"css": lambda p: (f"invert({p.get('value', 0)})" if p.get('value', 0) else ""),
+                   "ffmpeg": lambda p: ("negate" if p.get('value', 0) else "")},
+    "opacity":    {"css": lambda p: (f"opacity:{p.get('value', 1)}" if p.get('value', 1) != 1 else ""),
+                   "ffmpeg": lambda p: (f"format=rgba,colorchannelmixer=aa={p.get('value', 1)}" if p.get('value', 1) != 1 else "")},
+}
 
 
 def _ensure_seg_speeds(draft):
@@ -3378,6 +3404,125 @@ class Api:
                 tf[k] = patch[k]
         save_state(self.state)
         return {"ok": True}
+
+    # ---- 特效轨（Effect Track：Effect DSL 节点，预览=导出同源）----
+
+    def _ensure_effect_track(self, track_index):
+        """确保 effect 轨存在并返回 (tracks, idx)。track_index=None 用 effect[0]。"""
+        tracks = self.draft.setdefault("effect", [[]])
+        if not tracks:
+            tracks.append([])
+        if track_index is None:
+            idx = 0
+        else:
+            while len(tracks) <= track_index:
+                tracks.append([])
+            idx = track_index
+        return tracks, idx
+
+    def add_effect(self, track_index, effect_type, target=None, start_us=0, duration_us=2_000_000,
+                   params=None, keyframes=None, name=None):
+        """新增一个特效段到特效轨（Effect DSL 节点）。
+
+        effect_type: 注册表 key（blur/brightness/contrast/saturate/hue_rotate/grayscale/sepia/invert/opacity；
+                     预留 transition/mask/text_anim）。
+        target: {"type":"clip","track":int,"ti":int,"si":int} 绑素材段；默认 {"type":"adjustment"}（调整层，盖整栈）。
+        start_us/duration_us: 微秒（段在特效轨上的时间区间，即 range.startUs/endUs）。
+        params: 该 effect_type 的原语参数 dict（见 docs/architecture/effect-track-design.md §2.3）。
+        keyframes: 参数时间曲线 [{param,time(us,相对段起点),value,easing}]；默认空=静态。
+        返回 {ok, track_index, index, id} 或 {ok:False, error}。"""
+        if not effect_type or effect_type not in EFFECT_REGISTRY:
+            return {"ok": False, "error": f"未知 effect_type：{effect_type}（合法值见 EFFECT_REGISTRY）"}
+        try:
+            start_us = int(start_us)
+            duration_us = int(duration_us)
+        except Exception:
+            return {"ok": False, "error": "start/duration 必须是整数微秒"}
+        if duration_us <= 0:
+            return {"ok": False, "error": "特效时长必须 > 0"}
+        if target is None:
+            target = {"type": "adjustment"}
+        if not isinstance(target, dict) or "type" not in target:
+            return {"ok": False, "error": "target 必须是 {type:'clip'|'adjustment'|'track', ...}"}
+        if target["type"] == "clip" and not all(k in target for k in ("track", "ti", "si")):
+            return {"ok": False, "error": "target.type='clip' 需要 track/ti/si 字段"}
+        self._reload()
+        self._push_undo()
+        tracks, idx = self._ensure_effect_track(track_index)
+        seg = {
+            "id": "effect_" + uuid.uuid4().hex[:12],
+            "type": "effect",
+            "effect_type": effect_type,
+            "target": target,
+            "start": start_us,
+            "duration": duration_us,
+            "src_start": 0,
+            "src_end": duration_us,
+            "params": dict(params) if isinstance(params, dict) else {},
+            "keyframes": list(keyframes) if keyframes else [],
+            "hidden": False,
+            "name": name or effect_type,
+        }
+        tracks[idx].append(seg)
+        _ensure_seg_ids(self.draft)
+        save_state(self.state)
+        return {"ok": True, "track_index": idx, "index": len(tracks[idx]) - 1, "id": seg["id"]}
+
+    def update_effect(self, track_index, index, patch=None, **kw):
+        """更新特效段：patch 或 kwargs 可含 effect_type/target/params(合并)/keyframes/
+        range{startUs,endUs}/start/duration/name/hidden。单次 undo。"""
+        self._reload()
+        seg = self._seg_ref("effect", track_index, index)
+        if seg is None:
+            return {"ok": False, "error": f"effect[{track_index}] 没有第 {index} 段"}
+        self._push_undo()
+        if not isinstance(patch, dict):
+            patch = {}
+        patch = dict(patch)
+        patch.update(kw)
+        if "effect_type" in patch:
+            if patch["effect_type"] not in EFFECT_REGISTRY:
+                return {"ok": False, "error": f"未知 effect_type：{patch['effect_type']}"}
+            seg["effect_type"] = patch["effect_type"]
+        if "target" in patch and isinstance(patch["target"], dict):
+            seg["target"] = patch["target"]
+        if "name" in patch:
+            seg["name"] = patch["name"]
+        if "hidden" in patch:
+            seg["hidden"] = bool(patch["hidden"])
+        if "params" in patch and isinstance(patch["params"], dict):
+            seg.setdefault("params", {})
+            seg["params"].update(patch["params"])
+        if "keyframes" in patch:
+            seg["keyframes"] = list(patch["keyframes"]) if patch["keyframes"] else []
+        # range 优先；否则 start/duration
+        if "range" in patch and isinstance(patch["range"], dict):
+            if "startUs" in patch["range"]:
+                seg["start"] = int(patch["range"]["startUs"])
+            if "endUs" in patch["range"]:
+                seg["duration"] = max(0, int(patch["range"]["endUs"]) - seg["start"])
+        else:
+            if "start" in patch:
+                seg["start"] = int(patch["start"])
+            if "duration" in patch:
+                seg["duration"] = int(patch["duration"])
+        save_state(self.state)
+        return {"ok": True}
+
+    def remove_effect(self, track_index, index):
+        """删除特效轨第 index 段。"""
+        return self.remove_segment("effect", track_index, index)
+
+    def duplicate_effect(self, track_index, index):
+        """复制特效段到同轨紧接其后（重发 effect_ 前缀 id）。"""
+        r = self.duplicate_segment("effect", track_index, index)
+        if r.get("ok"):
+            ni = r["index"]
+            seg = self._seg_ref("effect", track_index, ni)
+            if seg is not None:
+                seg["id"] = "effect_" + uuid.uuid4().hex[:12]
+                save_state(self.state)
+        return r
 
     # ---- 字幕（ASR / SRT 导入）----
 
