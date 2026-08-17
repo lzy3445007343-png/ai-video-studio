@@ -859,17 +859,22 @@ function renderPreviewMaybe(s) {
   if (isPlaying) { syncPreviewVolume(); syncOverlayVisibility(s); return; }
   renderPreview(s);
 }
-// 播放中不重跑完整 renderPreview，但仍需按播放头隐藏/显示已存在的 text/sticker 元素，
-// 否则文本/贴纸会“焊”在画面上不随时间消失。
+// 播放中不重跑完整 renderPreview，但仍需按播放头隐藏/显示已存在的 video/image/text/sticker 元素，
+// 否则文本/贴纸/叠层图片会“焊”在画面上不随时间消失。
 function syncOverlayVisibility(s) {
   if (typeof previewState === "undefined" || !previewState) return;
   const us = s.playheadUs;
   const hits = resolveHits(us);
+  const activeVisual = new Set();
   const activeText = new Set();
   const activeSticker = new Set();
   for (const h of hits) {
-    if (h.type === "text") activeText.add("text:" + h.ti);
+    if (h.type === "video") activeVisual.add("video:" + h.ti);
+    else if (h.type === "text") activeText.add("text:" + h.ti);
     else if (h.type === "sticker") activeSticker.add("sticker:" + h.ti);
+  }
+  for (const [k, rec] of previewState.visualEls || []) {
+    rec.el.style.display = activeVisual.has(k) ? "" : "none";
   }
   for (const [k, rec] of previewState.textEls || []) {
     rec.el.style.display = activeText.has(k) ? "" : "none";

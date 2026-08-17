@@ -457,12 +457,14 @@ function seekActiveMediaToPlayhead(us, reanchorAudio) {
     if (!activeVideoTis.has(ti)) {
       if (isVideo) {
         v.pause(); setMediaMute(v, true, "inactive-park", layerKey);   // 非活动视频：停车静音
-        // Phase C-fix（2026-08-16 真机）：间隙时仅 pause 还残留最后一帧画面，必须 hide 让预览区回到占位黑屏
-        rec.el.style.display = "none";
       }
+      // 2026-08-16 fix（PNG 卡死叠加轨根因）：图片叠加层(<img>)同样必须隐藏。
+      // 旧逻辑只在 isVideo 时隐藏，导致 image 段结束后 <img> 元素停在画面上不消失 → 用户看到"PNG 焊死"。
+      // 间隙时仅隐藏还残留最后一帧画面，必须 hide 让预览区回到占位黑屏/下层视频。
+      rec.el.style.display = "none";
     } else {
       // 命中轨恢复显示（跨段后新元素已由 renderPreview 设为 display=""，但若 playTick 跨过边界需保险恢复）
-      if (isVideo) rec.el.style.display = "";
+      rec.el.style.display = "";
     }
   }
   for (const [layerKey, rec] of previewState.audioEls) {
@@ -480,7 +482,21 @@ function seekActiveMediaToPlayhead(us, reanchorAudio) {
     let el = null, rec = null;
     if (h.type === "video") {
       const v = previewState.visualEls.get("video:" + h.ti);
-      rec = v; el = v ? v.el.firstElementChild : null;   // video 元素在 wrap 内，firstElementChild 即 <video>
+      rec = v;
+      // 2026-08-16 fix（PNG 卡死叠加轨根因）：image 叠加段（<img>，无 <video> 媒体）单独处理，
+      // 不参与 seek/play 生命周期，只按播放头切换 <img> 内容 + 显隐。否则 image 段结束后
+      // <img> 元素停在画面上不消失 → 用户看到"PNG 焊死"；同轨多张图也不切换内容。
+      if (h.seg.type === "image") {
+        if (!rec) { allReady = false; continue; }        // 元素未建 → 触发下方 isRepairing→renderPreview 创建
+        if (rec.key !== h.key) {                          // 同轨不同段（如叠加轨多张图切换）→ 换 <img> src
+          _setVisualContent(rec.el, "image", resolveSegPath(h.seg), false, null);
+          rec.seg = h.seg; rec.key = h.key;
+        }
+        rec.el.style.display = "";
+        applyKfTransform(rec.el, h.seg, Math.max(0, Math.min(us - h.seg.start, h.seg.duration)));
+        continue;                                         // 图片不进视频 seek/play 路径
+      }
+      el = v ? v.el.firstElementChild : null;   // video 元素在 wrap 内，firstElementChild 即 <video>
       // C.5-3（MediaSlot swap，2026-08-16）：跨段时若 prepare 槽已 READY（后台预加载完成）→ **swap 无感**：
       //   旧 active 元素转 prepare（隐藏，后台加载下一段 N+2），prepare 转 active（显示，直接播）
       //   根治 WebView2"切段 destroy+重建→新元素加载慢→从 0 起播"（日志实锤 cur=0.002 反复播开头）。
