@@ -720,6 +720,25 @@ EFFECT_REGISTRY = {
                    "ffmpeg": lambda p: (f"format=rgba,colorchannelmixer=aa={p.get('value', 1)}" if p.get('value', 1) != 1 else "")},
 }
 
+# 特效类型自描述（Step：让 AI/agent 经 MCP get_effect_registry 自查"有哪些特效 + 各自参数"）。
+# 与 EFFECT_REGISTRY 同文件、紧邻定义，作为单一真源，避免和 mcp_server.py 各写一份漂移。
+# 每个 effect_type 列出人类可读 label + 参数 schema（单位/默认/建议范围/说明）。
+EFFECT_META = {
+    "blur":       {"label": "模糊",   "params": {"radius":    {"unit": "px",  "default": 0, "range": "0~20",  "note": "0=无效果，建议 2~15"}}},
+    "brightness": {"label": "亮度",   "params": {"value":     {"unit": "x",   "default": 1, "range": "0~2",   "note": "1=原样，0=全黑，>1 更亮"}}},
+    "contrast":   {"label": "对比度", "params": {"value":     {"unit": "x",   "default": 1, "range": "0~2",   "note": "1=原样"}}},
+    "saturate":   {"label": "饱和度", "params": {"value":     {"unit": "x",   "default": 1, "range": "0~3",   "note": "1=原样，0=黑白"}}},
+    "hue_rotate": {"label": "色相",   "params": {"value":     {"unit": "deg", "default": 0, "range": "0~360", "note": "0=原样"}}},
+    "grayscale":  {"label": "灰度",   "params": {"value":     {"unit": "0~1", "default": 0, "range": "0~1",   "note": "1=全灰"}}},
+    "sepia":      {"label": "复古",   "params": {"value":     {"unit": "0~1", "default": 0, "range": "0~1",   "note": "1=全棕"}}},
+    "invert":     {"label": "反相",   "params": {"value":     {"unit": "0~1", "default": 0, "range": "0~1",   "note": "1=反色"}}},
+    "opacity":    {"label": "不透明度","params": {"value":    {"unit": "0~1", "default": 1, "range": "0~1",   "note": "配合 keyframes 做渐入/渐出"}}},
+}
+EFFECT_META_NOTE = (
+    "所有特效支持 keyframes=[{param,time(us,相对段起点),value,easing}] 做时间曲线；"
+    "target 省略=调整层(盖整栈预览+导出)，{type:'clip',track,ti,si}=绑素材段，{type:'track',ti}=整轨特效（v1.x）。"
+)
+
 
 def _ensure_seg_speeds(draft):
     """给草稿里所有 video/audio 段补 speed/change_pitch 默认值（兼容旧项目）。"""

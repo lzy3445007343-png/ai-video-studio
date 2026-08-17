@@ -289,6 +289,15 @@ def get_effects() -> str:
 
 
 @mcp.tool()
+def get_effect_registry() -> str:
+    """特效类型目录（让 agent 自查"有哪些特效可调 + 各自参数"，避免猜 effect_type/params）。
+    返回 {effects:{type:{label,params:{param:{unit,default,range,note}}}}, note}。
+    调 add_effect 前先查这个：effect_type 必须是 effects 的 key，params 字段名/单位/范围以此为准；
+    note 说明 keyframes 时间曲线与 target(调整层/片段/整轨) 写法。"""
+    return json.dumps({"effects": main.EFFECT_META, "note": main.EFFECT_META_NOTE}, ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
 def get_material_peaks(path: str, max_points: int = 240) -> str:
     """素材级波形包络（整段），跳切/静音检测 skill 判断"哪里该剪"的输入。
     path 可为视频（取音轨）或音频文件。返回 {peaks:归一化RMS列表, has_audio:是否有音轨, points:点数}。
