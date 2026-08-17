@@ -466,7 +466,8 @@ const PlayerManager = {
   // split/trim 后 start 会变，源内实际起止由 src_start/src_end 决定。
   seek(el, seg, us) {
     const srcStartUs = seg.src_start || 0;
-    const srcEndUs = seg.src_end || (srcStartUs + seg.duration);
+    // 2026-08-17 根治：源终点推导（(srcEnd-srcStart)/speed == duration 不变量，防 trim 脏 src_end 失同步）
+    const srcEndUs = deriveSrcEndUs(srcStartUs, seg.duration || 0, seg.speed || 1);
     const localUs = Math.max(0, us - seg.start);
     // B2-A：上界必须是源绝对结束 srcEndUs（而非段时长）。旧写法对 src_start>0 的右段会反复从切点重播。
     const t = Math.max(srcStartUs / 1e6, Math.min(srcEndUs / 1e6, (srcStartUs + localUs) / 1e6));
@@ -492,7 +493,8 @@ const PlayerManager = {
     if (!el || !seg) return;
     if (el._seekPending) return;                 // 已有 barrier 在跑，跳过
     const srcStartUs = seg.src_start || 0;
-    const srcEndUs = seg.src_end || (srcStartUs + seg.duration);
+    // 2026-08-17 根治：源终点推导（与 PlayerManager.seek 一致）
+    const srcEndUs = deriveSrcEndUs(srcStartUs, seg.duration || 0, seg.speed || 1);
     const localUs = Math.max(0, us - seg.start);
     const t = Math.max(srcStartUs / 1e6, Math.min(srcEndUs / 1e6, (srcStartUs + localUs) / 1e6));
     const wasPlaying = !el.paused;

@@ -780,7 +780,10 @@ def _flatten_video(seg, ti, idx, track_muted, track_hidden, materials):
     start_us = _seg_num(seg.get("start"), 0)
     duration_us = _seg_num(seg.get("duration"), 0)
     src_start_us = _seg_num(seg.get("src_start"), 0)
-    src_end_us = _seg_num(seg.get("src_end"), src_start_us + duration_us)
+    # 2026-08-17 根治：源终点推导（与 playback-graph.js deriveSrcEndUs 一致）——
+    # (src_end - src_start) / speed == duration 不变量，杜绝 trim 累加失同步脏数据
+    speed_v = _graph_clamp_speed(seg.get("speed"))
+    src_end_us = src_start_us + max(0, duration_us) * speed_v
     return {
         "key": "video:%d:%d" % (ti, idx),
         "trackKey": "video:%d" % ti,
@@ -788,7 +791,7 @@ def _flatten_video(seg, ti, idx, track_muted, track_hidden, materials):
         "durationUs": duration_us,
         "srcStartUs": src_start_us,
         "srcEndUs": src_end_us,
-        "speed": _graph_clamp_speed(seg.get("speed")),
+        "speed": speed_v,
         "gain": _graph_resolve_gain(track_muted, bool(seg.get("muted")), seg.get("volume")),
         "muted": bool(seg.get("muted")),
         "path": _resolve_seg_path(seg, materials),
@@ -803,7 +806,9 @@ def _flatten_audio(seg, ti, idx, track_muted, materials):
     start_us = _seg_num(seg.get("start"), 0)
     duration_us = _seg_num(seg.get("duration"), 0)
     src_start_us = _seg_num(seg.get("src_start"), 0)
-    src_end_us = _seg_num(seg.get("src_end"), src_start_us + duration_us)
+    # 2026-08-17 根治：源终点推导（与 playback-graph.js deriveSrcEndUs 一致）
+    speed_v = _graph_clamp_speed(seg.get("speed"))
+    src_end_us = src_start_us + max(0, duration_us) * speed_v
     return {
         "key": "audio:%d:%d" % (ti, idx),
         "trackKey": "audio:%d" % ti,
@@ -811,7 +816,7 @@ def _flatten_audio(seg, ti, idx, track_muted, materials):
         "durationUs": duration_us,
         "srcStartUs": src_start_us,
         "srcEndUs": src_end_us,
-        "speed": _graph_clamp_speed(seg.get("speed")),
+        "speed": speed_v,
         "gain": _graph_resolve_gain(track_muted, bool(seg.get("muted")), seg.get("volume")),
         "path": _resolve_seg_path(seg, materials),
     }
@@ -2101,7 +2106,8 @@ class Api:
             "start": seg.get("start", 0),
             "duration": seg.get("duration", 0),
             "src_start": seg.get("src_start", 0),
-            "src_end": seg.get("src_end", seg.get("duration", 0)),
+            # 2026-08-17 根治：源终点推导（防脏 src_end 传播到提取段）
+            "src_end": int(seg.get("src_start", 0)) + int(round(max(0, seg.get("duration", 0)) * _seg_speed(seg))),
             "speed": seg.get("speed", DEFAULT_SPEED),
             "change_pitch": seg.get("change_pitch", False),
             "extracted_from": vid_id,
@@ -2143,19 +2149,19 @@ class Api:
         except Exception:
             return {"ok": False, "error": "speed 必须是数字"}
         rate = max(MIN_SPEED, min(MAX_SPEED, rate))
-        # 源范围兜底：旧数据或异常数据可能缺 src_end
+        # 2026-08-17 根治：源窗口跨度用推导值（duration × 旧 speed），不读 src_end 脏字段——
+        # 变速语义=保持源窗口不变，span 恒等于 duration_old × speed_old
         if "src_start" not in seg:
             seg["src_start"] = 0
-        if "src_end" not in seg or not seg.get("src_end"):
-            real = get_media_duration(seg.get("path")) if seg.get("type") in ("video", "audio") else None
-            seg["src_end"] = int(real * 1_000_000) if real else seg["duration"]
         ss = seg["src_start"]
-        se_ = seg["src_end"]
-        source_span = max(1, se_ - ss)
+        old_speed = _seg_speed(seg)
+        source_span = max(1, int(round(seg.get("duration", 0) * old_speed)))
         new_duration = int(round(source_span / rate))
         seg["speed"] = rate
         seg["change_pitch"] = bool(change_pitch) if change_pitch is not None else seg.get("change_pitch", False)
         seg["duration"] = new_duration
+        # 源终点同步反算（保持不变量 (se-ss)/speed == duration）
+        seg["src_end"] = ss + int(round(new_duration * rate))
         save_state(self.state)
         return {
             "ok": True,
@@ -2166,7 +2172,7 @@ class Api:
             "change_pitch": seg["change_pitch"],
             "duration": new_duration,
             "src_start": ss,
-            "src_end": se_,
+            "src_end": seg["src_end"],
         }
 
     def set_segment_volume(self, track_type, track_index, index, volume):
@@ -3623,8 +3629,10 @@ class Api:
                         t = Timerange(seg["start"], seg["duration"])
                         # source_timerange 必须传真实源跨度（src_end - src_start），
                         # 原代码传 seg["duration"] 只在 speed=1 时碰巧正确；变速后必须用源跨度。
+                        # 2026-08-17 根治：源终点推导（(se-ss)/speed == duration 不变量，防脏 src_end）
                         ss = int(seg.get("src_start", 0))
-                        se_ = int(seg.get("src_end", ss + seg["duration"]))
+                        speed_exp = _seg_speed(seg)
+                        se_ = ss + int(round(max(0, seg.get("duration", 0)) * speed_exp))
                         src = Timerange(ss, max(1, se_ - ss))
                         # 提取原声后视频自身静音（muted → volume=0），避免与独立音轨音频翻倍
                         # 轨道级静音同样让整轨视频的内嵌音频静音
@@ -3659,8 +3667,10 @@ class Api:
                 for seg in segs:
                     try:
                         t = Timerange(seg["start"], seg["duration"])
+                        # 2026-08-17 根治：源终点推导（防脏 src_end 导出错窗）
                         ss = int(seg.get("src_start", 0))
-                        se_ = int(seg.get("src_end", ss + seg["duration"]))
+                        speed_exp = _seg_speed(seg)
+                        se_ = ss + int(round(max(0, seg.get("duration", 0)) * speed_exp))
                         src = Timerange(ss, max(1, se_ - ss))
                         vol = 0.0 if seg.get("muted") else float(seg.get("volume", 1.0))
                         kwargs = {"source_timerange": src, "volume": vol}

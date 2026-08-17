@@ -41,6 +41,14 @@ function _graphVolume(v) {
   return isNaN(f) ? 1 : f;
 }
 
+// ⭐源窗口终点推导（2026-08-17 根治：对齐 FableCut —— 源终点永远 = 源起点 + 时间长度×变速，
+// 绝不信任 draft.src_end 独立字段——v1/v2 trim 增量累加曾致 src_end 与 duration 失同步，
+// 播放器按脏 src_end 算时长 → "前面能播、后面被拉长的部分无声/波形拉伸"）。
+// 公式：(srcEndUs - srcStartUs) / speed == durationUs —— 同一物理量的两种表达，结构上不可能失同步。
+function deriveSrcEndUs(srcStartUs, durationUs, speed) {
+  return srcStartUs + Math.max(0, durationUs) * (speed || 1);
+}
+
 // 素材解析：material_id → materials[].uid 查 path；失败 fallback seg.path（与 store.js resolveSegPath 同构）
 function _resolvePath(seg, materials) {
   if (!seg || typeof seg !== "object") return null;
@@ -74,13 +82,15 @@ function _flattenVideo(seg, ti, idx, trackMuted, trackHidden, materials) {
   const startUs = _num(seg.start, 0);
   const durationUs = _num(seg.duration, 0);
   const srcStartUs = _num(seg.src_start, 0);
-  const srcEndUs = _num(seg.src_end, srcStartUs + durationUs);
+  const speed = _clampSpeed(seg.speed);
+  // 2026-08-17 根治：src_end 一律推导（不信任 seg.src_end 字段，防 trim 累加失同步脏数据）
+  const srcEndUs = deriveSrcEndUs(srcStartUs, durationUs, speed);
   return {
     key: "video:" + ti + ":" + idx,   // 轨:索引（与 resolveHits 同构）
     trackKey: "video:" + ti,
     startUs, durationUs,               // 时间轴位置
-    srcStartUs, srcEndUs,              // 源窗口（兼容兜底后）
-    speed: _clampSpeed(seg.speed),
+    srcStartUs, srcEndUs,              // 源窗口（⭐推导值，非 draft 字段）
+    speed,
     gain: resolveGain(trackMuted, !!seg.muted, seg.volume),  // 内嵌声音量（轨/段静音→0），不含 previewMuted
     muted: !!seg.muted,                // 段级静音 → video 元素 muted
     path: _resolvePath(seg, materials),
@@ -93,13 +103,15 @@ function _flattenAudio(seg, ti, idx, trackMuted, materials) {
   const startUs = _num(seg.start, 0);
   const durationUs = _num(seg.duration, 0);
   const srcStartUs = _num(seg.src_start, 0);
-  const srcEndUs = _num(seg.src_end, srcStartUs + durationUs);
+  const speed = _clampSpeed(seg.speed);
+  // 2026-08-17 根治：src_end 一律推导（不信任 seg.src_end 字段，防 trim 累加失同步脏数据）
+  const srcEndUs = deriveSrcEndUs(srcStartUs, durationUs, speed);
   return {
     key: "audio:" + ti + ":" + idx,
     trackKey: "audio:" + ti,
     startUs, durationUs,
     srcStartUs, srcEndUs,
-    speed: _clampSpeed(seg.speed),
+    speed,
     gain: resolveGain(trackMuted, !!seg.muted, seg.volume),  // 不含 previewMuted（播放端另叠）
     path: _resolvePath(seg, materials),
   };

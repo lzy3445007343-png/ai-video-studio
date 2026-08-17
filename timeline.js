@@ -145,8 +145,9 @@ function makeSeg(s, type, ti, idx, overrideLeftUs, forceDragging) {
     const peaks = Store.state.waveMap[s.path];
     if (peaks && peaks.length) {
       // 波形必须按源素材区间 [src_start, src_end] 绘制：split/trim 后 start 会变，但峰值数组始终对应原素材 0s 起点。
+      // 2026-08-17 根治：src_end 推导（防 trim 脏 src_end 导致波形被拉伸——用户实测"拉长后波形只是拉伸"）
       const srcStartUs = s.src_start || 0;
-      const srcEndUs = s.src_end || (srcStartUs + s.duration);
+      const srcEndUs = deriveSrcEndUs(srcStartUs, s.duration || 0, s.speed || 1);
       const srcDurSec = Math.max(0.001, (srcEndUs - srcStartUs) / 1e6);
       waveCanvas = '<canvas class="fill wave" data-path="' + (s.path || "") + '" data-src-start="' + srcStartUs + '" data-src-end="' + srcEndUs + '" data-dur="' + srcDurSec + '"></canvas>';
     } else {

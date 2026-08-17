@@ -414,7 +414,8 @@ function correctActiveMediaDrift(us) {
     if (el.readyState < 2) return;   // HAVE_METADATA 以下：元素还在加载，seek 只会打断，交给 play 路径自己追上
     const s = rec.seg; if (!s) return;
     const srcStartUs = s.src_start || 0;
-    const srcEndUs = s.src_end || (srcStartUs + s.duration);
+    // 2026-08-17 根治：源终点推导（防 trim 脏 src_end 失同步）
+    const srcEndUs = deriveSrcEndUs(srcStartUs, s.duration || 0, s.speed || 1);
     const ct = el.currentTime || 0;
     const ssSec = srcStartUs / 1e6;
     const endSec = srcEndUs / 1e6;
