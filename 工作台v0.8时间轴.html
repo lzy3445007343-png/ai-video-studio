@@ -856,8 +856,27 @@ function renderTimecode(s) {
 function renderPreviewMaybe(s) {
   // 播放中预览由 playTick 驱动（仅在跨段换源时重建一次），轮询/其它状态变更不要重建，
   // 否则每 0.5s 重跑 renderPreview → 音频被拽回播放头 → 卡顿+反复播同段，并扰动播放头时钟
-  if (isPlaying) { syncPreviewVolume(); return; }
+  if (isPlaying) { syncPreviewVolume(); syncOverlayVisibility(s); return; }
   renderPreview(s);
+}
+// 播放中不重跑完整 renderPreview，但仍需按播放头隐藏/显示已存在的 text/sticker 元素，
+// 否则文本/贴纸会“焊”在画面上不随时间消失。
+function syncOverlayVisibility(s) {
+  if (typeof previewState === "undefined" || !previewState) return;
+  const us = s.playheadUs;
+  const hits = resolveHits(us);
+  const activeText = new Set();
+  const activeSticker = new Set();
+  for (const h of hits) {
+    if (h.type === "text") activeText.add("text:" + h.ti);
+    else if (h.type === "sticker") activeSticker.add("sticker:" + h.ti);
+  }
+  for (const [k, rec] of previewState.textEls || []) {
+    rec.el.style.display = activeText.has(k) ? "" : "none";
+  }
+  for (const [k, rec] of previewState.stickerEls || []) {
+    rec.el.style.display = activeSticker.has(k) ? "" : "none";
+  }
 }
 // 播放期同步段级 volume 到现有元素（2026-08-16：渲染层一次性设的 volume 改了不重建就丢失）
 function syncPreviewVolume() {
@@ -974,6 +993,14 @@ function renderPropertyPanel() {
   else if (activePanel === "maskPanel") renderMaskPanel();
   else if (activePanel === "subPanel") renderSubPanel();
   else if (activePanel === "stickerPanel") renderStickerPanel();
+}
+
+// 字幕属性面板（点选 text 段时右侧属性栏）：防止 renderSubPanel is not defined 崩溃。
+// v0.1 没有后端 update_text，当前只做只读展示，后续可接编辑命令。
+function renderSubPanel() {
+  const s = selectedSeg();
+  const nameEl = document.getElementById("subSegName");
+  if (nameEl) nameEl.textContent = s ? (" " + (s.name || "")) : "";
 }
 
 // 音频面板（2026-08-16 对齐 OpenCut AudioTab）：段级音量滑块 + 静音开关
