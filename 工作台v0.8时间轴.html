@@ -1486,11 +1486,18 @@ function onPointerMove(e) {
   } else {
     const right = d.s0.start + d.s0.duration;
     const speed = d.s0.speed || 1;
-    // 2026-08-17 根治（v4 一致性）：拖拽限位器必须用「推导 src_end」= src_start + duration×speed，
-    // 与播放端/波形端同一来源。旧代码直读 d.s0.src_end —— 脏数据(src_end=6.19 但 duration=36.69)会让
-    // maxRight 卡在 6.19s，用户拖不动去修复，误判"还是不对"。推导后限位=真实素材窗口，拖拽与播放一致。
-    const srcEnd = deriveSrcEndUs(d.s0.src_start || 0, d.s0.duration || 0, speed);
-    const maxRight = d.s0.start + (srcEnd - (d.s0.src_start || 0)) / speed;
+    const ss = d.s0.src_start || 0;
+    // 2026-08-17 根治「能缩短不能拉长」：右拖上限必须用「源素材真实全长」src_full（微秒），
+    // 与后端 _trim_core 的 real_us 同源。旧限位器用「推导 src_end = src_start + duration×speed」
+    // 永远等于当前右边界 → 只能缩短、无法补回被裁帧。
+    //   视频/音频：maxRight = start + (src_full - src_start)/speed → 可一路拖回原素材末尾，补回被裁帧；
+    //   图片/文本：无源素材，不限长度（仍可自由拉长）。
+    //   缺失 src_full 的媒体也放宽为无限，交给后端 _trim_core 按真实时长 clamp（自动自愈）。
+    const isMedia = d.type === "video" || d.type === "audio";
+    const full = isMedia ? (d.s0.src_full || 0) : 0;
+    const maxRight = (isMedia && full)
+      ? d.s0.start + (full - ss) / speed
+      : Infinity;
     let r2 = Math.max(d.s0.start + 0.2e6, Math.min(maxRight, right + dUs));
     if (Store.state.snapOn) {
       const r = resolveSnap(r2, buildSnapPoints(d.key, false));

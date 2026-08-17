@@ -711,6 +711,37 @@ def _ensure_seg_speeds(draft):
                     seg.setdefault("change_pitch", False)
 
 
+def _ensure_seg_src_full(draft):
+    """给 video/audio 段补 src_full（源素材真实全长，微秒）= 右拖恢复被裁帧的上限。
+
+    缺失时按媒体文件实时探测（duration_for），与 _trim_core 的 real_us 同源。
+    图片/文本无源素材，不参与（前端按 isMedia 单独处理）。
+    返回是否发生了回填（供调用方决定是否落盘）。
+    """
+    changed = False
+    for t, tracks in draft.items():
+        if t not in ("video", "audio"):
+            continue
+        if not isinstance(tracks, list):
+            continue
+        for segs in tracks:
+            if not isinstance(segs, list):
+                continue
+            for seg in segs:
+                if not isinstance(seg, dict):
+                    continue
+                if seg.get("src_full"):
+                    continue
+                p = seg.get("path")
+                mtype = seg.get("type")
+                if p and mtype in ("video", "audio"):
+                    d = duration_for(p, mtype)
+                    if d:
+                        seg["src_full"] = int(d)
+                        changed = True
+    return changed
+
+
 def _seg_speed(seg):
     """返回段的实际变速倍率（clamp 到合法范围）。"""
     if not isinstance(seg, dict):
@@ -1888,6 +1919,10 @@ class Api:
         # 兼容旧项目：补 speed/change_pitch 默认值
         _ensure_seg_speeds(self.draft)
         _ensure_seg_animations(self.draft)
+        # 兼容旧项目：补 src_full（源素材真实全长，微秒）——右拖恢复被裁帧的上限。
+        # 回填后落盘（record=False，避免污染撤销栈），下次重载即不再重算。
+        if _ensure_seg_src_full(self.draft):
+            save_state(self.state, record=False)
 
     def _push_undo(self):
         """【已废弃】保留为无操作占位。
@@ -1975,6 +2010,7 @@ class Api:
             "duration": duration,
             "src_start": 0,
             "src_end": duration,
+            "src_full": duration,   # 源素材真实全长（微秒）= 右拖恢复被裁帧上限
             "speed": DEFAULT_SPEED,
             "change_pitch": False,
             "animations": {},
@@ -3964,6 +4000,10 @@ class Api:
         """
         self.state = load_state()
         self.draft = self.state["draft"]  # 同步更新草稿引用，避免后续操作改到旧内存
+        # 兼容旧项目：补 src_full（源素材真实全长，微秒）——前端右拖恢复被裁帧的上限。
+        # 自限：回填后落盘（record=False），下次轮询即无缺失、不再重算 ffprobe。
+        if _ensure_seg_src_full(self.draft):
+            save_state(self.state, record=False)
         mcp_state = load_mcp_state()
         self.state["meta"] = {"mcp": mcp_state}
         # 注意：version 只反映草稿真实变化（save_state 打的时间戳），不要并入 MCP 心跳时间戳，
