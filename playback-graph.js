@@ -118,11 +118,53 @@ function _flattenAudio(seg, ti, idx, trackMuted, materials) {
   };
 }
 
+/* ---------- §3 特效/文本/贴纸 平铺（Phase B：修 A1 语义层完整性，特效=预览=导出同源的桥） ---------- */
+
+function _flattenEffect(seg, ti, idx, trackHidden) {
+  if (!seg || typeof seg !== "object") return null;
+  const startUs = _num(seg.start, 0);
+  const durationUs = _num(seg.duration, 0);
+  return {
+    key: "effect:" + ti + ":" + idx,
+    trackKey: "effect:" + ti,
+    id: seg.id || null,
+    effectType: seg.effect_type || null,
+    target: seg.target || { type: "adjustment" },   // 默认调整层(盖整栈)
+    params: seg.params || {},
+    keyframes: seg.keyframes || [],
+    startUs, durationUs,
+    hidden: trackHidden || !!seg.hidden,
+  };
+}
+
+function _flattenText(seg, ti, idx, trackHidden) {
+  if (!seg || typeof seg !== "object") return null;
+  return {
+    key: "text:" + ti + ":" + idx,
+    trackKey: "text:" + ti,
+    startUs: _num(seg.start, 0), durationUs: _num(seg.duration, 0),
+    text: seg.text || "", hidden: trackHidden || !!seg.hidden,
+  };
+}
+
+function _flattenSticker(seg, ti, idx, trackHidden) {
+  if (!seg || typeof seg !== "object") return null;
+  return {
+    key: "sticker:" + ti + ":" + idx,
+    trackKey: "sticker:" + ti,
+    startUs: _num(seg.start, 0), durationUs: _num(seg.duration, 0),
+    hidden: trackHidden || !!seg.hidden,
+  };
+}
+
 /* ---------- 主入口：buildPlaybackGraph ---------- */
 
 function buildPlaybackGraph(draft, materials) {
   const audioClips = [];
   const videoNodes = [];
+  const effectNodes = [];
+  const textNodes = [];
+  const stickerNodes = [];
   const d = draft || {};
   const meta = d._track_meta || {};
 
@@ -147,7 +189,35 @@ function buildPlaybackGraph(draft, materials) {
     });
   });
 
-  return { audioClips, videoNodes, version: ++_graphVersion };
+  // ★ Phase B：特效段平铺（预览=导出同源的桥；renderer 与 export_video 同源消费）
+  (d.effect || []).forEach((track, ti) => {
+    const tmeta = (meta.effect || [])[ti] || {};
+    const trackHidden = !!tmeta.hidden;
+    (track || []).forEach((seg, idx) => {
+      const node = _flattenEffect(seg, ti, idx, trackHidden);
+      if (node) effectNodes.push(node);
+    });
+  });
+
+  // A1 一致性：文本/贴纸也平铺进语义层（renderer 当前仍直接读 draft，此 Nodes 供 graph_consistency 对拍）
+  (d.text || []).forEach((track, ti) => {
+    const tmeta = (meta.text || [])[ti] || {};
+    const trackHidden = !!tmeta.hidden;
+    (track || []).forEach((seg, idx) => {
+      const node = _flattenText(seg, ti, idx, trackHidden);
+      if (node) textNodes.push(node);
+    });
+  });
+  (d.sticker || []).forEach((track, ti) => {
+    const tmeta = (meta.sticker || [])[ti] || {};
+    const trackHidden = !!tmeta.hidden;
+    (track || []).forEach((seg, idx) => {
+      const node = _flattenSticker(seg, ti, idx, trackHidden);
+      if (node) stickerNodes.push(node);
+    });
+  });
+
+  return { audioClips, videoNodes, effectNodes, textNodes, stickerNodes, version: ++_graphVersion };
 }
 
 // 对拍脚本 / Node 消费

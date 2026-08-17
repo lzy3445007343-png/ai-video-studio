@@ -238,7 +238,44 @@ function renderPreview(s) {
 
   // 注意：play() 不在这里触发——startPlay 已显式调 playAllMedia()，跨段续播由 playTick 跨段分支调用。
   // 若此处也调，会导致同一媒体被反复 play → AbortError（反复播/卡顿根因之一）。
+  applyEffects();        // ★ Phase C：特效段合成（盖在素材层/整栈上的滤镜）
   renderMaskOverlay();   // 选中段有遮罩时画把手（拖拽用）
+}
+
+/* ---------- 特效合成（Phase C：特效只是 Graph 上的 Node，renderer 只调用 effects.js 纯函数） ---------- */
+// 把当前激活的特效段应用到预览 DOM：逐片段特效挂素材层 filter/opacity，调整层挂整栈 previewStack。
+// 仅调用 computeEffectStyle（纯函数，不写滤镜逻辑），守住 Timeline Kernel → Playback Graph → Renderer 单向。
+function applyEffects() {
+  const stack = $("previewStack");
+  if (!stack) return;
+  const draft = Store.state.draft;
+  if (!draft || !draft.effect || !draft.effect.length) {
+    // 无特效轨：复位整栈 + 视觉层 filter，避免残留旧特效
+    stack.style.filter = "";
+    stack.style.opacity = "";
+    for (const rec of previewState.visualEls.values()) rec.el.style.filter = "";
+    return;
+  }
+  let effectNodes = [];
+  try {
+    effectNodes = (buildPlaybackGraph(draft, Store.state.materials).effectNodes) || [];
+  } catch (e) { return; }
+  // 收集 segKey -> 元素（video 层 rec.key = "video:ti:si"，image 段也走 video 轨同 wrap）
+  const layerByKey = {};
+  for (const [lk, rec] of previewState.visualEls) {
+    if (rec && rec.key) layerByKey[rec.key] = rec.el;
+  }
+  const res = computeEffectStyle(effectNodes, Store.state.playheadUs, layerByKey);
+  // 先复位所有视觉层 filter（opacity 不在此清零，交给 applyKfTransform / 特效 opacity 决定）
+  for (const rec of previewState.visualEls.values()) rec.el.style.filter = "";
+  for (const [key, f] of Object.entries(res.layerFilters)) {
+    const el = layerByKey[key]; if (el) el.style.filter = f;
+  }
+  for (const [key, op] of Object.entries(res.layerOpacity)) {
+    const el = layerByKey[key]; if (el) el.style.opacity = String(op);
+  }
+  stack.style.filter = res.stackFilter || "";
+  stack.style.opacity = (res.stackOpacity !== 1) ? String(res.stackOpacity) : "";
 }
 
 /* ---------- 播放 / 暂停 ---------- */
@@ -659,4 +696,5 @@ function applyKfLiveAll() {
     const local = Math.max(0, Math.min(us - rec.seg.start, rec.seg.duration));
     applyKfTransform(rec.el, rec.seg, local);
   }
+  applyEffects();   // ★ Phase C：特效用播放头每帧重算（关键帧动画/静态都覆盖）
 }

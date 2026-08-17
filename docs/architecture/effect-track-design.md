@@ -174,12 +174,12 @@ EFFECT_REGISTRY = {
 - 读取端兜底：`_num(seg.params.get("radius",0),0)` 对齐 `_num`/`_graphVolume` 纪律。
 - `mcp_server.py` 注册 `add_effect`/`update_effect`/`remove_effect`/`duplicate_effect`。
 
-### 阶段 B — 语义层平铺（JS · playback-graph.js，修 A1 一致性）
+### 阶段 B — 语义层平铺（JS · playback-graph.js，修 A1 一致性）✅ 已落码（2026-08-17）
 - `buildPlaybackGraph`（`playback-graph.js:122-150`）新增 effect 遍历，产出 `effectNodes`（与 `videoNodes`/`audioClips` 同级）。
 - `_flattenEffect(seg, ti, idx)`：`{key, trackKey:"effect:"+ti, target, effectType, params, keyframes, startUs, durationUs, hidden}`（读 `range` 或 `start/duration`）。
 - **顺带把 text/sticker 也平铺进 `textNodes`/`stickerNodes`**（修 A1 缺陷），语义层完整，`tools/graph_consistency.py` 对拍脚本才覆盖全。
 
-### 阶段 C — renderer 合成（JS，核心：特效显示出来，且不让 renderer.js 膨胀）
+### 阶段 C — renderer 合成（JS，核心：特效显示出来，且不让 renderer.js 膨胀）✅ 已落码（2026-08-17）
 > 采纳 ChatGPT review「阶段 C 收紧」：特效只是 Graph 上的一个 Node，不反向侵入播放核心；不要把 renderEffect/renderMask 内联进 renderer.js 堆成 5000 行。
 
 - **抽独立模块 `effects.js`**（不参与播放内核）：纯函数 `computeEffectStyle(effectNodes, playheadUs) → {layerFilters:Map<segKey,filter>, stackFilter, stackOpacity, masks:Map<segKey,clipPath>}`。
