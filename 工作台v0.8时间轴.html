@@ -101,7 +101,8 @@
 
   .preview { flex: 1; min-height: 0; min-width: 0; background: #0e0e10; display: flex; flex-direction: column; overflow: hidden; }
   .preview .stage { flex: 1; display: flex; align-items: center; justify-content: center; position: relative; overflow: hidden; }
-  .preview .preview-stack { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; }
+  .preview .preview-stack { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+    display: flex; align-items: center; justify-content: center; }
   .preview .preview-stack .vis-layer,
   .preview .preview-stack video,
   .preview .preview-stack img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; background: #000; }
@@ -116,6 +117,14 @@
   .preview .controls .play:hover,
   .preview .controls .mute:hover { background: #34343c; }
   .preview .controls .mute.muted { background: #ff4d4f22; border-color: #ff4d4f55; }
+  .preview .controls .aspect-group { display: flex; align-items: center; gap: 3px; margin-left: auto; }
+  .preview .controls .asp-btn { padding: 3px 8px; font-size: 11px; line-height: 1; border-radius: 4px;
+    background: var(--panel-2); border: 1px solid var(--border); color: var(--muted); cursor: pointer; }
+  .preview .controls .asp-btn:hover { color: var(--text); border-color: #ffffff44; }
+  .preview .controls .asp-btn.on { background: var(--primary); color: #fff; border-color: var(--primary); }
+  #canvasFrame { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+    border: 1px solid #ffffff2e; pointer-events: none; z-index: 5;
+    box-shadow: 0 0 0 2000px rgba(0, 0, 0, .55); }
   .preview .tc { font-variant-numeric: tabular-nums; color: var(--muted); font-size: 12px; min-width: 96px; }
 
   .skill { width: 220px; flex: none; background: var(--panel); border-left: 1px solid var(--border);
@@ -327,6 +336,13 @@
         <button class="play" id="playBtn">▶</button>
         <button class="mute" id="muteBtn" title="静音/取消静音">🔊</button>
         <span class="tc" id="timecode">00:00.000 / 00:00.000</span>
+        <span class="aspect-group" id="aspectGroup" title="画幅（手动选择后锁定，拖素材不再自动改比例）">
+          <button class="asp-btn" data-ratio="16:9">16:9</button>
+          <button class="asp-btn" data-ratio="9:16">9:16</button>
+          <button class="asp-btn" data-ratio="4:3">4:3</button>
+          <button class="asp-btn" data-ratio="1:1">1:1</button>
+          <button class="asp-btn" data-ratio="auto" title="解除锁定：由素材自动决定">自动</button>
+        </span>
       </div>
         </div>
 
@@ -1076,6 +1092,47 @@ function canvasPxJS() {
   else { H = BASE; W = Math.round(BASE * p[0] / p[1]); }
   return { W, H };
 }
+// 画幅：预览画布框跟随 draft.canvas.ratio（16:9/9:16/4:3/3:4/1:1/自动）——暗色边框+外圈阴影突出画布范围
+function applyCanvasRatio() {
+  const stage = $("stage");
+  if (!stage) return;
+  let frame = $("canvasFrame");
+  if (!frame) { frame = document.createElement("div"); frame.id = "canvasFrame"; stage.appendChild(frame); }
+  const cp = canvasPxJS();
+  const sw = stage.clientWidth || 1, sh = stage.clientHeight || 1;
+  const s = Math.min(sw / cp.W, sh / cp.H);
+  const w = Math.max(1, Math.round(cp.W * s)), h = Math.max(1, Math.round(cp.H * s));
+  frame.style.width = w + "px";
+  frame.style.height = h + "px";
+  // 画布框同步约束 previewStack 尺寸：视频/图片严格 contain 在画布内（画幅切换立即可见）
+  const stack = $("previewStack");
+  if (stack) { stack.style.width = w + "px"; stack.style.height = h + "px"; }
+  const cur = (Store.state.draft.canvas || {}).ratio || "16:9";
+  const locked = !!((Store.state.draft.canvas || {}).locked);
+  document.querySelectorAll("#aspectGroup .asp-btn").forEach(b => {
+    const r = b.dataset.ratio;
+    b.classList.toggle("on", (r === "auto") ? !locked : (r === cur));
+  });
+}
+function setAspect(ratio) {
+  const ap = api(); if (!ap) return;
+  const fn = ratio === "auto" ? "reset_canvas_lock" : "set_canvas";
+  const p = ratio === "auto" ? Promise.resolve(ap[fn]()) : Promise.resolve(ap[fn](ratio));
+  p.then(res => {
+    if (res && res.ok === false) { console.warn("[canvas]", res.error); return; }
+    refresh();  // 拉最新状态（canvas.ratio/locked）+ 画布框同步
+  }).catch(e => console.warn("[canvas]", e));
+}
+(function bindAspect() {
+  const g = $("aspectGroup");
+  if (!g) return;
+  g.addEventListener("click", e => {
+    const b = e.target.closest(".asp-btn"); if (!b) return;
+    setAspect(b.dataset.ratio);
+  });
+  const stg = $("stage");
+  if (stg && typeof ResizeObserver !== "undefined") new ResizeObserver(() => applyCanvasRatio()).observe(stg);
+})();
 // 段内局部时间 localUs 处的插值（线性/hold），与后端 _kf_interp 一致
 function kfVal(anims, path, localUs) {
   if (!anims || !anims[path] || !anims[path].keys || !anims[path].keys.length) return null;
@@ -2339,6 +2396,7 @@ function refresh() {
     });
     updateToolbarState();
     renderKfPanel();   // 选中态/状态刷新后同步关键帧面板
+    applyCanvasRatio();   // 画幅同步（人工切换 / 素材自动匹配 / 外部 Agent 修改后刷新）
   });
 }
 
