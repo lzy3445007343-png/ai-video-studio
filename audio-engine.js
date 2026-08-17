@@ -108,7 +108,8 @@ function createAudioEngine(ctx) {
   // ---- 调度单个 clip：到点出声 ----
   // startCtxSnapshot：tick 调度时刻算好的 ctx 起始时刻（decode 是异步的，必须用调度时的
   // 快照，不能用 decode 完成时刻重新算——否则 decode 期间播放头前进，startCtx 又漂移）
-  engine.schedule = async function (c, startCtxSnapshot) {
+  // resumeOffsetSec/resumeDurSec：续播参数（播放头正处 clip 内时由 tick 传入，从播放头位置接上）
+  engine.schedule = async function (c, startCtxSnapshot, resumeOffsetSec, resumeDurSec) {
     if (!engine.ctx) return;
     const myEpoch = engine._epoch; // 记录发起时代际（v1.3 防 in-flight 竞态）
     const buf = await engine._decode(c.path);
@@ -123,12 +124,17 @@ function createAudioEngine(ctx) {
     src._clipGain = c.gain || 0;
     g.gain.value = engine.globalMuted ? 0 : (c.gain || 0); // v1.3：previewMuted 播放端叠加
     src.connect(g).connect(engine.ctx.destination);
-    const offset = c.srcStartUs / 1e6;                          // 源窗口起点（buffer 内偏移）
-    const dur = (c.srcEndUs - c.srcStartUs) / 1e6 / (c.speed || 1);
-    const startCtx = (startCtxSnapshot != null) ? startCtxSnapshot : (c.startUs / 1e6 + engine._anchorNow());
+    let offset = (resumeOffsetSec != null) ? resumeOffsetSec : c.srcStartUs / 1e6;
+    let dur = (resumeDurSec != null) ? resumeDurSec : (c.srcEndUs - c.srcStartUs) / 1e6 / (c.speed || 1);
+    // 2026-08-17 真机：段数据异常（拉长后 start 负值 / src_end 超素材）不崩——
+    // ① start 时间 clamp ≥0（Web Audio start() 小于 0 抛 RangeError，日志铁证 -0.5）
+    // ② offset clamp 到 buffer 内（防超素材）
+    const st = Math.max(0, startCtxSnapshot != null ? startCtxSnapshot : (c.startUs / 1e6 + engine._anchorNow()));
+    offset = Math.min(Math.max(0, offset), Math.max(0, buf.duration - 0.05));
+    dur = Math.max(0.001, Math.min(dur, buf.duration - offset));
     try {
-      src.start(startCtx, offset, Math.max(0.001, dur));
-      console.log("[AudioEngine] start ok", c.key, "at=" + startCtx.toFixed(3), "offset=" + offset.toFixed(3), "dur=" + dur.toFixed(3), "ctxNow=" + engine.ctx.currentTime.toFixed(3), "ctxState=" + engine.ctx.state);
+      src.start(st, offset, dur);
+      console.log("[AudioEngine] start ok", c.key, "at=" + st.toFixed(3), "offset=" + offset.toFixed(3), "dur=" + dur.toFixed(3), "ctxNow=" + engine.ctx.currentTime.toFixed(3), "ctxState=" + engine.ctx.state);
     } catch (e) {
       console.warn("[AudioEngine] src.start 失败:", c.key, e);
       return;
@@ -144,16 +150,26 @@ function createAudioEngine(ctx) {
     const now = engine.ctx.currentTime;
     const horizon = now + LOOKAHEAD_SEC;
     const anchorNow = engine._anchorNow();   // 实时锚定（每帧随播放头/ctx 自愈偏差）
+    const playheadSec = engine.playheadUs / 1e6;
     for (const c of engine.clips) {
       if (c._scheduled) continue;
       if ((c.gain || 0) <= 0) continue; // 静音段跳过（muted 不调度）
       const startCtx = c.startUs / 1e6 + anchorNow;
-      // 命中窗口：未来 LOOKAHEAD 内；或刚过去一点点（PAST_SLACK）→ 立即补播
-      // （Web Audio src.start 对过去时刻自动立即播；防 tick 抖动/播放头跳过导致漏调度）
+      const srcSpanSec = (c.srcEndUs - c.srcStartUs) / 1e6;
+      // ① 播放头当前正处在这个 clip 内 → 立即续播（起播/暂停恢复/拖动后：从播放头位置接上，
+      //    而非等 lookahead 窗口——否则恢复后播放头落在段中段，该段永远不在未来窗口 → 无声）
+      if (playheadSec >= c.startUs / 1e6 && playheadSec < (c.startUs + (c.durationUs || 0)) / 1e6) {
+        const elapsed = (playheadSec - c.startUs / 1e6) / (c.speed || 1);   // 该段已消耗的源时长
+        const resumeOffset = c.srcStartUs / 1e6 + elapsed;
+        const remaining = Math.max(0.001, srcSpanSec / (c.speed || 1) - elapsed);
+        console.log("[AudioEngine] tick-resume", c.key, "playhead=" + playheadSec.toFixed(3), "offset=" + resumeOffset.toFixed(3), "remaining=" + remaining.toFixed(3));
+        engine.schedule(c, now, resumeOffset, remaining);
+        continue;
+      }
+      // ② 未来窗口 lookahead：未来 LOOKAHEAD 内；或刚过去一点点（PAST_SLACK）→ 立即补播
+      // （防 tick 抖动/播放头跳过导致漏调度；整段已错过则不补）
       if (startCtx < horizon && startCtx >= now - PAST_SLACK) {
-        // 整段已错过（startCtx + 时长 < now）→ 不补播，避免播已过期的段
-        const durSec = (c.srcEndUs - c.srcStartUs) / 1e6 / (c.speed || 1);
-        if (startCtx + durSec < now) continue;
+        if (startCtx + srcSpanSec / (c.speed || 1) < now) continue;
         console.log("[AudioEngine] tick-hit", c.key, "startCtx=" + startCtx.toFixed(3), "now=" + now.toFixed(3), "horizon=" + horizon.toFixed(3));
         engine.schedule(c, startCtx);
       }

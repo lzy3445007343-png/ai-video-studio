@@ -2662,12 +2662,20 @@ class Api:
         speed = _seg_speed(seg)
         new_edge = int(new_edge_us)
         if edge == "left":
-            delta = max(int(-ss / speed), min(new_edge - start, dur - MIN))
+            # 2026-08-17 真机修复：左拉必须同时满足 src_start≥0（素材头）与 start≥0（时间轴起点）。
+            # 旧代码只 clamp src_start——当 src_start>start 时左拉，start 变负（日志铁证音频段 start=-0.5s
+            # → AudioEngine src.start(-0.5) RangeError → 拉长后无声）。负方向取两者较紧约束。
+            left_limit = max(int(-ss / speed), -start)
+            delta = max(left_limit, min(new_edge - start, dur - MIN))
             seg["start"] = start + delta
             seg["src_start"] = ss + int(round(delta * speed))
             seg["duration"] = dur - delta
         elif edge == "right":
-            max_dur = int((se_ - ss) / speed)
+            # 2026-08-17 真机修复：右拉上限必须拿「素材真实时长」兜底——seg.src_end 可能是脏数据
+            # （旧拉长残留），信任它会导致 src_end 超素材、seek 到不存在的源位置 → 黑屏/无声。
+            real = get_media_duration(seg.get("path")) if seg.get("type") in ("video", "audio") else None
+            se_real = min(se_, int(real * 1_000_000)) if real else se_
+            max_dur = int((se_real - ss) / speed)
             delta = max(MIN - dur, min(new_edge - (start + dur), max_dur - dur))
             seg["duration"] = dur + delta
             seg["src_end"] = se_ + int(round(delta * speed))
