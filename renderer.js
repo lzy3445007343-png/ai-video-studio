@@ -256,6 +256,7 @@ function preloadNextVideoSlot(rec, ti, currentStartUs) {
     const graph = buildPlaybackGraph(Store.state.draft, Store.state.materials);
     for (const n of (graph.videoNodes || [])) {
       if (n.trackKey !== "video:" + ti) continue;
+      if (n.type === "image") continue;   // 图片是 <img> 渲染，无需后台 <video> 预解码（否则 STUCK 且无效）
       if (n.startUs > currentStartUs && (!nextNode || n.startUs < nextNode.startUs)) nextNode = n;
     }
   } catch (e) { return; }

@@ -94,6 +94,7 @@ function _flattenVideo(seg, ti, idx, trackMuted, trackHidden, materials) {
     gain: resolveGain(trackMuted, !!seg.muted, seg.volume),  // 内嵌声音量（轨/段静音→0），不含 previewMuted
     muted: !!seg.muted,                // 段级静音 → video 元素 muted
     path: _resolvePath(seg, materials),
+    type: seg.type || "video",         // 段类型（image 需跳过 video 元素预加载，见 renderer.js preloadNextVideoSlot）
     hidden: trackHidden || !!seg.hidden,  // 轨/段隐藏 → 播放跳过渲染
   };
 }
