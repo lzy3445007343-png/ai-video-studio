@@ -54,7 +54,7 @@ const Store = {
     bookmarks: [],       // 书签列表 [{us, name}]，纯 UI 标注（对齐 OpenCut scene.bookmarks）
     snapOn: true,
     rippleOn: false,    // 波纹编辑开关（对齐 OpenCut rippleEditingEnabled）
-    filter: "all",
+    filter: "media",
     mediaView: "grid",         // 资产面板视图：grid（网格 2 列）/ list（单列紧凑）
     drag: null,            // 临时拖拽态（move / resize），提交后清空
     pendingDrag: null,     // mousedown 后未超过阈值前的待定态

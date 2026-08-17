@@ -68,15 +68,7 @@
   .media-list-wrapper::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
   .media-list-wrapper::-webkit-scrollbar-thumb:hover { background: var(--muted); }
   .media-list { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; padding: 8px 10px; align-content: start; }
-  /* list 模式（2026-08-16 对齐 OpenCut assets grid/list 切换）：单列紧凑，thumb 小图横向 */
-  #mediaList.view-list { grid-template-columns: 1fr; gap: 4px; padding: 6px 8px; }
-  #mediaList.view-list .media-card { display: flex; align-items: center; }
-  #mediaList.view-list .media-card .thumb { width: 52px; height: 40px; flex: none; }
-  #mediaList.view-list .media-card .name { flex: 1; padding: 0 6px; }
-  #mediaList.view-list .media-card .add { bottom: auto; top: 50%; transform: translateY(-50%); right: 26px; }
-  #mediaList.view-list .media-card .del { bottom: auto; top: 50%; transform: translateY(-50%); right: 4px; }
-  .assets .head .view-btn { background: var(--panel-2); border: 1px solid var(--border); padding: 4px 7px; font-size: 13px; border-radius: 5px; color: var(--muted); cursor: pointer; line-height: 1; }
-  .assets .head .view-btn.active { background: var(--primary-dim); border-color: var(--primary); color: var(--primary); }
+  /* 素材面板固定双列网格视图（2026-08-17 移除 grid/list 切换，避免鸡肋空 UI） */
   .media-card { background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px;
     overflow: hidden; cursor: grab; position: relative; }
   .media-card:active { cursor: grabbing; }
@@ -100,6 +92,9 @@
   .drop-newtrack-hint { position: absolute; left: 50%; top: 50%; transform: translate(-50%,-50%);
     background: rgba(0,0,0,.7); color: #fff; padding: 4px 10px; border-radius: 12px; font-size: 11px;
     pointer-events: none; z-index: 10; white-space: nowrap; display: none; }
+  /* 拖拽落点反馈（2026-08-17 参考 OpenCut）：兼容轨道高亮 / 不兼容轨道禁用态 */
+  .track.drop-target { box-shadow: inset 0 0 0 2px var(--primary); background: var(--primary-dim); }
+  .track.drop-disabled { box-shadow: inset 0 0 0 2px #ff4d4f; background: #ff4d4f18; }
 
   .preview { flex: 1; min-height: 0; min-width: 0; background: #0e0e10; display: flex; flex-direction: column; overflow: hidden; }
   .preview .stage { flex: 1; display: flex; align-items: center; justify-content: center; position: relative; overflow: hidden; }
@@ -210,12 +205,17 @@
 
   .timeline { flex: none; height: var(--bottom-h, 380px); min-height: 0; background: var(--panel); border-top: 1px solid var(--border);
     display: flex; flex-direction: column; overflow: hidden; }
-  .tl-toolbar { display: flex; align-items: center; gap: 6px; padding: 6px 10px; border-bottom: 1px solid var(--border); }
-  .tl-toolbar .tool { width: 30px; height: 30px; border-radius: 6px; background: var(--panel-2);
-    border: 1px solid var(--border); font-size: 14px; display: flex; align-items: center; justify-content: center; }
-  .tl-toolbar .tool:hover { background: #34343c; }
-  .tl-toolbar .tool.active { color: var(--primary); border-color: var(--primary); }
+  .tl-toolbar { display: flex; align-items: center; gap: 4px; padding: 4px 10px; border-bottom: 1px solid var(--border); overflow-x: auto; scrollbar-width: none; }
+  .tl-toolbar::-webkit-scrollbar { display: none; }
+  .tl-toolbar .tool { min-width: 42px; height: 48px; padding: 4px 5px 3px; border-radius: 8px;
+    background: var(--panel-2); border: 1px solid var(--border); color: var(--muted); cursor: pointer; line-height: 1;
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; }
+  .tl-toolbar .tool .ic { width: 18px; height: 18px; flex: none; }
+  .tl-toolbar .tool .lbl { font-size: 9px; transform: scale(.95); white-space: nowrap; }
+  .tl-toolbar .tool:hover { background: #34343c; color: var(--text); }
+  .tl-toolbar .tool.active { color: var(--primary); border-color: var(--primary); background: var(--primary-dim); }
   .tl-toolbar .tool:disabled { opacity: .35; cursor: not-allowed; }
+  .tl-toolbar .sep { width: 1px; height: 26px; background: var(--border); margin: 0 3px; flex: none; }
   .tl-toolbar .spacer { flex: 1; }
   .tl-toolbar .zoom { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; }
   .tl-toolbar .zoom input { width: 110px; }
@@ -326,8 +326,6 @@
 <div class="app">
   <div class="topbar">
     <span class="title">AI剪辑工作台 v0.9</span>
-    <button class="btn" id="undoBtn" title="撤销">↶</button>
-    <button class="btn" id="redoBtn" title="重做">↷</button>
     <span class="spacer"></span>
     <span class="mcp-pill"><span class="mcp-dot" id="mcpDot"></span><span id="mcpName">未连接</span></span>
     <button class="btn" id="skillBtn">Skill</button>
@@ -336,12 +334,10 @@
 
   <div class="main">
     <div class="assets">
-      <div class="head"><button class="btn" id="importBtn">+ 导入素材</button><button class="btn" id="importJyBtn">导入剪映</button><span style="flex:1"></span><button class="view-btn active" id="viewGrid" title="网格视图">⊞</button><button class="view-btn" id="viewList" title="列表视图">≡</button></div>
+      <div class="head"><button class="btn" id="importBtn">+ 导入素材</button><button class="btn" id="importJyBtn">导入剪映</button></div>
       <div class="tabs" id="mediaTabs">
-        <div class="tab active" data-f="all">全部</div>
-        <div class="tab" data-f="video">视频</div>
+        <div class="tab active" data-f="media">媒体</div>
         <div class="tab" data-f="audio">音频</div>
-        <div class="tab" data-f="image">图片</div>
         <div class="tab" data-f="text">文本</div>
         <div class="tab" data-f="effect">特效</div>
       </div>
@@ -605,20 +601,23 @@
 
   <div class="timeline" id="timeline">
     <div class="tl-toolbar">
-      <button class="tool" id="splitBtn" title="分割 (S / Ctrl+B)">✂</button>
-      <button class="tool" id="splitLeftBtn" title="分割保留左侧 (Q)">◀✂</button>
-      <button class="tool" id="splitRightBtn" title="分割保留右侧 (W)">✂▶</button>
-      <button class="tool" id="srcAudioBtn" title="提取原声">🔗</button>
-      <button class="tool" id="speedBtn" title="变速">⏩</button>
-      <button class="tool" id="dupBtn" title="复制">⧉</button>
-      <button class="tool" id="delBtn" title="删除 (Del)">🗑</button>
-      <button class="tool active" id="snapBtn" title="吸附（阶段3接入）">⌁</button>
-      <button class="tool" id="rippleBtn" title="波纹编辑 (R)">≈</button>
+      <button class="tool" id="undoBtn" title="撤销 (Ctrl+Z)"><svg class="ic" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M8 6 3 11l5 5"/><path d="M3 11h9a4 4 0 0 1 4 4"/></svg><span class="lbl">撤销</span></button>
+      <button class="tool" id="redoBtn" title="重做 (Ctrl+Y)"><svg class="ic" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 6 17 11l-5 5"/><path d="M17 11h-9a4 4 0 0 0-4 4"/></svg><span class="lbl">重做</span></button>
+      <span class="sep"></span>
+      <button class="tool" id="splitBtn" title="分割 (S / Ctrl+B)"><svg class="ic" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="5.5" cy="6" r="2"/><circle cx="5.5" cy="14" r="2"/><path d="M7.5 7.5 17 15"/><path d="M7.5 12.5 17 5"/></svg><span class="lbl">分割</span></button>
+      <button class="tool" id="splitLeftBtn" title="分割保留左侧 (Q)"><svg class="ic" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 3v14"/><path d="M11 10 17 4v12z"/></svg><span class="lbl">左切</span></button>
+      <button class="tool" id="splitRightBtn" title="分割保留右侧 (W)"><svg class="ic" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M16 3v14"/><path d="M9 10 3 4v12z"/></svg><span class="lbl">右切</span></button>
+      <button class="tool" id="srcAudioBtn" title="提取原声"><svg class="ic" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9v2M8 6v8M12 4v12M16 8v4"/></svg><span class="lbl">原声</span></button>
+      <button class="tool" id="speedBtn" title="变速"><svg class="ic" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="10" cy="10" r="6"/><path d="M10 6.5V10l3 2"/></svg><span class="lbl">变速</span></button>
+      <button class="tool" id="dupBtn" title="复制"><svg class="ic" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="7" y="7" width="9" height="9" rx="1.5"/><path d="M4 13V4h9"/></svg><span class="lbl">复制</span></button>
+      <button class="tool" id="delBtn" title="删除 (Del)"><svg class="ic" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h12"/><path d="M7 6V4h6v2"/><path d="M6 6l1 11h6l1-11"/></svg><span class="lbl">删除</span></button>
+      <button class="tool active" id="snapBtn" title="吸附"><svg class="ic" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4v9a5 5 0 0 0 10 0V4"/><path d="M5 4h3v9a2 2 0 0 0 4 0V4"/></svg><span class="lbl">吸附</span></button>
+      <button class="tool" id="rippleBtn" title="波纹编辑 (R)"><svg class="ic" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10c2-4 4-4 6 0s4 4 6 0"/></svg><span class="lbl">波纹</span></button>
       <span class="spacer"></span>
       <span class="zoom">
-        <button class="tool" id="zoomOut">−</button>
+        <button class="tool" id="zoomOut" title="缩小"><svg class="ic" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="8.5" cy="8.5" r="5"/><path d="M5.5 8.5h6"/><path d="M12.5 12.5 17 17"/></svg><span class="lbl">缩小</span></button>
         <input type="range" id="zoomRange" min="20" max="600" value="120">
-        <button class="tool" id="zoomIn">+</button>
+        <button class="tool" id="zoomIn" title="放大"><svg class="ic" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="8.5" cy="8.5" r="5"/><path d="M5.5 8.5h6M8.5 5.5v6"/><path d="M12.5 12.5 17 17"/></svg><span class="lbl">放大</span></button>
       </span>
     </div>
     <div class="tl-main" id="tlMain">
@@ -829,7 +828,7 @@ function removeDragGhost() {
 let _mediaSig = "";
 function renderMedia(s) {
   if (s.filter === "effect") { renderEffectLibrary(s, $("mediaList")); return; }
-  const list = (s.filter === "all" ? s.materials : s.materials.filter(m => m.type === s.filter));
+  const list = (s.filter === "media" ? s.materials.filter(m => m.type === "video" || m.type === "image") : s.materials.filter(m => m.type === s.filter));
   const sig = s.filter + "|" + list.map(m => (m.uid || m.path) + ":" + m.name + ":" + m.type).join(",");
   // 仅在素材列表/筛选真正变化时重建 DOM；平时轮询只刷新选中态。
   // 否则每 500ms 把卡片 innerHTML 清空重建，会导致 +/删除 按钮闪烁、且点击时的 DOM 被替换使 click 丢失（加号点了没反应）。
@@ -840,7 +839,7 @@ function renderMedia(s) {
   }
   _mediaSig = sig;
   const box = $("mediaList");
-  box.classList.toggle("view-list", Store.state.mediaView === "list");
+  // 固定双列网格视图（2026-08-17 已移除 grid/list 切换）
   box.innerHTML = "";
   for (const m of list) {
     const card = document.createElement("div");
@@ -890,7 +889,6 @@ function renderEffectLibrary(s, box) {
   const sig = "effect|" + keys.join(",");
   if (sig === _mediaSig) return;
   _mediaSig = sig;
-  box.classList.remove("view-list");
   box.innerHTML = "";
   if (!keys.length) { box.innerHTML = '<div class="empty" style="grid-column:1/-1;padding:20px;text-align:center;color:var(--muted)">特效注册表为空</div>'; return; }
   for (const type of keys) {
@@ -900,11 +898,25 @@ function renderEffectLibrary(s, box) {
     const hint = pnames.map(p => (meta.params[p].label || p) + (meta.params[p].unit ? "(" + meta.params[p].unit + ")" : "")).join("、");
     const card = document.createElement("div");
     card.className = "media-card effect-card";
+    card.draggable = true;
     card.innerHTML =
       '<div class="thumb" style="display:flex;align-items:center;justify-content:center;font-size:22px">✦</div>' +
       '<div class="name">' + label + '</div>' +
       '<div class="eff-hint">' + (hint || "无参数") + '</div>';
     card.addEventListener("click", () => addEffectFromLibrary(type));
+    card.addEventListener("dragstart", e => {
+      const payload = JSON.stringify({ kind: "effect", type: type, name: label });
+      e.dataTransfer.setData("text/plain", payload);
+      e.dataTransfer.effectAllowed = "copy";
+      const emptyImg = new Image();
+      emptyImg.src = "data:image/gif;base64,R0lGODlhAQABAIAAAAUEBAAAACwAAAAAAQABAAACAkQBADs=";
+      e.dataTransfer.setDragImage(emptyImg, 0, 0);
+      dragGhostData = { bg: "", icon: "✦", payload: payload };
+      createDragGhost("", "✦");
+      moveDragGhost(e.clientX, e.clientY);
+    });
+    card.addEventListener("drag", e => moveDragGhost(e.clientX, e.clientY));
+    card.addEventListener("dragend", () => removeDragGhost());
     box.appendChild(card);
   }
 }
@@ -2014,6 +2026,8 @@ function onTimelineDrop(e) {
     // 兜底：部分 webview 在 drop 时 getData 取不到，用拖拽时缓存的 payload
     try { data = JSON.parse(dragGhostData && dragGhostData.payload || "{}"); } catch (_) {}
   }
+  // 特效拖入：新建调整层 / 绑定选中段（与点击行为一致）
+  if (data && data.kind === "effect") { addEffectFromLibrary(data.type); return; }
   if (!data || !data.path) return;
   const wantType = data.type === "audio" ? "audio" : (data.type === "text" ? "text" : "video");
   const rect = $("tlScroll").getBoundingClientRect();
@@ -2042,7 +2056,7 @@ function trackUnderY(y, wantType) {
 function showDropPreview(trackEl, clientX, isNewTrack) {
   const line = $("dropLine"), hint = $("dropNewTrackHint");
   // 清除旧高亮
-  $("tlContent").querySelectorAll(".track").forEach(t => t.classList.remove("drop-target"));
+  $("tlContent").querySelectorAll(".track").forEach(t => { t.classList.remove("drop-target"); t.classList.remove("drop-disabled"); });
   if (!trackEl) {
     line.style.display = "none";
     if (isNewTrack) {
@@ -2072,7 +2086,7 @@ function showDropPreview(trackEl, clientX, isNewTrack) {
 function hideDropPreview() {
   $("dropLine").style.display = "none";
   $("dropNewTrackHint").style.display = "none";
-  $("tlContent").querySelectorAll(".track").forEach(t => t.classList.remove("drop-target"));
+  $("tlContent").querySelectorAll(".track").forEach(t => { t.classList.remove("drop-target"); t.classList.remove("drop-disabled"); });
 }
 
 /* 工具栏动作 */
@@ -2269,14 +2283,7 @@ function bindEvents() {
     });
   });
   // 资产面板 grid/list 切换（2026-08-16 对齐 OpenCut assets.tsx mode 切换）
-  ["viewGrid", "viewList"].forEach(id => {
-    $(id).addEventListener("click", () => {
-      const v = id === "viewGrid" ? "grid" : "list";
-      Store.set({ mediaView: v });
-      ["viewGrid", "viewList"].forEach(b => $(b).classList.toggle("active", b === id));
-      renderMedia(Store.state);
-    });
-  });
+  // 已移除 grid/list 视图切换（2026-08-17）
   $("tlContent").addEventListener("mousedown", onTimelineDown);
   // 右键菜单（2026-08-16 对齐 OpenCut context-menu.tsx）
   let ctxKey = null;
@@ -2538,10 +2545,19 @@ function bindEvents() {
     // 工具栏上方：不阻止默认行为，显示系统禁止图标
     if (e.clientY < tlMainRect.top) { hideDropPreview(); return; }
     e.preventDefault(); e.dataTransfer.dropEffect = "copy";
+    let d = null; if (dragGhostData && dragGhostData.payload) { try { d = JSON.parse(dragGhostData.payload); } catch (_) {} }
+    const isEffect = d && d.kind === "effect";
     const wantType = dragTrackType();
-    const tr = trackUnderY(e.clientY, wantType);
     const contentRect = $("tlContent").getBoundingClientRect();
-    // 轨道区内任意位置都接：无兼容轨道时提示「松开：新建轨道」
+    // 类型不兼容：命中的轨道显禁用态（红），提示此处放不进去；特效可放任意处，不做禁用
+    const rawTr = trackUnderY(e.clientY, null);
+    $("tlContent").querySelectorAll(".track").forEach(t => { t.classList.remove("drop-target"); t.classList.remove("drop-disabled"); });
+    if (!isEffect && rawTr && rawTr.type !== wantType) {
+      rawTr.el.classList.add("drop-disabled");
+      $("dropLine").style.display = "none"; $("dropNewTrackHint").style.display = "none";
+      return;
+    }
+    const tr = trackUnderY(e.clientY, wantType);
     const isNewTrack = !tr;
     showDropPreview(tr ? tr.el : null, e.clientX - contentRect.left, isNewTrack);
   });
