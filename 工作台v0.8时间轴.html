@@ -2139,9 +2139,9 @@ function onTimelineDrop(e) {
   const cached = window.__libDropCache;
   const drop = (cached && cached.wantType === wantType) ? cached.drop : computeDrop(e, wantType);
   console.log("[drop-media] type=" + wantType + " drop=", drop, "at", atTimeUs);
-  // 库拖入落位后自动滚到素材位置（2026-08-18 收口：用户反馈"还要滑滑块去找"）
-  if (drop.kind === "existing") call("add_to_timeline", data.name, data.path, data.type, drop.dataTi, atTimeUs).then(r => { refresh(); scrollToSegmentUs(atTimeUs); });
-  else call("add_to_timeline", data.name, data.path, data.type, -1, atTimeUs, drop.dataInsertIndex).then(r => { refresh(); scrollToSegmentUs(atTimeUs); });
+  // 库拖入落位后自动滚到素材实际落位（2026-08-18 修：避让后落到末尾，用 r.start 而非 atTimeUs，否则避让后视图还停在中段看不到素材）
+  if (drop.kind === "existing") call("add_to_timeline", data.name, data.path, data.type, drop.dataTi, atTimeUs).then(r => { refresh(); if (r && r.start != null) scrollToSegmentUs(r.start); });
+  else call("add_to_timeline", data.name, data.path, data.type, -1, atTimeUs, drop.dataInsertIndex).then(r => { refresh(); if (r && r.start != null) scrollToSegmentUs(r.start); });
 }
 /* 落位后自动滚动到指定时间位（库拖入用，轴内移动不滚） */
 function scrollToSegmentUs(us) {
@@ -2239,8 +2239,9 @@ function hideDragLine() {
   const line = $("dragLine");
   if (line) line.style.display = "none";
 }
-/* OpenCut 「影子段」：库拖入时在目标 X 位置显示半透明预览段，让用户直观看到落点+时长+目标轨 */
-function showClipGhost(dragType, xUs) {
+/* OpenCut 「影子段」：库拖入时在目标 X+Y 位置显示半透明预览段，让用户直观看到落点+时长+目标轨
+   yPx：existing=命中轨中心；new=目标显示行中心（间隙/末尾）。**必传**——否则影子段在 tlContent 顶部固定 → 视觉与实际落点 Y 严重错位（2026-08-18 关键 bug：导致 MP3/MP4 落位反馈全乱） */
+function showClipGhost(dragType, xUs, yPx) {
   const ghost = $("clipGhost");
   if (!ghost) return;
   const labelBy = { video: "🎬", audio: "♪", text: "T", effect: "✦", sticker: "⭐" };
@@ -2258,6 +2259,7 @@ function showClipGhost(dragType, xUs) {
   ghost.style.display = "";
   ghost.style.width = widthPx + "px";
   ghost.style.left = (xUs / 1e6 * ppsV - contentRect.left) + "px";
+  ghost.style.top = (yPx - contentRect.top - 16) + "px";  // 2026-08-18 关键 bug 修复：必须传 yPx，否则影子段在 tlContent 顶部固定
 }
 function hideClipGhost() {
   const ghost = $("clipGhost");
@@ -2761,26 +2763,28 @@ function bindEvents() {
     // atTimeUs 用 e.clientX 算（与 drop 时同源，避免边界漂移）
     const atTimeUs = Math.max(0, Math.round((e.clientX - contentRect.left + $("tlScroll").scrollLeft) / pps() * 1e6));
     if (drop.kind === "existing") {
-      // 命中同类型已有轨：① 目标轨高亮 ② DragLine 蓝细横线在目标轨 Y 位置 ③ 影子段在 X 位置
+      // 命中同类型已有轨：① 目标轨高亮 ② DragLine 蓝细横线在目标轨 Y 位置 ③ 影子段在 X+Y 位置
       const tr = buildTracks()[drop.displayIndex];
       const el = tr ? trackElOf(tr) : null;
       if (el) {
         el.classList.add("drop-target");
         const r = el.getBoundingClientRect();
-        showDragLine(r.top + r.height / 2);
-      }
-      hideClipGhost();
-      hint.style.display = "none";
-      line.style.display = "";
-      line.style.left = (e.clientX - contentRect.left) + "px";
-      // 库拖入时才显示影子段（轴内移动用 isMove 自己的预览）
-      if (!Store.state.drag || !Store.state.drag.moved) {
-        showClipGhost(wantType, atTimeUs);
+        const targetY = r.top + r.height / 2;
+        showDragLine(targetY);
+        // 库拖入时才显示影子段（轴内移动用 isMove 自己的预览）
+        if (!Store.state.drag || !Store.state.drag.moved) {
+          showClipGhost(wantType, atTimeUs, targetY);
+        } else {
+          hideClipGhost();
+        }
       } else {
         hideClipGhost();
       }
+      hint.style.display = "none";
+      line.style.display = "";
+      line.style.left = (e.clientX - contentRect.left) + "px";
     } else {
-      // 新建轨：① 间隙无目标轨高亮 ② DragLine 在间隙 Y 位置 ③ 影子段在 X 位置 ④ "新建轨道" hint
+      // 新建轨：① 间隙无目标轨高亮 ② DragLine 在间隙 Y 位置 ③ 影子段在 X+Y 位置 ④ "新建轨道" hint
       hideClipGhost();
       line.style.display = "none";
       // DragLine Y = 目标显示行中心（对齐 OpenCut 间隙线）
@@ -2792,7 +2796,7 @@ function bindEvents() {
       hint.style.transform = "translateX(-50%)";
       // 库拖入时显示影子段（new 路径：素材将以此时长落在新建轨上）
       if (!Store.state.drag || !Store.state.drag.moved) {
-        showClipGhost(wantType, atTimeUs);
+        showClipGhost(wantType, atTimeUs, y);
       } else {
         hideClipGhost();
       }
