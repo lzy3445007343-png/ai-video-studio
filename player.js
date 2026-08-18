@@ -41,17 +41,29 @@ function totalDurationUs() {
   return maxUs;
 }
 
-// 找到播放头命中的所有段（video/image/audio/text 分别归类）
+// 找到播放头命中的所有段（X 模型：main/overlay/audio；hit 带 oi 供预览 z 序按 overlay 顺序排列）
 function resolveHits(us) {
   const hits = [];
   const d = Store.state.draft;
-  ["video", "audio", "text", "sticker"].forEach(type => {
-    (d[type] || []).forEach((track, ti) => {
-      track.forEach((seg, idx) => {
-        if (us >= seg.start && us < seg.start + seg.duration) {
-          hits.push({ seg, type, ti, idx, key: type + ":" + ti + ":" + idx });
-        }
-      });
+  const main = (d.main && typeof d.main === "object") ? (d.main.segs || []) : [];
+  main.forEach((seg, idx) => {
+    if (us >= seg.start && us < seg.start + seg.duration) hits.push({ seg, type: "video", ti: 0, idx, oi: -1, key: "video:0:" + idx });
+  });
+  const overlay = Array.isArray(d.overlay) ? d.overlay : [];
+  const typeCount = {};
+  overlay.forEach((tr, oi) => {
+    if (!tr || !Array.isArray(tr.segs)) return;
+    const type = tr.type || "video";
+    typeCount[type] = (typeCount[type] || 0) + 1;
+    const ti = (type === "video") ? typeCount[type] : (typeCount[type] - 1);
+    tr.segs.forEach((seg, idx) => {
+      if (us >= seg.start && us < seg.start + seg.duration) hits.push({ seg, type, ti, idx, oi, key: type + ":" + ti + ":" + idx });
+    });
+  });
+  (Array.isArray(d.audio) ? d.audio : []).forEach((a, ti) => {
+    if (!a || typeof a !== "object") return;
+    (a.segs || []).forEach((seg, idx) => {
+      if (us >= seg.start && us < seg.start + seg.duration) hits.push({ seg, type: "audio", ti, idx, oi: -2, key: "audio:" + ti + ":" + idx });
     });
   });
   return hits;
@@ -293,18 +305,16 @@ function _tryReloadMedia(el, type, layerKey) {
   el.addEventListener("error", onLoadedError, { once: true });
 }
 
-// 读取 draft._track_meta 判断轨道是否静音/隐藏（用于预览过滤，对齐 OpenCut 语义）
+// 读取 draft._track_meta 判断轨道是否静音/隐藏（用于预览过滤，X 模型：trackMeta(type, ti) 定位）
 function isTrackMuted(type, ti) {
-  const meta = (Store.state.draft._track_meta || {})[type] || [];
-  return !!(meta[ti] || {}).muted;
+  return !!trackMeta(type, ti).muted;
 }
 // Round E-F：该媒体元素是否“期望有声”（既非全局静音也非轨道静音）
 function wantSound(type, ti) {
   return !(previewMuted || isTrackMuted(type, ti));
 }
 function isTrackHidden(type, ti) {
-  const meta = (Store.state.draft._track_meta || {})[type] || [];
-  return !!(meta[ti] || {}).hidden;
+  return !!trackMeta(type, ti).hidden;
 }
 function dbg(msg) { const el = $("mediaStatus"); if (el) el.textContent = msg; }
 function togglePlay() {

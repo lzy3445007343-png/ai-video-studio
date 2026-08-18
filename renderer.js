@@ -65,13 +65,20 @@ function _setTextContent(wrap, text) {
 // 用 addEventListener 一次性监听，绝不写 el.onseeked（那是 DOM 单归属属性，调用方会覆盖 resolver → Promise 永久 pending）。
 // 放行条件：不在 seeking、readyState>=2、且 currentTime 与 _seekTarget 差距 <100ms；否则继续等或主动重 seek。
 
+/* X 模型预览 z 序：main 恒定最底（10）；overlay 轨按数组顺序（overlay[0]=最顶 → 最大 zIndex）。
+   替代旧的按类型硬编码（text 1000+ > sticker 520+ > video 10+）——层级由 overlay 数组顺序决定。 */
+function zIndexOf(h) {
+  const ovLen = (Array.isArray(Store.state.draft.overlay) ? Store.state.draft.overlay : []).length;
+  if (!h || h.oi < 0) return 10;          // main（oi=-1）或 audio（oi=-2，无视觉层）
+  return 100 + (ovLen - h.oi);
+}
+
 function renderPreview(s) {
   const stack = $("previewStack");
   const ph = $("previewPlaceholder");
   const us = Store.state.playheadUs;
   const hits = resolveHits(us);
   const hasVisual = hits.some(h => (h.type === "video" || h.type === "image" || h.type === "text") && !isTrackHidden(h.type, h.ti) && !h.seg.hidden);
-
   // 视觉层：按轨道层级排列，上层（高 ti）在上；跳过本地无素材的占位段（避免空 src 报错并挡住下层视频）
   // 隐藏的 video/text 轨在预览中不渲染（对齐 OpenCut element-bounds.ts 过滤逻辑）
   const visualHits = hits.filter(h => h.type === "video" && resolveSegPath(h.seg) && !isTrackHidden(h.type, h.ti) && !h.seg.hidden);
@@ -92,7 +99,7 @@ function renderPreview(s) {
     }
     const changed = _setVisualContent(rec.el, h.seg.type, resolveSegPath(h.seg), isTrackMuted(h.type, h.ti) || h.seg.muted, h.seg.volume);
     rec.el.style.display = "";
-    rec.el.style.zIndex = 10 + h.ti;
+    rec.el.style.zIndex = zIndexOf(h);
     rec.key = h.key;
     rec.seg = h.seg;
     applyKfTransform(rec.el, h.seg, Math.max(0, Math.min(us - h.seg.start, h.seg.duration)));
@@ -155,7 +162,7 @@ function renderPreview(s) {
     }
     _setTextContent(rec.el, h.seg.text || h.seg.name || "");
     rec.el.style.display = "";
-    rec.el.style.zIndex = 1000 + h.ti;
+    rec.el.style.zIndex = zIndexOf(h);
     rec.key = h.key;
     // 字幕预览样式：底部居中、白字粗体、自动换行、可选黑底（对齐 OpenCut）
     const sub = h.seg.sub_style || {};
@@ -207,7 +214,7 @@ function renderPreview(s) {
     rec.el.style.width = wpx + "px";
     rec.el.style.height = hpx + "px";
     rec.el.style.display = "";
-    rec.el.style.zIndex = 520 + h.ti;
+    rec.el.style.zIndex = zIndexOf(h);
     rec.el.style.opacity = (tf.opacity != null ? tf.opacity : 1);
     rec.el.style.transform =
       "translate(-50%,-50%) " +
@@ -249,7 +256,8 @@ function applyEffects() {
   const stack = $("previewStack");
   if (!stack) return;
   const draft = Store.state.draft;
-  if (!draft || !draft.effect || !draft.effect.length) {
+  const hasEffect = (Array.isArray(draft.overlay) ? draft.overlay : []).some(tr => tr && tr.type === "effect" && Array.isArray(tr.segs) && tr.segs.length > 0);
+  if (!draft || !hasEffect) {
     // 无特效轨：复位整栈 + 视觉层 filter，避免残留旧特效
     stack.style.filter = "";
     stack.style.opacity = "";
@@ -501,8 +509,14 @@ function getAsrSource() {
   const s = selectedSeg();
   if (s && (s.type === "video" || s.type === "audio")) { const p = resolveSegPath(s); if (p) return { path: p, name: s.name }; }
   const d = Store.state.draft || {};
-  for (const tr of (d.video || [])) for (const seg of tr) { const p = resolveSegPath(seg); if (p) return { path: p, name: seg.name }; }
-  for (const tr of (d.audio || [])) for (const seg of tr) { const p = resolveSegPath(seg); if (p) return { path: p, name: seg.name }; }
+  const main = (d.main && typeof d.main === "object") ? (d.main.segs || []) : [];
+  for (const seg of main) { const p = resolveSegPath(seg); if (p) return { path: p, name: seg.name }; }
+  for (const tr of (Array.isArray(d.overlay) ? d.overlay : [])) {
+    if (tr && tr.type === "video") for (const seg of (tr.segs || [])) { const p = resolveSegPath(seg); if (p) return { path: p, name: seg.name }; }
+  }
+  for (const a of (Array.isArray(d.audio) ? d.audio : [])) {
+    if (a && typeof a === "object") for (const seg of (a.segs || [])) { const p = resolveSegPath(seg); if (p) return { path: p, name: seg.name }; }
+  }
   return null;
 }
 
@@ -522,7 +536,7 @@ function renderStickerPanel() {
   const s = selectedSeg();
   const isSticker = s && s.type === "sticker";
   // 有任意贴纸轨 / 已选贴纸 → 显示控件；否则显示空提示
-  const hasStickerTrack = (Store.state.draft.sticker || []).some(t => t && t.length > 0);
+  const hasStickerTrack = (Store.state.draft.overlay || []).some(tr => tr && tr.type === "sticker" && Array.isArray(tr.segs) && tr.segs.length > 0);
   if (!hasStickerTrack && !isSticker) { emptyEl.style.display = ""; ctrlsEl.style.display = "none"; return; }
   emptyEl.style.display = "none"; ctrlsEl.style.display = "";
   // 选中贴纸 → 回填变换滑块

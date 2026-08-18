@@ -10,9 +10,20 @@
  * ===================================================================== */
 
 function forEachSeg(fn) {
+  // X 模型：遍历 main/overlay/audio 全部段（fn(seg, type, ti, idx)），ti = 该类型内序号（video 覆盖轨从 1 起）
   const d = Store.state.draft;
-  ["video", "audio", "text"].forEach(type => {
-    (d[type] || []).forEach((segs, ti) => segs.forEach((s, idx) => fn(s, type, ti, idx)));
+  const main = (d.main && typeof d.main === "object") ? (d.main.segs || []) : [];
+  main.forEach((s, idx) => fn(s, "video", 0, idx));
+  const typeCount = {};
+  (Array.isArray(d.overlay) ? d.overlay : []).forEach(tr => {
+    if (!tr || !Array.isArray(tr.segs)) return;
+    const type = tr.type || "video";
+    typeCount[type] = (typeCount[type] || 0) + 1;
+    const ti = (type === "video") ? typeCount[type] : (typeCount[type] - 1);
+    tr.segs.forEach((s, idx) => fn(s, type, ti, idx));
+  });
+  (Array.isArray(d.audio) ? d.audio : []).forEach((a, ti) => {
+    if (a && typeof a === "object") (a.segs || []).forEach((s, idx) => fn(s, "audio", ti, idx));
   });
 }
 
@@ -59,63 +70,89 @@ function contentWidth() {
   let maxUs = 10e6;
   forEachSeg(s => { const end = s.start + s.duration; if (end > maxUs) maxUs = end; });
   // 特效段也可能比视频长（如整片调整层），纳入内容宽度计算，避免条被裁到画布外
-  (Store.state.draft.effect || []).forEach(track => (track || []).forEach(s => {
-    const end = s.start + s.duration; if (end > maxUs) maxUs = end;
-  }));
+  (Array.isArray(Store.state.draft.overlay) ? Store.state.draft.overlay : []).forEach(tr => {
+    if (!tr || tr.type !== "effect" || !Array.isArray(tr.segs)) return;
+    tr.segs.forEach(s => {
+      const end = s.start + s.duration; if (end > maxUs) maxUs = end;
+    });
+  });
   return Math.max((maxUs / 1e6) * pps() + 200, $("tlScroll").clientWidth);
 }
 function buildTracks() {
-  // 对齐 OpenCut 的轨道显示顺序：overlay(叠加) 在上、main(主场景) 居中、audio 在下。
-  // 注意：video 数据数组里 video[0] 永远是主轨（后端 _insert_track 保护，不允许插到主轨之上）；
-  // 因此「拖视频到主轨上方」= 在数据索引 1 处新建覆盖轨，渲染时画到主轨之上。
+  // X 模型（2026-08-18 用户拍板，对齐 OpenCut SceneTracks）：
+  //   draft.overlay = 混排池 [{type, segs}, ...]，数组顺序即 z 序（0=最顶）
+  //   draft.main = 主场景 {segs}（恒定，只装 video/image）
+  //   draft.audio = [{segs}, ...]
+  // 外部命令仍用 (type, ti) 语义：ti = 该类型内序号（video 覆盖轨 ti 从 1 起，0=主场景）。
   const d = Store.state.draft, out = [];
-  // B1 改造（2026-08-18）：overlay 池 = text/sticker/effect/video>=1 的混排 z 序。
-  // layer_order 非空（用户重排过）→ 按 order 排；空/缺失 → 默认顺序（text→sticker→effect→video 倒序）。
-  const order = (d.layer_order || []).slice();
-  const byKey = {};
-  const t = d.text || [], st = d.sticker || [], ef = d.effect || [], v = d.video || [[]];
-  for (let i = 0; i < t.length; i++) if (t[i] && t[i].length > 0) byKey["text:" + i] = { type: "text", ti: i, label: "文本轨" + (i + 1), segs: t[i] };
-  for (let i = 0; i < st.length; i++) if (st[i] && st[i].length > 0) byKey["sticker:" + i] = { type: "sticker", ti: i, label: "贴纸轨" + (i + 1), segs: st[i] };
-  for (let i = 0; i < ef.length; i++) if (ef[i] && ef[i].length > 0) byKey["effect:" + i] = { type: "effect", ti: i, label: "特效轨" + (i + 1), segs: ef[i] };
-  for (let i = v.length - 1; i >= 1; i--) if (v[i] && v[i].length > 0) byKey["video:" + i] = { type: "video", ti: i, label: "叠加" + i, segs: v[i] };
-  if (order.length) {
-    // 按 layer_order 排 overlay 区；补缺（新建轨未同步 layer_order 的兜底）
-    const inOrder = new Set(order);
-    for (const k of order) { if (byKey[k]) out.push(byKey[k]); }
-    for (const k of Object.keys(byKey)) { if (!inOrder.has(k)) out.push(byKey[k]); }
-  } else {
-    // 默认顺序（旧行为）：text→sticker→effect→video 倒序
-    for (const k of ["text", "sticker", "effect"]) {
-      for (const key of Object.keys(byKey)) if (key.startsWith(k + ":")) out.push(byKey[key]);
-    }
-    for (let i = v.length - 1; i >= 1; i--) { if (byKey["video:" + i]) out.push(byKey["video:" + i]); }
-  }
-  // 主场景恒在 video 组最后（最下），audio 恒在底部
-  out.push({ type: "video", ti: 0, label: "主场景", segs: (v[0] || []) });
-  const a = d.audio || [];
-  for (let i = 0; i < a.length; i++) {
-    if (a[i] && a[i].length > 0) out.push({ type: "audio", ti: i, label: "音轨" + (i + 1), segs: a[i] });
-  }
-  // label 按视觉序重新编号（B1 重排后 ti 与视觉位解耦）：overlay 区从顶到底 1.2.3...
-  // 主场景/audio 保持数据序 label（音轨N），不动。
+  const overlay = Array.isArray(d.overlay) ? d.overlay : [];
+  // overlay 直映（数组顺序 = z 序，不需要 layer_order 排序）
   const counters = {};
-  for (let i = 0; i < out.length; i++) {
-    const tr = out[i];
-    if (tr.type === "video" && tr.ti === 0) break;   // 主场景及之后不再重编号
-    const cnt = (counters[tr.type] || 0) + 1;
-    counters[tr.type] = cnt;
-    if (tr.type === "text") tr.label = "文本轨" + cnt;
-    else if (tr.type === "sticker") tr.label = "贴纸轨" + cnt;
-    else if (tr.type === "effect") tr.label = "特效轨" + cnt;
-    else if (tr.type === "video") tr.label = "叠加" + cnt;
+  for (const tr of overlay) {
+    if (!tr || !Array.isArray(tr.segs)) continue;
+    const type = tr.type || "video";
+    const cnt = (counters[type] || 0) + 1;
+    counters[type] = cnt;
+    const ti = (type === "video") ? cnt : (cnt - 1);   // video 覆盖轨 ti 从 1 起
+    const labelBy = { text: "文本轨", sticker: "贴纸轨", effect: "特效轨", video: "叠加" };
+    out.push({ type: type, ti: ti, label: (labelBy[type] || type) + cnt, segs: tr.segs, oi: out.length });
+  }
+  // 主场景恒在 overlay 之下（恒定，video ti=0）
+  const main = (d.main && typeof d.main === "object") ? (d.main.segs || []) : [];
+  out.push({ type: "video", ti: 0, label: "主场景", segs: main, main: true });
+  // audio 恒在底部
+  const a = Array.isArray(d.audio) ? d.audio : [];
+  for (let i = 0; i < a.length; i++) {
+    const segs = (a[i] && typeof a[i] === "object") ? (a[i].segs || []) : [];
+    out.push({ type: "audio", ti: i, label: "音轨" + (i + 1), segs: segs });
   }
   return out;
 }
-/* overlay 区轨数（主场景之前的所有轨）——reorder 目标显示位换算用 */
+/* overlay 区轨数（主场景之前的所有轨）= overlay 数组长度 */
 function overlayCount() {
   const tracks = buildTracks();
   const mi = tracks.findIndex(t => t.type === "video" && t.ti === 0);
   return mi >= 0 ? mi : tracks.length;
+}
+
+/* X 模型段列表定位：(type, ti) → segs 数组（不存在返回 null；video ti=0 → main） */
+function draftSegs(type, ti) {
+  const d = Store.state.draft;
+  if (type === "audio") {
+    const a = (Array.isArray(d.audio) ? d.audio : [])[ti];
+    return (a && typeof a === "object") ? (a.segs || []) : null;
+  }
+  if (type === "video" && ti === 0) {
+    const m = d.main;
+    return (m && typeof m === "object") ? (m.segs || []) : [];
+  }
+  const overlay = Array.isArray(d.overlay) ? d.overlay : [];
+  let cnt = 0;
+  const target = (type === "video") ? (ti - 1) : ti;
+  for (let i = 0; i < overlay.length; i++) {
+    if ((overlay[i] || {}).type === type) {
+      if (cnt === target) return (overlay[i].segs || []);
+      cnt++;
+    }
+  }
+  return null;
+}
+
+/* X 模型轨道 meta 定位：(type, ti) → _track_meta 里对应 dict（video ti=0→main，video ti>=1→overlay 第 ti-1 条 video 轨） */
+function trackMeta(type, ti) {
+  const meta = Store.state.draft._track_meta || {};
+  if (type === "audio") return (meta.audio || [])[ti] || {};
+  if (type === "video" && ti === 0) return meta.main || {};
+  const overlay = Store.state.draft.overlay || [];
+  let cnt = 0;
+  const target = (type === "video") ? (ti - 1) : ti;
+  for (let i = 0; i < overlay.length; i++) {
+    if ((overlay[i] || {}).type === type) {
+      if (cnt === target) return (meta.overlay || [])[i] || {};
+      cnt++;
+    }
+  }
+  return {};
 }
 
 /* ============ 统一落点模型（对齐 OpenCut resolveTrackPlacement） ============
@@ -139,89 +176,22 @@ function dragTypeBlock(dragType) {
   return ["video"];
 }
 
-function typeGroupRange(type) {
-  // 返回 type 在显示顺序里的 [gTop, gBottom]；gBottom 是该类型最后一条已有轨的显示下标
-  const tracks = buildTracks();
-  let gTop = -1, gBottom = -1;
-  for (let i = 0; i < tracks.length; i++) {
-    if (tracks[i].type === type) { if (gTop < 0) gTop = i; gBottom = i; }
-  }
-  return { gTop, gBottom, n: tracks.length };
-}
-
-function clampTargetDisplay(type, targetDisplayIndex) {
-  // 把新建轨的目标显示位钳制到该类型自己的显示组内（避免新建轨插错组、渲染错位）
-  if (type === "video") {
-    const { gTop, gBottom } = typeGroupRange("video");
-    if (gTop < 0) return Math.max(0, targetDisplayIndex);
-    // 视频组：新覆盖轨 ∈ [gTop, gBottom-1]（gBottom 是主场景，不能在主场景之下）
-    return Math.max(gTop, Math.min(gBottom - 1, targetDisplayIndex));
-  }
-  const { gTop, gBottom, n } = typeGroupRange(type);
-  if (gTop < 0) {
-    // 该类型当前无轨：放到其自然默认位（text/贴纸/effect 在视频之上→0；audio 在底部→n）
-    return (type === "audio") ? Math.max(0, n) : 0;
-  }
-  // 非视频：新轨 ∈ [gTop, gBottom+1]（gBottom+1 = 追加到该类型组底部）
-  return Math.max(gTop, Math.min(gBottom + 1, targetDisplayIndex));
-}
-
-function dataInsertIndexFromTargetDisplay(type, targetDisplayIndex, draft) {
-  // 由「新轨在显示顺序中的目标位 targetDisplayIndex」反推后端 _insert_track 需要的数据索引。
-  // 预览（targetDisplayIndex）与实际（dataInsertIndex→_insert_track→重渲染）严格同源，保证一致。
-  if (type === "video") {
-    const v = draft.video || [[]];
-    const L = v.length;
-    // 插入一条后显示 = (L_after-1) - data，L_after = L+1 → data = L - targetDisplayIndex
-    let ins = L - targetDisplayIndex;
-    return Math.max(1, Math.min(ins, L)); // can't go below main; clamp 到 [1, L]
-  }
-  // audio/text/effect/sticker：显示顺序 == 数据顺序（且连续成组，display = gTop + data_index）
-  const { gTop } = typeGroupRange(type);
-  const len = (draft[type] || []).length;
-  if (gTop < 0) return Math.max(0, Math.min(targetDisplayIndex, len));
-  let dataIdx = targetDisplayIndex - gTop; // display = gTop + data_index → 反推
-  return Math.max(0, Math.min(dataIdx, len));
-}
-
-function _makeNewDrop(tracks, dragType, refDisplayIndex, above) {
-  // 兼容旧调用（不再被 computeDrop 内部使用，但留这里防止外部误用导致 undefined 行为）
-  const direction = above ? "above" : "below";
-  return resolveNewDrop(direction, refDisplayIndex, tracks, dragType);
-}
-
-/* 新建轨解析（OpenCut 同款：verticalDragDirection → direction → 公式换算 dataInsertIndex）
-   视频组 display 倒序（高 data index 在上），其他组顺序（display = data）。
-   核心：用户拖动方向决定"above/below"（新轨在 preferredTrack 的上方还是下方），
-   再按显示/数据映射公式换算 dataInsertIndex，让预览/落位/后端插入严格同源。
-   - above preferredDisplay p：新轨显示在 p 位置（原 preferredTrack 下移到 p+1）
-     - 视频组：dataInsertIndex = L - p（新轨 data index = L-p，append 到末尾 = 显示最上）
-     - 其他组：dataInsertIndex = p（原轨 +1）
-   - below preferredDisplay p：新轨显示在 p+1 位置
-     - 视频组：dataInsertIndex = L - 1 - p（preferredTrack 不动，新轨插在它位置，原轨 +1）
-     - 其他组：dataInsertIndex = p + 1
-   - 视频组主场景保护：dataInsertIndex 钳到 [1, L]（不能在主场景之下） */
+/* 新建轨解析（X 模型 2026-08-18：overlay 数组顺序即 z 序）
+   direction: "above"/"below"（新轨在 preferredDisplay 轨的上方/下方）
+   preferredDisplay: 命中轨的 displayIndex（buildTracks 全数组下标）
+   → insertIndex = overlay 数组下标（= overlay 区 displayIndex），直接传给后端 _insert_track。
+   预览（displayIndex）/ 落位（dataInsertIndex）/ 后端插入严格同源——不再需要视频组倒序换算。
+   audio 特殊：新建音轨 append 到 audio 数组末尾（dataInsertIndex=null → 后端 _ensure_track(-1)）。 */
 function resolveNewDrop(direction, preferredDisplay, tracks, dragType) {
-  if (dragType === "video") {
-    const v = Store.state.draft.video || [[]];
-    const L = v.length;
-    const rawIns = direction === "above" ? L - preferredDisplay : L - 1 - preferredDisplay;
-    const dataInsertIndex = Math.max(1, Math.min(rawIns, L));
-    // 显示索引反推：displayIndex + dataInsertIndex = L（display 倒序，新轨使数组长度 L+1）
-    const displayIndex = (L + 1) - 1 - dataInsertIndex;
-    return {
-      kind: "new", type: dragType,
-      displayIndex, dataTi: null, dataInsertIndex,
-      insertPosition: direction, targetExisting: false,
-    };
+  if (dragType === "audio") {
+    return { kind: "new", type: "audio", displayIndex: 999, dataTi: null, dataInsertIndex: null, insertPosition: direction, targetExisting: false };
   }
-  // 顺序显示（audio/text/effect/sticker）：display 与 data 同序
-  const len = (Store.state.draft[dragType] || []).length;
+  const oCount = overlayCount();
   const rawIns = direction === "above" ? preferredDisplay : preferredDisplay + 1;
-  const dataInsertIndex = Math.max(0, Math.min(rawIns, len));
+  const insertIndex = Math.max(0, Math.min(rawIns, oCount));
   return {
     kind: "new", type: dragType,
-    displayIndex: dataInsertIndex, dataTi: null, dataInsertIndex,
+    displayIndex: insertIndex, dataTi: null, dataInsertIndex: insertIndex,
     insertPosition: direction, targetExisting: false,
   };
 }
@@ -254,6 +224,13 @@ function computeDrop(e, dragType, verticalDragDirection, atTimeUs, isLibrary) {
   }
   if (insideIdx >= 0) {
     const t = tracks[insideIdx];
+    // 已有段拖到主场景（video ti=0）→ 不允许并入（主场景恒定），改在主场景上方新建叠加轨
+    if (!isLibrary && t.type === "video" && t.ti === 0) {
+      const el = trackElOf(t);
+      const r = el.getBoundingClientRect();
+      const topHalf = (y < r.top + r.height / 2);
+      return resolveNewDrop(topHalf ? "above" : "below", insideIdx, tracks, dragType);
+    }
     if (block.includes(t.type)) {
       // 库拖入 + 落点已被该轨素材占用 → 不弹末尾，改新建同类型轨（松手后新轨夹在目标位）
       if (isLibrary && atTimeUs != null && trackBusyAt(t, atTimeUs)) {
@@ -457,29 +434,18 @@ function renderTimeline(s) {
   const drag = Store.state.drag;
   const isMove = drag && drag.mode === "move" && drag.moved;
   const dragKey = isMove ? drag.key : null;
-  // 目标轨（existing = 真实落点轨；new = 预览轨 ti=-1）——统一由 computeDrop 输出驱动，保证预览/实际一致
+  // 目标轨（existing = 真实落点轨；new = 无目标轨，被拖段留在源轨跟手）——统一由 computeDrop 输出驱动
   const targetType = isMove ? drag.type : null;
-  const targetTi = isMove ? ((drag.targetKind === "existing") ? drag.targetDataTi : -1) : null;
-  // 构建待渲染轨道列表（显示顺序：叠加→主轨→音频→文本/特效…）
+  const targetTi = isMove ? ((drag.targetKind === "existing") ? drag.targetDataTi : null) : null;
+  // 构建待渲染轨道列表（overlay 直映：叠加→主轨→音频）
   const tracks = buildTracks();
-  // 拖拽预览（轴内段移动）：目标=新建轨 → 按 targetDisplayIndex 注入「预览轨」（与 computeDrop/后端同源），松手才真正建。
-  // 库拖入的预览由 HTML 端 OpenCut 三件套承担（DragLine 落点线 + 影子段 + 目标轨高亮）——
-  // 不进 buildTracks，避免 dragover 每 mousemove 全量重建时间轴 DOM（2026-08-18 收口）。
-  const needPreview = isMove && drag.targetKind === "new" && typeof drag.targetDisplayIndex === "number";
-  if (needPreview) {
-    const pType = drag.type;
-    const pDisplay = drag.targetDisplayIndex;
-    const labelBy = { video: "叠加", audio: "音轨", text: "文本轨", effect: "特效轨", sticker: "贴纸轨" };
-    const previewTrack = { type: pType, ti: -1, label: (labelBy[pType] || "轨") + "预览", segs: [], preview: true };
-    const di = Math.max(0, Math.min(pDisplay, tracks.length));
-    tracks.splice(di, 0, previewTrack);
-  }
+  // 2026-08-18 用户拍板：不做「预览轨道」虚线轨（OpenCut 也没有）——被拖段自己跟手即可。
+  // new（拖到间隙/空白）= 段留在源轨跟 X 移动 + DragLine 横线提示新轨位置；松手 relocate 到新轨。
   tracks.forEach(tr => {
     const label = document.createElement("div");
     label.className = "track-label";
     label.dataset.type = tr.type; label.dataset.ti = tr.ti;
-    const meta = ((Store.state.draft._track_meta || {})[tr.type] || []);
-    const m = meta[tr.ti] || {};
+    const m = trackMeta(tr.type, tr.ti);
     const showMute = tr.type === "video" || tr.type === "audio";
     const showHide = tr.type === "video" || tr.type === "text" || tr.type === "sticker" || tr.type === "effect";
     let icons = "";
@@ -503,26 +469,31 @@ function renderTimeline(s) {
     if (tr.preview) track.classList.add("drop-preview");
     else if (isMove && targetType && targetTi != null && tr.type === targetType && tr.ti === targetTi) track.classList.add("drop-target");
     let childCount = 0;
-    // 目标轨/预览轨：先放被拖段（用源坐标 + 覆盖左边界，保持时长）
+    // 目标轨：先放被拖段（用源坐标 + 覆盖左边界，保持时长）
     if (isMove && targetType && targetTi != null && tr.type === targetType && tr.ti === targetTi) {
       const ds = findSeg(drag.type, drag.ti, drag.idx);
       if (ds) { track.appendChild(makeSeg(ds, drag.type, drag.ti, drag.idx, drag.curLeftUs, true)); childCount++; }
     }
     tr.segs.forEach((seg, idx) => {
       const k = tr.type + ":" + tr.ti + ":" + idx;
-      if (isMove && k === dragKey) return;            // 源轨跳过被拖段
+      // 源轨跳过被拖段：existing（换轨）才跳过；new（拖到间隙/空白）= 段留在源轨跟手
+      if (isMove && k === dragKey && drag.targetKind === "existing") return;
       track.appendChild(makeSeg(seg, tr.type, tr.ti, idx));
       childCount++;
     });
     if (!childCount) { const hEl = document.createElement("div"); hEl.className = "empty-hint"; track.appendChild(hEl); }
     content.appendChild(track);
   });
-  // 移动预览：蓝色落点线（显示在拖拽时间位置，对齐 OpenCut 的 drop 指示）
-  // 仅移动态管理此线；素材导入的原生拖拽由 showDropPreview/hideDropPreview 控制，互不打架
+  // 移动预览：蓝色落点竖线（X 时间位）+ new 时 DragLine 横线（新轨目标 Y 位置）
   if (isMove) {
     const line = $("dropLine");
     line.style.display = "";
     line.style.left = (drag.curLeftUs / 1e6 * pps()) + "px";
+    if (drag.targetKind === "new" && typeof drag.targetDisplayIndex === "number") {
+      showDragLine(displayRowCenterY(drag.targetDisplayIndex));
+    } else {
+      hideDragLine();
+    }
   }
   positionPlayhead();
   drawAllWaves();

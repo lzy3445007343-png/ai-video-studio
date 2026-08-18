@@ -159,6 +159,12 @@ function _flattenSticker(seg, ti, idx, trackHidden) {
 
 /* ---------- 主入口：buildPlaybackGraph ---------- */
 
+function _typeTiOf(overlay, oi, type) {
+  let cnt = 0;
+  for (let i = 0; i < oi; i++) if ((overlay[i] || {}).type === type) cnt++;
+  return cnt;
+}
+
 function buildPlaybackGraph(draft, materials) {
   const audioClips = [];
   const videoNodes = [];
@@ -167,53 +173,52 @@ function buildPlaybackGraph(draft, materials) {
   const stickerNodes = [];
   const d = draft || {};
   const meta = d._track_meta || {};
+  const overlay = Array.isArray(d.overlay) ? d.overlay : [];
 
-  // video 轨 → VideoNode（含内嵌声）
-  (d.video || []).forEach((track, ti) => {
-    const tmeta = (meta.video || [])[ti] || {};
-    const trackMuted = !!tmeta.muted;
-    const trackHidden = !!tmeta.hidden;
-    (track || []).forEach((seg, idx) => {
-      const node = _flattenVideo(seg, ti, idx, trackMuted, trackHidden, materials);
-      if (node) videoNodes.push(node);
-    });
+  // video：main（ti=0）+ overlay video 覆盖轨（ti 从 1 起）——与 main.py _playback_graph / resolveHits 对拍一致
+  const main = (d.main && typeof d.main === "object") ? (d.main.segs || []) : [];
+  const mainMeta = meta.main || {};
+  (main || []).forEach((seg, idx) => {
+    const node = _flattenVideo(seg, 0, idx, !!mainMeta.muted, !!mainMeta.hidden, materials);
+    if (node) videoNodes.push(node);
+  });
+  let vCnt = 0;
+  overlay.forEach((tr, oi) => {
+    if (!tr || !Array.isArray(tr.segs)) return;
+    const tmeta = (meta.overlay || [])[oi] || {};
+    const type = tr.type || "video";
+    const typeTi = _typeTiOf(overlay, oi, type);
+    if (type === "video") {
+      vCnt++;
+      (tr.segs || []).forEach((seg, idx) => {
+        const node = _flattenVideo(seg, vCnt, idx, !!tmeta.muted, !!tmeta.hidden, materials);
+        if (node) videoNodes.push(node);
+      });
+    } else if (type === "effect") {
+      (tr.segs || []).forEach((seg, idx) => {
+        const node = _flattenEffect(seg, typeTi, idx, !!tmeta.hidden);
+        if (node) effectNodes.push(node);
+      });
+    } else if (type === "text") {
+      (tr.segs || []).forEach((seg, idx) => {
+        const node = _flattenText(seg, typeTi, idx, !!tmeta.hidden);
+        if (node) textNodes.push(node);
+      });
+    } else if (type === "sticker") {
+      (tr.segs || []).forEach((seg, idx) => {
+        const node = _flattenSticker(seg, typeTi, idx, !!tmeta.hidden);
+        if (node) stickerNodes.push(node);
+      });
+    }
   });
 
-  // audio 轨 → AudioClip
-  (d.audio || []).forEach((track, ti) => {
+  // audio 轨 → AudioClip（dict 列表）
+  (Array.isArray(d.audio) ? d.audio : []).forEach((a, ti) => {
+    if (!a || typeof a !== "object") return;
     const tmeta = (meta.audio || [])[ti] || {};
-    const trackMuted = !!tmeta.muted;
-    (track || []).forEach((seg, idx) => {
-      const clip = _flattenAudio(seg, ti, idx, trackMuted, materials);
+    (a.segs || []).forEach((seg, idx) => {
+      const clip = _flattenAudio(seg, ti, idx, !!tmeta.muted, materials);
       if (clip) audioClips.push(clip);
-    });
-  });
-
-  // ★ Phase B：特效段平铺（预览=导出同源的桥；renderer 与 export_video 同源消费）
-  (d.effect || []).forEach((track, ti) => {
-    const tmeta = (meta.effect || [])[ti] || {};
-    const trackHidden = !!tmeta.hidden;
-    (track || []).forEach((seg, idx) => {
-      const node = _flattenEffect(seg, ti, idx, trackHidden);
-      if (node) effectNodes.push(node);
-    });
-  });
-
-  // A1 一致性：文本/贴纸也平铺进语义层（renderer 当前仍直接读 draft，此 Nodes 供 graph_consistency 对拍）
-  (d.text || []).forEach((track, ti) => {
-    const tmeta = (meta.text || [])[ti] || {};
-    const trackHidden = !!tmeta.hidden;
-    (track || []).forEach((seg, idx) => {
-      const node = _flattenText(seg, ti, idx, trackHidden);
-      if (node) textNodes.push(node);
-    });
-  });
-  (d.sticker || []).forEach((track, ti) => {
-    const tmeta = (meta.sticker || [])[ti] || {};
-    const trackHidden = !!tmeta.hidden;
-    (track || []).forEach((seg, idx) => {
-      const node = _flattenSticker(seg, ti, idx, trackHidden);
-      if (node) stickerNodes.push(node);
     });
   });
 

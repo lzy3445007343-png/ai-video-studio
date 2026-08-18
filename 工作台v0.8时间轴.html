@@ -734,8 +734,8 @@ function usToTime(us) {
 }
 function getCssVar(n) { return getComputedStyle(document.documentElement).getPropertyValue(n).trim(); }
 function findSeg(type, ti, idx) {
-  const arr = (Store.state.draft[type] || [])[ti];
-  return arr ? arr[idx] : null;
+  const segs = draftSegs(type, ti);
+  return segs && segs[idx] ? segs[idx] : null;
 }
 // 统一轨道高度（像素），与 CSS --track-h 保持一致。个别轨道不再单独拉高——
 // 上下区域的整体高度分配改由「上半区 / 下半区」之间的分隔条控制（见 initSplit）。
@@ -1571,9 +1571,9 @@ function selectedSeg() {
   const k = Store.state.selectedKey;
   if (!k) return null;
   const [type, ti, idx] = k.split(":");
-  const tracks = Store.state.draft[type];
-  if (!tracks || !tracks[ti] || !tracks[ti][idx]) return null;
-  return tracks[ti][idx];
+  const segs = draftSegs(type, +ti);
+  if (!segs || !segs[+idx]) return null;
+  return segs[+idx];
 }
 function updateToolbarState() {
   const srcBtn = $("srcAudioBtn");
@@ -1623,15 +1623,12 @@ function doSetSpeed() {
 // 收集吸附点：所有段的 start/end + 播放头位置（微秒）。excludeKey 排除正在拖的段，避免吸到自己。
 function buildSnapPoints(excludeKey, excludePlayhead) {
   const pts = [];
-  for (const type of ["video", "audio", "text", "sticker", "effect"]) {
-    const tracks = Store.state.draft[type] || [];
-    tracks.forEach((segs, ti) => segs.forEach((s, idx) => {
-      const k = type + ":" + ti + ":" + idx;
-      if (excludeKey && k === excludeKey) return;
-      pts.push({ time: s.start, type: "element-start" });
-      pts.push({ time: s.start + s.duration, type: "element-end" });
-    }));
-  }
+  forEachSeg((s, type, ti, idx) => {
+    const k = type + ":" + ti + ":" + idx;
+    if (excludeKey && k === excludeKey) return;
+    pts.push({ time: s.start, type: "element-start" });
+    pts.push({ time: s.start + s.duration, type: "element-end" });
+  });
   (Store.state.bookmarks || []).forEach(b => pts.push({ time: b.us, type: "bookmark" }));
   if (!excludePlayhead) pts.push({ time: Store.state.playheadUs, type: "playhead" });
   return pts;
@@ -1852,7 +1849,7 @@ function onPointerUp() {
           const s = findSeg(t, +ti, +ix);
           let toTi;
           if (k === d.key) toTi = anchorNewTi;
-          else { const cand = (+ti) + deltaTrack; toTi = Math.max(0, Math.min(cand, (Store.state.draft[t] || []).length - 1)); }
+          else { const cand = (+ti) + deltaTrack; toTi = Math.max(0, Math.min(cand, 8)); }  // 目标轨 clamp（后端 _ensure_track 兜底建轨）
           return { track_type: t, track_index: +ti, index: +ix, to_track: toTi, at_time_us: Math.round((s ? s.start : 0) + dUs) };
         });
         call("move_group", members).then(r => {
@@ -1896,8 +1893,7 @@ function onPointerUp() {
 
 /* 时间轴 mousedown：把手=裁剪，片段体=移动/选中，空白=框选/取消选中 */
 function isTrackLocked(type, ti) {
-  const meta = ((Store.state.draft._track_meta || {})[type] || []);
-  return !!(meta[ti] && meta[ti].locked);
+  return !!trackMeta(type, ti).locked;
 }
 function onTimelineDown(e) {
   const handle = e.target.closest(".handle");
@@ -2328,10 +2324,7 @@ function doDelete() {
 function selectAll() {
   const keys = [];
   // 全选必须覆盖所有轨道类型（含 effect/sticker，否则特效段永远选不中、Delete 删不掉）
-  for (const type of ["video", "audio", "text", "effect", "sticker"]) {
-    const tracks = Store.state.draft[type] || [];
-    tracks.forEach((segs, ti) => segs.forEach((s, idx) => keys.push(type + ":" + ti + ":" + idx)));
-  }
+  forEachSeg((s, type, ti, idx) => keys.push(type + ":" + ti + ":" + idx));
   Store.set({ selectedKeys: keys, selectedKey: keys.length ? keys[keys.length - 1] : null, selectedMaterialUid: null });
 }
 function clearSelection() {
@@ -2721,7 +2714,7 @@ function bindEvents() {
       call("toggle_track_visibility", type, ti).then(r => { if (r && r.ok) refresh(); });
     } else if (act === "lock") {
       // 轨道锁定（2026-08-16 对齐 OpenCut TrackLabelsPanel lock）：锁定的轨禁止编辑
-      const meta = ((Store.state.draft._track_meta || {})[type] || [])[ti] || {};
+      const meta = trackMeta(type, ti);
       call("set_track_meta", type, ti, "locked", !meta.locked).then(r => { if (r && r.ok) refresh(); });
     }
   });
@@ -2911,12 +2904,13 @@ function refresh() {
     const m = {};
     const wm = {};
     (st.materials || []).forEach(x => { if (x.thumbnail) m[x.path] = x.thumbnail; else if (x.type === "image") m[x.path] = x.path; if (x.peaks) wm[x.path] = x.peaks; });
-    const draft = st.draft || { video: [[]], audio: [[]], text: [[]], canvas: { ratio: "16:9", locked: false } };
+    const draft = st.draft || { overlay: [], main: { segs: [] }, audio: [{ segs: [] }], canvas: { ratio: "16:9", locked: false } };
     // 选中的片段若已被删，清空选中，避免悬空
     let selOk = false;
     if (Store.state.selectedKey) {
       const [type, ti, idx] = Store.state.selectedKey.split(":");
-      if ((draft[type] || [])[ti] && (draft[type][ti][idx])) selOk = true;
+      const segs = draftSegs(type, +ti);
+      if (segs && segs[+idx]) selOk = true;
     }
     Store.set({
       draft,

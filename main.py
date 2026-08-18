@@ -349,212 +349,246 @@ def _free_start_on_track(segs, desired, duration, exclude_index=None):
     return desired
 
 
+def _overlay_index(draft, track_type, ti):
+    """type+ti（该类型第几条）→ overlay 数组下标；找不到返回 -1。
+    video 的 ti 语义：ti=0 = 主场景（main）；ti>=1 = overlay 里第 (ti-1) 条 video 覆盖轨。"""
+    if track_type == "video":
+        if ti == 0:
+            return -2   # -2 = 主场景（main）
+        ti = ti - 1
+    cnt = 0
+    for i, tr in enumerate(draft.get("overlay", [])):
+        if tr.get("type") == track_type:
+            if cnt == ti:
+                return i
+            cnt += 1
+    return -1
+
+
+def _track_segs(draft, track_type, ti, ensure=False):
+    """统一取轨段列表（X 模型访问层）。返回 None 表示轨不存在（ensure=False 时）。"""
+    if track_type == "audio":
+        audio = draft.setdefault("audio", [{"segs": []}])
+        if ti < 0:
+            ti = len(audio) - 1
+        while len(audio) <= ti:
+            audio.append({"segs": []})
+        if not isinstance(audio[ti], dict):
+            audio[ti] = {"segs": []}
+        audio[ti].setdefault("segs", [])
+        return audio[ti]["segs"]
+    oi = _overlay_index(draft, track_type, ti)
+    if oi == -2:   # 主场景
+        main = draft.setdefault("main", {"segs": []})
+        if not isinstance(main, dict):
+            main = {"segs": []}
+            draft["main"] = main
+        main.setdefault("segs", [])
+        return main["segs"]
+    if oi >= 0:
+        tr = draft["overlay"][oi]
+        tr.setdefault("segs", [])
+        return tr["segs"]
+    if ensure:
+        # 自动新建该类型第 ti 条轨（保持类型内序号连续）
+        if track_type == "audio":
+            audio = draft.setdefault("audio", [{"segs": []}])
+            while len(audio) <= ti:
+                audio.append({"segs": []})
+            if not isinstance(audio[ti], dict):
+                audio[ti] = {"segs": []}
+            audio[ti].setdefault("segs", [])
+            return audio[ti]["segs"]
+        overlay = draft.setdefault("overlay", [])
+        if track_type == "video":
+            ti = ti - 1
+        insert_at = len(overlay)
+        new_tr = {"type": track_type, "segs": []}
+        overlay.append(new_tr)
+        # 保持类型内序号：该类型已有 ti 条 → append 正好是第 ti 条（0-based）
+        return new_tr["segs"]
+    return None
+
+
 def _ensure_track(draft, track_type, index):
     """确保 draft 里 track_type 类型存在第 index 条轨道；不存在则补空轨。
 
     index == -1 表示「自动新建一条该类型轨道」，返回新建后的索引。
     同步维护 _track_meta，保证每个轨道都有元数据槽位。返回最终可用的轨道索引。
+    video 的 ti 语义：0=主场景(main)，1..N=第 N 条覆盖轨。
     """
-    tracks = draft.setdefault(track_type, [[]])
-    meta = _ensure_track_meta(draft, track_type)
     if index == -1:
-        tracks.append([])
-        meta.append({})
-        new_idx = len(tracks) - 1
-        _sync_new_layer(draft, track_type, new_idx, _display_index_of_new(draft, track_type, new_idx))
-        return new_idx
-    while len(tracks) <= index:
-        tracks.append([])
-    while len(meta) < len(tracks):
-        meta.append({})
+        if track_type == "audio":
+            audio = draft.setdefault("audio", [{"segs": []}])
+            audio.append({"segs": []})
+            return len(audio) - 1
+        overlay = draft.setdefault("overlay", [])
+        overlay.append({"type": track_type, "segs": []})
+        if track_type == "video":
+            return sum(1 for tr in overlay if tr.get("type") == "video")   # 第 N 条覆盖轨 ti=N
+        return sum(1 for tr in overlay if tr.get("type") == track_type) - 1  # 0-based
+    if track_type == "audio":
+        _track_segs(draft, track_type, index, ensure=True)
+        return index
+    if track_type == "video" and index == 0:
+        return 0
+    _track_segs(draft, track_type, index, ensure=True)
     return index
 
 
 def _insert_track(draft, track_type, insert_index):
-    """在 draft[track_type] 的第 insert_index 个位置插入一条空轨道（拖到空隙在中间新建轨用）。
+    """在 overlay/audio 数组的第 insert_index 个位置插入一条空轨道（拖到两条轨中间新建轨用）。
 
-    同步维护 _track_meta。返回新轨道的索引（clamp 到 [0, len]）。video 列表索引即数据索引，
-    render 反转渲染下，前端已按「上边界轨数据索引」换算好 insert_index，这里只负责插在正确位置。
-    插入后同步 layer_order：先把该类型 >= insert_index 的旧 key 索引 +1（数据移位），
-    再按「数据位 → 显示位」把新轨插到 order 的对应位置（与前端预览严格同源，松手后不会跑位）。
+    X 模型：insert_index = overlay 数组下标（0=最顶），数组顺序即 z 序——插入中间 = z 序天然正确，
+    不再需要 layer_order/dataInsertIndex 换算。video 覆盖轨也插 overlay（主场景 main 恒定不受影响）。
+    返回新轨索引。
     """
-    tracks = draft.setdefault(track_type, [[]])
-    meta = _ensure_track_meta(draft, track_type)
-    if not tracks:
-        tracks.append([])
-    if not meta:
-        meta.append({})
-    ins = max(0, min(int(insert_index), len(tracks)))
-    # 视频组保护：主轨永远在 video[0]，不允许插到它之上（会把主轨挤下去）
-    if track_type == 'video':
-        ins = max(1, ins)
-    tracks.insert(ins, [])
-    meta.insert(ins, {})
-    _shift_layer_order(draft, track_type, ins)
-    _sync_new_layer(draft, track_type, ins, _display_index_of_new(draft, track_type, ins))
+    if track_type == "audio":
+        audio = draft.setdefault("audio", [{"segs": []}])
+        ins = max(0, min(int(insert_index), len(audio)))
+        audio.insert(ins, {"segs": []})
+        return ins
+    overlay = draft.setdefault("overlay", [])
+    ins = max(0, min(int(insert_index), len(overlay)))
+    overlay.insert(ins, {"type": track_type, "segs": []})
     return ins
 
 
 def _ensure_track_meta(draft, track_type):
-    """确保 draft 中存在 _track_meta 且对应 track_type 有列表。"""
+    """确保 draft 中存在 _track_meta 且对应 track_type 有列表（X 模型：overlay 数组对齐）。"""
     meta = draft.setdefault("_track_meta", {})
-    return meta.setdefault(track_type, [])
+    meta.setdefault("overlay", [])
+    meta.setdefault("main", {})
+    meta.setdefault("audio", [])
+    return meta
+
+
+def _meta_of(draft, track_type, index):
+    """X 模型 meta 定位：返回 (track_type, index) 对应的轨道 meta dict（不存在返回 None）。"""
+    meta = draft.setdefault("_track_meta", {})
+    if track_type == "audio":
+        arr = meta.setdefault("audio", [])
+        while len(arr) <= index:
+            arr.append({})
+        return arr[index]
+    if track_type == "video" and index == 0:
+        m = meta.setdefault("main", {})
+        return m
+    oi = _overlay_index(draft, track_type, index)
+    if oi >= 0:
+        arr = meta.setdefault("overlay", [])
+        while len(arr) <= oi:
+            arr.append({})
+        return arr[oi]
+    return None
 
 
 def _set_track_persistent(draft, track_type, index, persistent=True):
     """标记/取消标记某条轨道为「显式创建的空轨」（即使为空也不自动折叠）。"""
-    meta = _ensure_track_meta(draft, track_type)
-    while len(meta) <= index:
-        meta.append({})
+    m = _meta_of(draft, track_type, index)
+    if m is None:
+        return
     if persistent:
-        meta[index]["persistent_empty"] = True
-    elif "persistent_empty" in meta[index]:
-        del meta[index]["persistent_empty"]
+        m["persistent_empty"] = True
+    elif "persistent_empty" in m:
+        del m["persistent_empty"]
 
 
 def _clear_persistent_if_needed(draft, track_type, index):
     """当某条轨道被放入片段时，取消它的 persistent_empty 标记（有素材自然保留）。"""
-    meta = draft.get("_track_meta", {}).get(track_type, [])
-    if 0 <= index < len(meta) and meta[index].get("persistent_empty"):
-        del meta[index]["persistent_empty"]
+    m = _meta_of(draft, track_type, index)
+    if m is not None and m.get("persistent_empty"):
+        del m["persistent_empty"]
 
 
 def _remove_track_meta(draft, track_type, index):
     """删除 draft._track_meta 中指定轨道的元数据，并保持与轨道列表长度一致。"""
-    meta = draft.get("_track_meta", {}).get(track_type)
-    if not meta:
+    meta = draft.get("_track_meta", {})
+    if track_type == "audio":
+        arr = meta.get("audio", [])
+        if 0 <= index < len(arr):
+            arr.pop(index)
         return
-    if 0 <= index < len(meta):
-        meta.pop(index)
+    if track_type == "video" and index == 0:
+        return  # main 恒定，不删
+    oi = _overlay_index(draft, track_type, index)
+    if oi >= 0:
+        arr = meta.get("overlay", [])
+        if 0 <= oi < len(arr):
+            arr.pop(oi)
 
 
 def _collapse_empty_tracks(draft):
     """移除空轨道（保持 list-of-list 不变量）。
 
     规则：有素材的轨保留，没素材的轨自动消失。用户不需要手动删轨。
-    - 视频：保留主轨 video[0]（锚点，永远存在），移除其余为空的覆盖轨。
-    - 音频 / 文本：移除为空的轨；若整组都空，保留一条空轨 [[]] 以免破坏结构。
+    - overlay：保留有素材的轨，空轨移除（数组顺序即 z 序，折叠不改变相对顺序）。
+    - main：主场景恒定保留（即使空）。
+    - audio：移除为空的轨；若全空，保留一条空轨以免破坏结构。
     这样「片段被移走后留下的空轨会自动消失」，轨道数量始终由素材决定。
     """
     meta = draft.setdefault("_track_meta", {})
-    v = draft.get("video", [[]])
-    v_meta = meta.get("video", [])
-    new_v = [v[0]]
-    new_v_meta = [v_meta[0] if len(v_meta) > 0 else {}]
-    for i in range(1, len(v)):
-        if len(v[i]) > 0:
-            new_v.append(v[i])
-            new_v_meta.append(v_meta[i] if i < len(v_meta) else {})
-    draft["video"] = new_v
-    meta["video"] = new_v_meta
+    meta.setdefault("overlay", [])
+    meta.setdefault("main", {})
+    meta.setdefault("audio", [])
 
-    for grp in ("audio", "text", "effect", "sticker"):
-        tracks = draft.get(grp, [[]])
-        t_meta = meta.get(grp, [])
-        new_tracks = []
-        new_meta = []
-        for i, t in enumerate(tracks):
-            if len(t) > 0:
-                new_tracks.append(t)
-                new_meta.append(t_meta[i] if i < len(t_meta) else {})
-        if not new_tracks:
-            new_tracks = [[]]
-            new_meta = [{}]
-        draft[grp] = new_tracks
-        meta[grp] = new_meta
-    # 折叠可能改变轨道索引 → 清理 layer_order 里的失效 key（保留已重排轨的相对顺序）
-    _clean_layer_order(draft)
+    # overlay：保留有素材的轨（数组顺序 = z 序，折叠只删空轨不改相对顺序）
+    overlay = draft.setdefault("overlay", [])
+    o_meta = meta["overlay"]
+    new_overlay = []
+    new_o_meta = []
+    for i, tr in enumerate(overlay):
+        if not isinstance(tr, dict):
+            continue
+        tr.setdefault("segs", [])
+        if len(tr["segs"]) > 0:
+            new_overlay.append(tr)
+            new_o_meta.append(o_meta[i] if i < len(o_meta) else {})
+    draft["overlay"] = new_overlay
+    meta["overlay"] = new_o_meta
 
+    # main：恒定保留
+    if not isinstance(draft.get("main"), dict):
+        draft["main"] = {"segs": []}
+    draft["main"].setdefault("segs", [])
 
-def _default_layer_order(draft):
-    """默认 overlay 显示顺序（text→sticker→effect→video>=1 倒序），不含主场景/audio。
-    与前端 buildTracks 的旧默认顺序严格一致（layer_order 空时的回退）。"""
-    out = []
-    for t in ("text", "sticker", "effect"):
-        for i in range(len(draft.get(t, []) or [])):
-            out.append("%s:%d" % (t, i))
-    v = draft.get("video", [[]]) or [[]]
-    for i in range(len(v) - 1, 0, -1):
-        out.append("video:%d" % i)
-    return out
-
-
-def _clean_layer_order(draft):
-    """折叠/删除轨后清理 layer_order：过滤失效 key + 补齐缺失轨（按默认序追加末尾）。
-    保持已重排轨的相对顺序；整个 overlay 池的 z 序 = layer_order。"""
-    order = draft.get("layer_order")
-    if not order:
-        return
-    valid = set()
-    for t in ("text", "sticker", "effect"):
-        for i in range(len(draft.get(t, []) or [])):
-            valid.add("%s:%d" % (t, i))
-    v = draft.get("video", [[]]) or [[]]
-    for i in range(1, len(v)):
-        valid.add("video:%d" % i)
-    cleaned = [k for k in order if k in valid]
-    seen = set(cleaned)
-    for k in _default_layer_order(draft):
-        if k in valid and k not in seen:
-            cleaned.append(k)
-    draft["layer_order"] = cleaned
+    # audio：保留有素材的轨；全空保一条
+    audio = draft.setdefault("audio", [{"segs": []}])
+    a_meta = meta["audio"]
+    new_audio = []
+    new_a_meta = []
+    for i, a in enumerate(audio):
+        if not isinstance(a, dict):
+            continue
+        a.setdefault("segs", [])
+        if len(a["segs"]) > 0:
+            new_audio.append(a)
+            new_a_meta.append(a_meta[i] if i < len(a_meta) else {})
+    if not new_audio:
+        new_audio = [{"segs": []}]
+        new_a_meta = [{}]
+    draft["audio"] = new_audio
+    meta["audio"] = new_a_meta
 
 
-def _sync_new_layer(draft, track_type, ti, display_index=None):
-    """新建 overlay 轨后同步 layer_order。
-    display_index 有值 → 新轨插到该显示位（与前端预览严格同源，松手后不会跑位）；
-    None → 插最顶（旧行为，兼容无明确位置的调用）。
-    主场景 video[0] / audio 不参与 overlay 池。layer_order 为空时按默认序初始化。"""
-    if track_type == "audio":
-        return
-    if track_type == "video" and ti == 0:
-        return
-    order = draft.get("layer_order")
-    if not order:
-        order = _default_layer_order(draft)
-        draft["layer_order"] = order
-    key = "%s:%d" % (track_type, ti)
-    if key not in order:
-        if display_index is None:
-            order.insert(0, key)
-        else:
-            order.insert(max(0, min(display_index, len(order))), key)
-
-
-def _display_index_of_new(draft, track_type, ti):
-    """新建轨（已插入数据数组）→ overlay 显示位（layer_order 下标，与前端 displayIndex 同源）。
-    video 组显示倒序（高 ti 在上）：显示位 = len(video)-1-ti；其他组显示序 = 数据序。"""
-    order = draft.get("layer_order")
-    if not order:
-        order = _default_layer_order(draft)
-    if track_type == "video":
-        return max(0, len(draft.get("video", [[]]) or [[]]) - 1 - ti)
-    same = [i for i, k in enumerate(order) if k.startswith(track_type + ":")]
-    if not same:
-        return 0 if track_type != "audio" else len(order)
-    if ti < len(same):
-        return same[ti]
-    return same[-1] + 1
-
-
-def _shift_layer_order(draft, track_type, from_index):
-    """数据数组在 from_index 处插入了一条轨 → layer_order 里该类型 >= from_index 的 key 索引 +1
-    （数据移位后旧 key 全部错位，必须先重排再插新 key）。"""
-    order = draft.get("layer_order")
-    if not order:
-        return
-    new_order = []
-    for k in order:
-        if k.startswith(track_type + ":"):
-            try:
-                ti = int(k.split(":", 1)[1])
-            except ValueError:
-                new_order.append(k)
-                continue
-            if ti >= from_index:
-                k = "%s:%d" % (track_type, ti + 1)
-        new_order.append(k)
-    draft["layer_order"] = new_order
+def _locate_seg(draft, seg):
+    """在 X 模型中定位一个段对象 → (track_type, type_ti, index) 或 None。
+    video 覆盖轨的 ti 从 1 起（0=主场景）；text/sticker/effect/audio 从 0 起。"""
+    main = draft.get("main", {"segs": []})
+    if isinstance(main, dict) and seg in main.get("segs", []):
+        return ("video", 0, main["segs"].index(seg))
+    for i, a in enumerate(draft.get("audio", [])):
+        if isinstance(a, dict) and seg in a.get("segs", []):
+            return ("audio", i, a["segs"].index(seg))
+    overlay = draft.get("overlay", [])
+    for oi, tr in enumerate(overlay):
+        if not isinstance(tr, dict):
+            continue
+        if seg in tr.get("segs", []):
+            cnt = sum(1 for t in overlay[:oi] if isinstance(t, dict) and t.get("type") == tr.get("type"))
+            ti = cnt if tr.get("type") != "video" else cnt + 1
+            return (tr.get("type"), ti, tr["segs"].index(seg))
+    return None
 
 
 def _distribute_to_tracks(segments):
@@ -579,15 +613,21 @@ def _distribute_to_tracks(segments):
 def load_state():
     """读取 draft_state.json。不存在/损坏返回空草稿。
 
-    多轨模型：draft 的 video/audio/text 每个都是「轨道列表的列表」。
-    video[0] = 主视频轨（不可删，最底层），video[1:] = 覆盖轨（上盖下）。
-    旧项目若还是扁平列表，自动按不重叠原则拆成多轨。
+    X 模型（2026-08-18 用户拍板，对齐 OpenCut SceneTracks）：
+      draft = {
+        "overlay": [{"type": "text"|"sticker"|"effect"|"video", "segs": [...]}, ...],  # 混排池，0=最顶，数组顺序=z 序
+        "main":    {"segs": [...]},        # 主场景（恒定，只装 video/image）
+        "audio":   [{"segs": [...]}, ...], # 音轨
+        "canvas":  {...}, "_track_meta": {...},
+      }
+    旧结构（video/audio/text/effect 分类型数组 + layer_order）已废弃，检测到旧草稿直接返回空（用户拍板全删）。
     """
     empty = {
         "materials": [],
         "draft": {
-            "video": [[]], "audio": [[]], "text": [[]], "effect": [[]],
+            "overlay": [], "main": {"segs": []}, "audio": [{"segs": []}],
             "canvas": {"ratio": DEFAULT_CANVAS, "locked": False},
+            "_track_meta": {"overlay": [], "main": {}, "audio": [{}]},
         },
         "version": 0,
     }
@@ -597,44 +637,56 @@ def load_state():
         with open(STATE_PATH, "r", encoding="utf-8") as f:
             s = json.load(f)
         s.setdefault("materials", [])
-        s.setdefault("draft", {"video": [[]], "audio": [[]], "text": [[]], "effect": [[]]})
-        s["draft"].setdefault("canvas", {"ratio": DEFAULT_CANVAS, "locked": False})
-        s["draft"].setdefault("layer_order", [])   # overlay z 序（OpenCut 同款逻辑池）：空=默认序，非空=按此排
+        s.setdefault("draft", {})
+        draft = s["draft"]
+        # 旧结构草稿（无 overlay 字段）→ 直接作废返回空（2026-08-18 用户拍板：旧草稿全删）
+        if "overlay" not in draft or "main" not in draft:
+            return empty
         s.setdefault("version", 0)
-        # 兼容历史脏数据：materials 偶尔会被写成 dict（空对象 {}），统一归一化为 list
         if isinstance(s["materials"], dict):
             s["materials"] = list(s["materials"].values()) if s["materials"] else []
         if not isinstance(s["materials"], list):
             s["materials"] = []
-        draft = s["draft"]
-        draft.setdefault("_track_meta", {})
+        draft.setdefault("overlay", [])
+        draft.setdefault("main", {"segs": []})
+        draft.setdefault("audio", [{"segs": []}])
+        draft.setdefault("canvas", {"ratio": DEFAULT_CANVAS, "locked": False})
+        # 规范化：overlay 每条轨必须有 type/segs；main 必须有 segs；audio 每条必须有 segs
+        for i, tr in enumerate(draft["overlay"]):
+            if not isinstance(tr, dict):
+                draft["overlay"][i] = {"type": "video", "segs": []}
+            else:
+                tr.setdefault("type", "video")
+                tr.setdefault("segs", [])
+        if not isinstance(draft["main"], dict):
+            draft["main"] = {"segs": []}
+        draft["main"].setdefault("segs", [])
+        for i, a in enumerate(draft["audio"]):
+            if not isinstance(a, dict):
+                draft["audio"][i] = {"segs": []}
+            else:
+                a.setdefault("segs", [])
+        if not draft["audio"]:
+            draft["audio"] = [{"segs": []}]
+        draft.setdefault("_track_meta", {"overlay": [], "main": {}, "audio": [{}]})
         meta = draft["_track_meta"]
-        for key in ("video", "audio", "text", "effect"):
-            draft.setdefault(key, [[]])
-            data = draft[key]
-            # 迁移：如果是扁平列表（元素是片段 dict），按不重叠拆成多轨
-            if data and not isinstance(data[0], list):
-                data = _distribute_to_tracks(data)
-            # 规范化：保证一定是「轨道列表的列表」，且至少保留一条空轨。
-            # 否则 video=[dict,...] / text=[] 这类旧格式或异常数据会破坏渲染与导出。
-            if not isinstance(data, list) or (data and not isinstance(data[0], list)):
-                data = [[]]
-            elif len(data) == 0:
-                data = [[]]
-            draft[key] = data
-            # 同步 _track_meta 长度：旧草稿可能没有，或者迁移后长度不一致
-            meta.setdefault(key, [])
-            while len(meta[key]) < len(data):
-                meta[key].append({})
-            if len(meta[key]) > len(data):
-                meta[key] = meta[key][:len(data)]
-            # 规范化轨道开关默认值，保证 undo 后状态一致
-            for m in meta[key]:
-                m.setdefault("muted", False)
-                m.setdefault("hidden", False)
-        # 兼容旧项目：给所有段补 speed/change_pitch 默认值
+        meta.setdefault("overlay", [])
+        while len(meta["overlay"]) < len(draft["overlay"]):
+            meta["overlay"].append({})
+        meta.setdefault("main", {})
+        meta.setdefault("audio", [])
+        while len(meta["audio"]) < len(draft["audio"]):
+            meta["audio"].append({})
+        for m in meta["overlay"]:
+            m.setdefault("muted", False)
+            m.setdefault("hidden", False)
+        for m in meta["audio"]:
+            m.setdefault("muted", False)
+            m.setdefault("hidden", False)
+        meta["main"].setdefault("muted", False)
+        meta["main"].setdefault("hidden", False)
+        # 兼容旧项目：给所有段补 speed/change_pitch / animations 默认值
         _ensure_seg_speeds(draft)
-        # 兼容旧项目：给所有段补 animations 默认值
         _ensure_seg_animations(draft)
         return s
     except Exception:
@@ -782,17 +834,27 @@ def save_state(state, record=True):
 #      给新段重发 id（见 split/duplicate/paste），否则 diff 会错配。
 # =====================================================================
 
+def _iter_all_segs(draft):
+    """X 模型：遍历草稿所有段（main / overlay / audio），供兼容/补默认值类函数使用。"""
+    main = draft.get("main")
+    if isinstance(main, dict):
+        for seg in main.get("segs", []):
+            yield seg
+    for tr in draft.get("overlay", []):
+        if isinstance(tr, dict):
+            for seg in tr.get("segs", []):
+                yield seg
+    for a in draft.get("audio", []):
+        if isinstance(a, dict):
+            for seg in a.get("segs", []):
+                yield seg
+
+
 def _ensure_seg_ids(draft):
     """给草稿里所有缺 id 的段补一个 uuid（浅改 self.draft，首次 save_state 落盘）。"""
-    for t, tracks in draft.items():
-        if not isinstance(tracks, list):
-            continue
-        for segs in tracks:
-            if not isinstance(segs, list):
-                continue
-            for seg in segs:
-                if isinstance(seg, dict) and "id" not in seg:
-                    seg["id"] = uuid.uuid4().hex
+    for seg in _iter_all_segs(draft):
+        if isinstance(seg, dict) and "id" not in seg:
+            seg["id"] = uuid.uuid4().hex
 
 
 # ---- Effect Registry（Effect DSL 双 adapter：预览 css + 导出 ffmpeg，读同一份 params 规格）----
@@ -844,18 +906,10 @@ EFFECT_META_NOTE = (
 
 def _ensure_seg_speeds(draft):
     """给草稿里所有 video/audio 段补 speed/change_pitch 默认值（兼容旧项目）。"""
-    for t, tracks in draft.items():
-        if t not in ("video", "audio"):
-            continue
-        if not isinstance(tracks, list):
-            continue
-        for segs in tracks:
-            if not isinstance(segs, list):
-                continue
-            for seg in segs:
-                if isinstance(seg, dict):
-                    seg.setdefault("speed", DEFAULT_SPEED)
-                    seg.setdefault("change_pitch", False)
+    for seg in _iter_all_segs(draft):
+        if isinstance(seg, dict) and seg.get("type") in ("video", "audio"):
+            seg.setdefault("speed", DEFAULT_SPEED)
+            seg.setdefault("change_pitch", False)
 
 
 def _ensure_seg_src_full(draft):
@@ -866,26 +920,18 @@ def _ensure_seg_src_full(draft):
     返回是否发生了回填（供调用方决定是否落盘）。
     """
     changed = False
-    for t, tracks in draft.items():
-        if t not in ("video", "audio"):
+    for seg in _iter_all_segs(draft):
+        if not isinstance(seg, dict):
             continue
-        if not isinstance(tracks, list):
+        if seg.get("src_full"):
             continue
-        for segs in tracks:
-            if not isinstance(segs, list):
-                continue
-            for seg in segs:
-                if not isinstance(seg, dict):
-                    continue
-                if seg.get("src_full"):
-                    continue
-                p = seg.get("path")
-                mtype = seg.get("type")
-                if p and mtype in ("video", "audio"):
-                    d = duration_for(p, mtype)
-                    if d:
-                        seg["src_full"] = int(d)
-                        changed = True
+        p = seg.get("path")
+        mtype = seg.get("type")
+        if p and mtype in ("video", "audio"):
+            d = duration_for(p, mtype)
+            if d:
+                seg["src_full"] = int(d)
+                changed = True
     return changed
 
 
@@ -1012,19 +1058,38 @@ def _playback_graph(draft, materials=None):
     audio_clips = []
     video_nodes = []
 
-    for ti, track in enumerate(draft.get("video") or []):
-        tmeta = (meta.get("video") or [])[ti] if ti < len(meta.get("video") or []) else {}
+    # main 主场景（video ti=0）
+    main = draft.get("main", {"segs": []})
+    if isinstance(main, dict):
+        tmeta = meta.get("main") or {}
         track_muted = bool(tmeta.get("muted"))
         track_hidden = bool(tmeta.get("hidden"))
-        for idx, seg in enumerate(track):
+        for idx, seg in enumerate(main.get("segs", [])):
+            node = _flatten_video(seg, 0, idx, track_muted, track_hidden, materials)
+            if node is not None:
+                video_nodes.append(node)
+    # overlay 视频覆盖轨（ti 从 1 起）
+    v_cnt = 0
+    overlay = draft.get("overlay") or []
+    for oi, tr in enumerate(overlay):
+        if not isinstance(tr, dict) or tr.get("type") != "video":
+            continue
+        v_cnt += 1
+        ti = v_cnt
+        tmeta = (meta.get("overlay") or [])[oi] if oi < len(meta.get("overlay") or []) else {}
+        track_muted = bool(tmeta.get("muted"))
+        track_hidden = bool(tmeta.get("hidden"))
+        for idx, seg in enumerate(tr.get("segs", [])):
             node = _flatten_video(seg, ti, idx, track_muted, track_hidden, materials)
             if node is not None:
                 video_nodes.append(node)
 
-    for ti, track in enumerate(draft.get("audio") or []):
+    for ti, a in enumerate(draft.get("audio") or []):
+        if not isinstance(a, dict):
+            continue
         tmeta = (meta.get("audio") or [])[ti] if ti < len(meta.get("audio") or []) else {}
         track_muted = bool(tmeta.get("muted"))
-        for idx, seg in enumerate(track):
+        for idx, seg in enumerate(a.get("segs", [])):
             clip = _flatten_audio(seg, ti, idx, track_muted, materials)
             if clip is not None:
                 audio_clips.append(clip)
@@ -1054,17 +1119,9 @@ KF_KEYFRAMEABLE = tuple(KF_PROPS.keys())
 
 def _ensure_seg_animations(draft):
     """给草稿里所有段补 animations 默认值（兼容旧项目）。"""
-    for t, tracks in draft.items():
-        if t not in ("video", "audio", "text"):
-            continue
-        if not isinstance(tracks, list):
-            continue
-        for segs in tracks:
-            if not isinstance(segs, list):
-                continue
-            for seg in segs:
-                if isinstance(seg, dict):
-                    seg.setdefault("animations", {})
+    for seg in _iter_all_segs(draft):
+        if isinstance(seg, dict):
+            seg.setdefault("animations", {})
 
 
 def _seg_anims(seg):
@@ -2138,20 +2195,23 @@ class Api:
         if mtype not in TYPE_TRACK:
             return {"ok": False, "error": f"不支持的素材类型：{mtype}"}
         track_type = TYPE_TRACK[mtype]
-        tracks = self.draft.setdefault(track_type, [[]])
-        if not tracks:
-            tracks.append([])
         # 落点轨道优先级：指定 track_index（-1=新建追加）> insert_index（中间插入新轨）> 默认主轨/第一条
         if track_index is not None:
             if track_index == -1:
                 idx = _ensure_track(self.draft, track_type, -1)
             else:
                 idx = _ensure_track(self.draft, track_type, track_index)
+            segs = _track_segs(self.draft, track_type, idx)
         elif insert_index is not None:
             idx = _insert_track(self.draft, track_type, insert_index)
+            # insert_index 是 overlay/audio 数组下标（不是类型内 ti）——段直接放新建轨
+            if track_type == "audio":
+                segs = self.draft["audio"][idx]["segs"]
+            else:
+                segs = self.draft["overlay"][idx]["segs"]
         else:
             idx = 0
-        segs = tracks[idx]
+            segs = _track_segs(self.draft, track_type, idx)
         duration = duration_for(path, mtype)
         # 落点时间：指定则精确落在拖拽位置；否则接到该轨末尾
         if at_time_us is not None:
@@ -2201,9 +2261,11 @@ class Api:
         # 在放入前判断「整条视频轨此前是否为空」；若为空、且用户尚未锁定画布比例，
         # 则用该素材真实宽高比自动匹配最接近的预设画布比例（主轨第一段决定画布）。
         canvas = self.draft.setdefault("canvas", {"ratio": DEFAULT_CANVAS, "locked": False})
+        main_segs = self.draft.setdefault("main", {"segs": []}).setdefault("segs", [])
         video_was_empty = (track_type == "video"
                            and not canvas.get("locked", False)
-                           and not any(len(t) > 0 for t in self.draft.get("video", [[]])))
+                           and len(main_segs) == 0
+                           and not any(len(t.get("segs", [])) > 0 for t in self.draft.get("overlay", []) if t.get("type") == "video"))
 
         segs.append(seg)
         # 轨道一旦被放入片段，就不再是「显式创建的空轨」，取消 persistent_empty 标记
@@ -2215,7 +2277,9 @@ class Api:
             if matched:
                 canvas["ratio"] = matched
 
-        total = sum(len(t) for kind in ("video", "audio", "text") for t in self.draft.get(kind, []))
+        total = (len(self.draft.setdefault("main", {"segs": []}).get("segs", []))
+                 + sum(len(t.get("segs", [])) for t in self.draft.get("overlay", []))
+                 + sum(len(a.get("segs", [])) for a in self.draft.get("audio", [])))
         save_state(self.state)
         fallback = (mtype in ("video", "audio") and not has_ffmpeg())
         return {
@@ -2246,12 +2310,9 @@ class Api:
         """
         self._reload()
         self._push_undo()
-        if track_type not in self.draft:
-            return {"ok": False, "error": f"未知轨道类型：{track_type}"}
-        tracks = self.draft[track_type]
-        if not isinstance(track_index, int) or track_index < 0 or track_index >= len(tracks):
-            return {"ok": False, "error": f"{track_type} 没有第 {track_index} 条轨道（共 {len(tracks)} 条）"}
-        segs = tracks[track_index]
+        segs = _track_segs(self.draft, track_type, track_index)
+        if segs is None:
+            return {"ok": False, "error": f"{track_type} 没有第 {track_index} 条轨道"}
         if not isinstance(index, int) or index < 0 or index >= len(segs):
             return {"ok": False, "error": f"{track_type}[{track_index}] 没有第 {index} 段（共 {len(segs)} 段）"}
         seg = segs[index]
@@ -2262,11 +2323,13 @@ class Api:
         if seg.get("source_audio_extracted"):
             vid_id = seg.get("id")
             removed = 0
-            for atracks in self.draft.get("audio", []):
+            for atrack in self.draft.get("audio", []):
+                if not isinstance(atrack, dict):
+                    continue
                 i = 0
-                while i < len(atracks):
-                    if atracks[i].get("extracted_from") == vid_id:
-                        atracks.pop(i)
+                while i < len(atrack.get("segs", [])):
+                    if atrack["segs"][i].get("extracted_from") == vid_id:
+                        atrack["segs"].pop(i)
                         removed += 1
                     else:
                         i += 1
@@ -2302,10 +2365,8 @@ class Api:
             return {"ok": False, "error": "ffmpeg 抽取音轨超时"}
 
         # 确保有音频轨，把抽出的音频段放进去（与视频段同起点、同长度、同 src 范围）
-        if not self.draft.get("audio"):
-            self.draft["audio"] = [[]]
         _ensure_track(self.draft, "audio", 0)
-        atracks = self.draft["audio"]
+        atracks = self.draft.setdefault("audio", [{"segs": []}])
         audio_seg = {
             "name": (seg.get("name", "音频") + " 音频"),
             "path": out_path,
@@ -2320,7 +2381,10 @@ class Api:
             "extracted_from": vid_id,
             "id": uuid.uuid4().hex,
         }
-        atracks[0].append(audio_seg)
+        if not isinstance(atracks[0], dict):
+            atracks[0] = {"segs": []}
+        atracks[0].setdefault("segs", [])
+        atracks[0]["segs"].append(audio_seg)
         # 原视频段：标记已提取 + 静音（导出时 volume=0）
         seg["source_audio_extracted"] = True
         seg["muted"] = True
@@ -2340,12 +2404,9 @@ class Api:
         """
         self._reload()
         self._push_undo()
-        if track_type not in self.draft:
-            return {"ok": False, "error": f"未知轨道类型：{track_type}"}
-        tracks = self.draft[track_type]
-        if not isinstance(track_index, int) or track_index < 0 or track_index >= len(tracks):
-            return {"ok": False, "error": f"{track_type} 没有第 {track_index} 条轨道（共 {len(tracks)} 条）"}
-        segs = tracks[track_index]
+        segs = _track_segs(self.draft, track_type, track_index)
+        if segs is None:
+            return {"ok": False, "error": f"{track_type} 没有第 {track_index} 条轨道"}
         if not isinstance(index, int) or index < 0 or index >= len(segs):
             return {"ok": False, "error": f"{track_type}[{track_index}] 没有第 {index} 段（共 {len(segs)} 段）"}
         seg = segs[index]
@@ -2388,12 +2449,9 @@ class Api:
         """
         self._reload()
         self._push_undo()
-        if track_type not in self.draft:
-            return {"ok": False, "error": f"未知轨道类型：{track_type}"}
-        tracks = self.draft[track_type]
-        if not isinstance(track_index, int) or track_index < 0 or track_index >= len(tracks):
-            return {"ok": False, "error": f"{track_type} 没有第 {track_index} 条轨道（共 {len(tracks)} 条）"}
-        segs = tracks[track_index]
+        segs = _track_segs(self.draft, track_type, track_index)
+        if segs is None:
+            return {"ok": False, "error": f"{track_type} 没有第 {track_index} 条轨道"}
         if not isinstance(index, int) or index < 0 or index >= len(segs):
             return {"ok": False, "error": f"{track_type}[{track_index}] 没有第 {index} 段（共 {len(segs)} 段）"}
         v = max(0.0, min(2.0, float(volume)))
@@ -2404,12 +2462,9 @@ class Api:
     # ---------- 关键帧 / 动画 CRUD（对齐 OpenCut upsertKeyframe / removeKeyframe / retimeKeyframe） ----------
     def _kf_resolve_seg(self, track_type, track_index, index):
         """取关键帧编辑目标段，返回 (seg, None) 或 (None, error)。"""
-        if track_type not in self.draft:
-            return None, f"未知轨道类型：{track_type}"
-        tracks = self.draft[track_type]
-        if not isinstance(track_index, int) or track_index < 0 or track_index >= len(tracks):
-            return None, f"{track_type} 没有第 {track_index} 条轨道（共 {len(tracks)} 条）"
-        segs = tracks[track_index]
+        segs = _track_segs(self.draft, track_type, track_index)
+        if segs is None:
+            return None, f"{track_type} 没有第 {track_index} 条轨道"
         if not isinstance(index, int) or index < 0 or index >= len(segs):
             return None, f"{track_type}[{track_index}] 没有第 {index} 段（共 {len(segs)} 段）"
         return segs[index], None
@@ -2530,13 +2585,46 @@ class Api:
         return {"ok": True, "animations": anims}
 
     def _track_meta(self, track_type, track_index, ensure=True):
-        """返回指定轨道的元数据 dict（不存在时按需创建）。"""
-        meta = self.draft.setdefault("_track_meta", {}).setdefault(track_type, [])
+        """返回指定轨道的元数据 dict（X 模型：overlay/main/audio 分区存储，与轨数组对齐）。"""
+        meta = self.draft.setdefault("_track_meta", {})
+        meta.setdefault("overlay", [])
+        meta.setdefault("main", {})
+        meta.setdefault("audio", [])
+        if track_type == "audio":
+            arr = meta["audio"]
+            if ensure:
+                while len(arr) <= track_index:
+                    arr.append({})
+            return arr[track_index] if 0 <= track_index < len(arr) else {}
+        if track_type == "video" and track_index == 0:
+            m = meta["main"]
+            m.setdefault("muted", False)
+            m.setdefault("hidden", False)
+            return m
+        oi = _overlay_index(self.draft, track_type, track_index)
+        if oi >= 0:
+            arr = meta["overlay"]
+            if ensure:
+                while len(arr) <= oi:
+                    arr.append({})
+            m = arr[oi]
+            m.setdefault("muted", False)
+            m.setdefault("hidden", False)
+            return m
         if ensure:
-            while len(meta) <= track_index:
-                meta.append({})
-        if 0 <= track_index < len(meta):
-            return meta[track_index]
+            # 轨不存在：先建轨再定位 meta 槽
+            _track_segs(self.draft, track_type, track_index, ensure=True)
+            oi = _overlay_index(self.draft, track_type, track_index)
+            if oi >= 0:
+                arr = meta["overlay"]
+                while len(arr) <= oi:
+                    arr.append({})
+                return arr[oi]
+            if track_type == "audio":
+                arr = meta["audio"]
+                while len(arr) <= track_index:
+                    arr.append({})
+                return arr[track_index]
         return {}
 
     def toggle_track_mute(self, track_type, track_index):
@@ -2546,11 +2634,6 @@ class Api:
         """
         self._reload()
         self._push_undo()
-        if track_type not in self.draft:
-            return {"ok": False, "error": f"未知轨道类型：{track_type}"}
-        tracks = self.draft[track_type]
-        if not isinstance(track_index, int) or track_index < 0 or track_index >= len(tracks):
-            return {"ok": False, "error": f"{track_type} 没有第 {track_index} 条轨道（共 {len(tracks)} 条）"}
         m = self._track_meta(track_type, track_index, ensure=True)
         m["muted"] = not m.get("muted", False)
         save_state(self.state)
@@ -2566,12 +2649,9 @@ class Api:
             return {"ok": False, "error": "flag 必须是 muted 或 hidden"}
         self._reload()
         self._push_undo()
-        if track_type not in self.draft:
-            return {"ok": False, "error": f"未知轨道类型：{track_type}"}
-        tracks = self.draft[track_type]
-        if not isinstance(track_index, int) or track_index < 0 or track_index >= len(tracks):
-            return {"ok": False, "error": f"{track_type} 没有第 {track_index} 条轨道（共 {len(tracks)} 条）"}
-        segs = tracks[track_index]
+        segs = _track_segs(self.draft, track_type, track_index)
+        if segs is None:
+            return {"ok": False, "error": f"{track_type} 没有第 {track_index} 条轨道"}
         if not isinstance(index, int) or index < 0 or index >= len(segs):
             return {"ok": False, "error": f"{track_type}[{track_index}] 没有第 {index} 段（共 {len(segs)} 段）"}
         segs[index][flag] = bool(value)
@@ -2654,11 +2734,6 @@ class Api:
         """
         self._reload()
         self._push_undo()
-        if track_type not in self.draft:
-            return {"ok": False, "error": f"未知轨道类型：{track_type}"}
-        tracks = self.draft[track_type]
-        if not isinstance(track_index, int) or track_index < 0 or track_index >= len(tracks):
-            return {"ok": False, "error": f"{track_type} 没有第 {track_index} 条轨道（共 {len(tracks)} 条）"}
         if track_type not in ("video", "text"):
             return {"ok": False, "error": "只有视频轨和文本轨可以切换可见性"}
         m = self._track_meta(track_type, track_index, ensure=True)
@@ -2676,12 +2751,9 @@ class Api:
         """
         self._reload()
         self._push_undo()
-        if track_type not in self.draft:
-            return {"ok": False, "error": f"未知轨道类型：{track_type}"}
-        tracks = self.draft[track_type]
-        if not isinstance(track_index, int) or track_index < 0 or track_index >= len(tracks):
-            return {"ok": False, "error": f"{track_type} 没有第 {track_index} 条轨道（共 {len(tracks)} 条）"}
-        segs = tracks[track_index]
+        segs = _track_segs(self.draft, track_type, track_index)
+        if segs is None:
+            return {"ok": False, "error": f"{track_type} 没有第 {track_index} 条轨道"}
         if not isinstance(index, int) or index < 0 or index >= len(segs):
             return {"ok": False, "error": f"{track_type}[{track_index}] 没有第 {index} 段（共 {len(segs)} 段）"}
         removed = segs.pop(index)
@@ -2714,12 +2786,9 @@ class Api:
         parsed.sort(key=lambda x: (x[0], x[1], -x[2]))
         removed = 0
         for t, ti, idx in parsed:
-            if t not in self.draft:
+            if _track_segs(self.draft, t, ti) is None:
                 continue
-            tracks = self.draft[t]
-            if ti < 0 or ti >= len(tracks):
-                continue
-            segs = tracks[ti]
+            segs = _track_segs(self.draft, t, ti)
             if idx < 0 or idx >= len(segs):
                 continue
             segs.pop(idx)
@@ -2740,12 +2809,9 @@ class Api:
         """
         self._reload()
         self._push_undo()
-        if track_type not in self.draft:
-            return {"ok": False, "error": f"未知轨道类型：{track_type}"}
-        tracks = self.draft[track_type]
-        if not isinstance(track_index, int) or track_index < 0 or track_index >= len(tracks):
+        segs = _track_segs(self.draft, track_type, track_index)
+        if segs is None:
             return {"ok": False, "error": f"{track_type} 没有第 {track_index} 条轨道"}
-        segs = tracks[track_index]
         if not isinstance(index, int) or index < 0 or index >= len(segs):
             return {"ok": False, "error": f"{track_type}[{track_index}] 没有第 {index} 段"}
         seg = segs[index]
@@ -2781,12 +2847,9 @@ class Api:
                 continue
         items = []
         for t, ti, idx in parsed:
-            if t not in self.draft:
+            segs = _track_segs(self.draft, t, ti)
+            if segs is None:
                 continue
-            tracks = self.draft[t]
-            if ti < 0 or ti >= len(tracks):
-                continue
-            segs = tracks[ti]
             if idx < 0 or idx >= len(segs):
                 continue
             seg = segs[idx]
@@ -2812,16 +2875,12 @@ class Api:
         pasted = []
         for it in items:
             t = it["track_type"]
-            if t not in self.draft or not self.draft[t]:
-                self.draft.setdefault(t, [])
-                self.draft[t].append([])
-            tracks = self.draft[t]
-            ti = 0  # v1：粘到该类型第一条轨（OpenCut 按 trackType 匹配同类型轨，我们无 trackId 概念故取首轨）
+            segs = _track_segs(self.draft, t, 0, ensure=True)
             new_seg = copy.deepcopy(it["seg"])
             new_seg["id"] = uuid.uuid4().hex  # 粘贴出的新段必须重发 id，否则与原段共享 id
             new_seg["start"] = at + (it["original_start"] - min_start)
-            tracks[ti].append(new_seg)
-            pasted.append(f"{t}:{ti}:{len(tracks[ti]) - 1}")
+            segs.append(new_seg)
+            pasted.append(f"{t}:0:{len(segs) - 1}")
         _collapse_empty_tracks(self.draft)
         save_state(self.state)
         return {"ok": True, "pasted": pasted, "count": len(pasted)}
@@ -2838,12 +2897,9 @@ class Api:
         self._reload()
         self._push_undo()
         before = copy.deepcopy(self.draft)
-        if track_type not in self.draft:
-            return {"ok": False, "error": f"未知轨道类型：{track_type}"}
-        tracks = self.draft[track_type]
-        if not isinstance(track_index, int) or track_index < 0 or track_index >= len(tracks):
-            return {"ok": False, "error": f"{track_type} 没有第 {track_index} 条轨道（共 {len(tracks)} 条）"}
-        segs = tracks[track_index]
+        segs = _track_segs(self.draft, track_type, track_index)
+        if segs is None:
+            return {"ok": False, "error": f"{track_type} 没有第 {track_index} 条轨道"}
         if not isinstance(index, int) or index < 0 or index >= len(segs):
             return {"ok": False, "error": f"{track_type}[{track_index}] 没有第 {index} 段（共 {len(segs)} 段）"}
         new_start = max(0, int(new_start_us))
@@ -2943,12 +2999,9 @@ class Api:
         self._reload()
         self._push_undo()
         before = copy.deepcopy(self.draft)
-        if track_type not in self.draft:
-            return {"ok": False, "error": f"未知轨道类型：{track_type}"}
-        tracks = self.draft[track_type]
-        if not isinstance(track_index, int) or track_index < 0 or track_index >= len(tracks):
-            return {"ok": False, "error": f"{track_type} 没有第 {track_index} 条轨道（共 {len(tracks)} 条）"}
-        segs = tracks[track_index]
+        segs = _track_segs(self.draft, track_type, track_index)
+        if segs is None:
+            return {"ok": False, "error": f"{track_type} 没有第 {track_index} 条轨道"}
         if not isinstance(index, int) or index < 0 or index >= len(segs):
             return {"ok": False, "error": f"{track_type}[{track_index}] 没有第 {index} 段（共 {len(segs)} 段）"}
         seg = segs[index]
@@ -2981,15 +3034,15 @@ class Api:
         collected = []
         for m in members:
             t = m["track_type"]; ti = int(m["track_index"]); idx = int(m["index"])
-            if t not in self.draft:
+            segs = _track_segs(self.draft, t, ti)
+            if segs is None:
                 return {"ok": False, "error": f"未知轨道类型：{t}"}
-            segs = self.draft[t]
-            if ti < 0 or ti >= len(segs) or idx < 0 or idx >= len(segs[ti]):
+            if idx < 0 or idx >= len(segs):
                 return {"ok": False, "error": f"{t}[{ti}] 没有第 {idx} 段"}
-            collected.append((t, ti, idx, segs[ti][idx], m))
+            collected.append((t, ti, idx, segs[idx], m))
         # 1) 一次性取出（按对象引用移除，避免索引错位）
         for (t, ti, idx, seg, m) in collected:
-            self.draft[t][ti].remove(seg)
+            _track_segs(self.draft, t, ti).remove(seg)
         # 2) 依次放置：同一目标轨的片段沿用 _free_start_on_track 保持不重叠
         #    to_track==-1（新建轨接住）在整组语义下只建【一条】新轨，整组落入其中（按类型分组）
         shared_new = {}
@@ -3002,7 +3055,7 @@ class Api:
                 if shared_new.get(t) is None:
                     shared_new[t] = _ensure_track(self.draft, t, -1)
                 to_idx = shared_new[t]
-            to_segs = self.draft[t][to_idx]
+            to_segs = _track_segs(self.draft, t, to_idx)
             desired = max(0, int(m.get("at_time_us") or 0))
             start = _free_start_on_track(to_segs, desired, seg["duration"])
             seg["start"] = start
@@ -3029,12 +3082,12 @@ class Api:
         for m in members:
             t = m["track_type"]; ti = int(m["track_index"]); idx = int(m["index"])
             factor = float(m["factor"]); new_start = int(m["new_start_us"])
-            if t not in self.draft:
+            segs = _track_segs(self.draft, t, ti)
+            if segs is None:
                 return {"ok": False, "error": f"未知轨道类型：{t}"}
-            segs = self.draft[t]
-            if ti < 0 or ti >= len(segs) or idx < 0 or idx >= len(segs[ti]):
+            if idx < 0 or idx >= len(segs):
                 return {"ok": False, "error": f"{t}[{ti}] 没有第 {idx} 段"}
-            seg = segs[ti][idx]
+            seg = segs[idx]
             MIN = 200_000
             new_dur = max(MIN, int(round(seg["duration"] * factor)))
             # 关键帧局部时间随段时长缩放（对齐 OpenCut 时间轴缩放影响动画）
@@ -3062,14 +3115,12 @@ class Api:
     _MASK_TYPES = ("rectangle", "ellipse", "star", "heart", "diamond", "split", "cinematic-bars")
 
     def _seg_ref(self, track_type, track_index, index):
-        if track_type not in self.draft:
+        segs = _track_segs(self.draft, track_type, track_index)
+        if segs is None:
             return None
-        segs = self.draft[track_type]
-        if not isinstance(track_index, int) or track_index < 0 or track_index >= len(segs):
+        if not isinstance(index, int) or index < 0 or index >= len(segs):
             return None
-        if not isinstance(index, int) or index < 0 or index >= len(segs[track_index]):
-            return None
-        return segs[track_index][index]
+        return segs[index]
 
     def _default_mask_params(self, mask_type, params):
         base = {
@@ -3152,12 +3203,9 @@ class Api:
         成功返回 {"ok": True, "seg": 左段, "right": 右段, "at": 切点, "index": 原index}。
         失败返回 {"ok": False, "error": ...}。
         """
-        if track_type not in self.draft:
-            return {"ok": False, "error": f"未知轨道类型：{track_type}"}
-        tracks = self.draft[track_type]
-        if not isinstance(track_index, int) or track_index < 0 or track_index >= len(tracks):
-            return {"ok": False, "error": f"{track_type} 没有第 {track_index} 条轨道（共 {len(tracks)} 条）"}
-        segs = tracks[track_index]
+        segs = _track_segs(self.draft, track_type, track_index)
+        if segs is None:
+            return {"ok": False, "error": f"{track_type} 没有第 {track_index} 条轨道"}
         if not isinstance(index, int) or index < 0 or index >= len(segs):
             return {"ok": False, "error": f"{track_type}[{track_index}] 没有第 {index} 段（共 {len(segs)} 段）"}
         seg = segs[index]
@@ -3233,7 +3281,7 @@ class Api:
         result = self._split_segment_core(track_type, track_index, index, at_time_us)
         if "error" in result:
             return result
-        segs = self.draft[track_type][track_index]
+        segs = _track_segs(self.draft, track_type, track_index)
         segs.pop(result["index"] + 1)  # 删除右段
         # 波纹须在折叠空轨前算（轨道索引稳定配对）
         if ripple:
@@ -3253,7 +3301,7 @@ class Api:
         result = self._split_segment_core(track_type, track_index, index, at_time_us)
         if "error" in result:
             return result
-        segs = self.draft[track_type][track_index]
+        segs = _track_segs(self.draft, track_type, track_index)
         segs.pop(result["index"])  # 删除左段
         _collapse_empty_tracks(self.draft)
         save_state(self.state)
@@ -3274,12 +3322,9 @@ class Api:
         """
         self._reload()
         self._push_undo()
-        if track_type not in self.draft:
-            return {"ok": False, "error": f"未知轨道类型：{track_type}"}
-        from_tracks = self.draft[track_type]
-        if not isinstance(from_track, int) or from_track < 0 or from_track >= len(from_tracks):
+        from_segs = _track_segs(self.draft, track_type, from_track)
+        if from_segs is None:
             return {"ok": False, "error": f"{track_type} 没有第 {from_track} 条轨道"}
-        from_segs = from_tracks[from_track]
         if not isinstance(index, int) or index < 0 or index >= len(from_segs):
             return {"ok": False, "error": f"{track_type}[{from_track}] 没有第 {index} 段"}
         seg = from_segs.pop(index)  # 从源轨取出（不重排源轨，留空档）
@@ -3287,11 +3332,17 @@ class Api:
         # 此时若给了 insert_index 则在指定位置插入（拖到两条轨道中间的空隙），否则追加到末尾。
         if to_track is not None and to_track != -1:
             to_idx = _ensure_track(self.draft, track_type, to_track)
+            to_segs = _track_segs(self.draft, track_type, to_idx)
         elif insert_index is not None:
             to_idx = _insert_track(self.draft, track_type, insert_index)
+            # insert_index 是 overlay/audio 数组下标（不是类型内 ti）——直接定位新建轨
+            if track_type == "audio":
+                to_segs = self.draft["audio"][to_idx]["segs"]
+            else:
+                to_segs = self.draft["overlay"][to_idx]["segs"]
         else:
             to_idx = _ensure_track(self.draft, track_type, -1)
-        to_segs = self.draft[track_type][to_idx]
+            to_segs = _track_segs(self.draft, track_type, to_idx)
         # 精确落点：拖到哪就落在哪；与预览/落点线同源
         start = max(0, int(at_time_us)) if at_time_us is not None else 0
         # 同轨不重叠（2026-08-18）：落点被占用 → 自动推到该轨最近空位（to_segs 不含自身，已从源轨 pop）
@@ -3306,13 +3357,8 @@ class Api:
         # 新轨已有素材，不会被折叠，因此新建轨场景也安全。
         _collapse_empty_tracks(self.draft)
         # 定位被移动片段的真实位置（折叠可能改变了轨道索引）
-        tracks = self.draft[track_type]
-        final_ti, final_idx = to_idx, len(to_segs) - 1
-        for ti in range(len(tracks)):
-            if seg in tracks[ti]:
-                final_ti = ti
-                final_idx = tracks[ti].index(seg)
-                break
+        located = _locate_seg(self.draft, seg)
+        final_ti, final_idx = (located[1], located[2]) if located else (to_idx, len(to_segs) - 1)
         save_state(self.state)
         return {
             "ok": True, "track_type": track_type, "track_index": final_ti,
@@ -3320,158 +3366,160 @@ class Api:
         }
 
     def reorder_overlay(self, layer_key, to_display_index):
-        """重排 overlay 轨 z 序（OpenCut 同款逻辑池，B1 改造 2026-08-18）。
-
-        layer_key: "type:ti"（text/sticker/effect/video>=1 之一，overlay 池成员）
-        to_display_index: 目标显示位（overlay 区下标，0=最顶；主场景/audio 恒固定不参与）
-        把该轨移到目标显示位，其他轨相对顺移。返回 {ok, layer_order}。
-        """
+        """X 模型下 overlay 数组顺序即 z 序——直接移动轨在数组中的位置。
+        layer_key: "type:ti"（text/sticker/effect/video>=1 之一）；to_display_index: overlay 数组目标位。
+        返回 {ok, overlay_count}。"""
         self._reload()
         self._push_undo()
         draft = self.draft
-        order = draft.get("layer_order")
-        if not order:
-            order = _default_layer_order(draft)
-        if layer_key not in order:
-            return {"ok": False, "error": "未知 overlay 轨：%s（layer_order=%s）" % (layer_key, order)}
-        order.remove(layer_key)
-        ins = max(0, min(int(to_display_index or 0), len(order)))
-        order.insert(ins, layer_key)
-        draft["layer_order"] = order
+        overlay = draft.setdefault("overlay", [])
+        target_oi = None
+        if layer_key == "main":
+            return {"ok": False, "error": "主场景不可重排"}
+        parts = layer_key.split(":")
+        if len(parts) != 2:
+            return {"ok": False, "error": f"未知 layer_key：{layer_key}"}
+        ttype, tti = parts[0], int(parts[1])
+        for oi, tr in enumerate(overlay):
+            if tr.get("type") == ttype:
+                tti -= 1
+                if tti < 0:
+                    target_oi = oi
+                    break
+        if target_oi is None:
+            return {"ok": False, "error": f"未知 overlay 轨：{layer_key}"}
+        tr = overlay.pop(target_oi)
+        ins = max(0, min(int(to_display_index or 0), len(overlay)))
+        overlay.insert(ins, tr)
         save_state(self.state)
-        return {"ok": True, "layer_order": order}
+        return {"ok": True, "overlay_count": len(overlay)}
 
     def add_video_track(self, insert_index=None):
-        """新增一条视频覆盖轨。insert_index=None 时追加到最上（主轨之上）；否则插入到指定位置。
+        """新增一条视频覆盖轨。insert_index=None 时插入到最顶（主轨之上）；否则插入到指定位置。
 
         通过「＋轨」按钮显式创建的空轨会标记 persistent_empty，避免立刻被折叠消失。
         """
         self._reload()
         self._push_undo()
-        tracks = self.draft.setdefault("video", [[]])
         if insert_index is None:
-            tracks.append([])
-            idx = len(tracks) - 1
+            idx = _insert_track(self.draft, "video", 0)
         else:
             idx = _insert_track(self.draft, "video", insert_index)
-        _set_track_persistent(self.draft, "video", idx, True)
+        # 返回 video 类型 ti（覆盖轨 ti = overlay video 条数）
+        v_ti = sum(1 for tr in self.draft.get("overlay", []) if tr.get("type") == "video")
+        _set_track_persistent(self.draft, "video", v_ti, True)
         save_state(self.state)
-        return {"ok": True, "track_type": "video", "track_index": idx, "count": len(tracks)}
+        return {"ok": True, "track_type": "video", "track_index": v_ti, "count": v_ti}
 
     def delete_video_track(self, track_index):
         """删除一条视频覆盖轨。主视频轨（index=0）不可删除。"""
         self._reload()
         self._push_undo()
-        tracks = self.draft.setdefault("video", [[]])
         if track_index == 0:
             return {"ok": False, "error": "主视频轨不可删除"}
-        if not isinstance(track_index, int) or track_index < 0 or track_index >= len(tracks):
-            return {"ok": False, "error": f"video 没有第 {track_index} 条轨道（共 {len(tracks)} 条）"}
-        tracks.pop(track_index)
-        _remove_track_meta(self.draft, "video", track_index)
-        save_state(self.state)
-        return {"ok": True, "track_type": "video", "track_index": track_index, "count": len(tracks)}
+        overlay = self.draft.setdefault("overlay", [])
+        v_ti = int(track_index) - 1  # video ti → overlay video 第 (ti-1) 条
+        cnt = 0
+        for oi, tr in enumerate(overlay):
+            if tr.get("type") == "video":
+                if cnt == v_ti:
+                    overlay.pop(oi)
+                    _remove_track_meta(self.draft, "video", track_index)
+                    save_state(self.state)
+                    return {"ok": True, "track_type": "video", "track_index": track_index, "count": len(overlay)}
+                cnt += 1
+        return {"ok": False, "error": f"video 没有第 {track_index} 条覆盖轨"}
 
     def add_audio_track(self, insert_index=None):
         """新增一条音频轨。insert_index=None 时追加到最下；否则插入到指定位置。"""
         self._reload()
         self._push_undo()
-        tracks = self.draft.setdefault("audio", [[]])
+        audio = self.draft.setdefault("audio", [{"segs": []}])
         if insert_index is None:
-            tracks.append([])
-            idx = len(tracks) - 1
+            audio.append({"segs": []})
+            idx = len(audio) - 1
         else:
             idx = _insert_track(self.draft, "audio", insert_index)
         _set_track_persistent(self.draft, "audio", idx, True)
         save_state(self.state)
-        return {"ok": True, "track_type": "audio", "track_index": idx, "count": len(tracks)}
+        return {"ok": True, "track_type": "audio", "track_index": idx, "count": len(audio)}
 
     def delete_audio_track(self, track_index):
         """删除一条音频轨。"""
         self._reload()
         self._push_undo()
-        tracks = self.draft.setdefault("audio", [[]])
-        if not isinstance(track_index, int) or track_index < 0 or track_index >= len(tracks):
-            return {"ok": False, "error": f"audio 没有第 {track_index} 条轨道（共 {len(tracks)} 条）"}
-        tracks.pop(track_index)
+        audio = self.draft.setdefault("audio", [{"segs": []}])
+        if not isinstance(track_index, int) or track_index < 0 or track_index >= len(audio):
+            return {"ok": False, "error": f"audio 没有第 {track_index} 条轨道（共 {len(audio)} 条）"}
+        audio.pop(track_index)
         _remove_track_meta(self.draft, "audio", track_index)
         save_state(self.state)
-        return {"ok": True, "track_type": "audio", "track_index": track_index, "count": len(tracks)}
+        return {"ok": True, "track_type": "audio", "track_index": track_index, "count": len(audio)}
 
     def add_text_track(self, insert_index=None):
-        """新增一条文本轨（字幕/贴纸/画中画文字多用，支持多轨堆叠）。"""
+        """新增一条文本轨（字幕/贴纸/画中画文字多用，支持多轨堆叠）。默认插到 overlay 最顶。"""
         self._reload()
         self._push_undo()
-        tracks = self.draft.setdefault("text", [[]])
         if insert_index is None:
-            tracks.append([])
-            idx = len(tracks) - 1
+            idx = _insert_track(self.draft, "text", 0)
         else:
             idx = _insert_track(self.draft, "text", insert_index)
         _set_track_persistent(self.draft, "text", idx, True)
         save_state(self.state)
-        return {"ok": True, "track_type": "text", "track_index": idx, "count": len(tracks)}
+        return {"ok": True, "track_type": "text", "track_index": idx, "count": len(self.draft.get("overlay", []))}
 
     def delete_text_track(self, track_index):
-        """删除一条文本轨。文本无主锚点，任意轨可删；删空则保留 [[]] 维持不变量。"""
+        """删除一条文本轨。文本无主锚点，任意轨可删。"""
         self._reload()
         self._push_undo()
-        tracks = self.draft.setdefault("text", [[]])
-        if not isinstance(track_index, int) or track_index < 0 or track_index >= len(tracks):
-            return {"ok": False, "error": f"text 没有第 {track_index} 条轨道（共 {len(tracks)} 条）"}
-        tracks.pop(track_index)
-        _remove_track_meta(self.draft, "text", track_index)
-        if len(tracks) == 0:
-            tracks.append([])  # 保持 list-of-list 不变量，避免后续渲染/导出崩溃
-        save_state(self.state)
-        return {"ok": True, "track_type": "text", "track_index": track_index, "count": len(tracks)}
+        overlay = self.draft.setdefault("overlay", [])
+        cnt = 0
+        for oi, tr in enumerate(overlay):
+            if tr.get("type") == "text":
+                if cnt == track_index:
+                    overlay.pop(oi)
+                    _remove_track_meta(self.draft, "text", track_index)
+                    save_state(self.state)
+                    return {"ok": True, "track_type": "text", "track_index": track_index, "count": len(overlay)}
+                cnt += 1
+        return {"ok": False, "error": f"text 没有第 {track_index} 条轨道"}
 
     # ---- 贴纸轨（本地透明 PNG/WebP 叠加；离线可用，不依赖网络贴纸库）----
 
     def _ensure_sticker_track(self, track_index):
-        """确保 sticker 轨存在并返回 (tracks, idx)。track_index=None 用 sticker[0]。"""
-        tracks = self.draft.setdefault("sticker", [[]])
-        if not tracks:
-            tracks.append([])
+        """确保 sticker 轨存在并返回 (segs, idx)。track_index=None 用第 0 条。"""
         if track_index is None:
-            idx = 0
-        else:
-            while len(tracks) <= track_index:
-                tracks.append([])
-            idx = track_index
-        return tracks, idx
+            track_index = 0
+        segs = _track_segs(self.draft, "sticker", track_index, ensure=True)
+        return segs, track_index
 
     def add_sticker_track(self, insert_index=None):
-        """新增一条贴纸轨（叠加在最上层，盖住视频/文本之下）。"""
+        """新增一条贴纸轨（叠加在最上层，盖住视频/文本之下）。默认插到 overlay 最顶。"""
         self._reload()
         self._push_undo()
-        tracks = self.draft.setdefault("sticker", [[]])
         if insert_index is None:
-            # 若只有初始化占位的空轨，则复用它作为第一条真实贴纸轨（index 0），否则追加新轨
-            if len(tracks) == 1 and not tracks[0]:
-                idx = 0
-            else:
-                tracks.append([])
-                idx = len(tracks) - 1
+            idx = _insert_track(self.draft, "sticker", 0)
         else:
             idx = _insert_track(self.draft, "sticker", insert_index)
         _set_track_persistent(self.draft, "sticker", idx, True)
         save_state(self.state)
-        return {"ok": True, "track_type": "sticker", "track_index": idx, "count": len(tracks)}
+        return {"ok": True, "track_type": "sticker", "track_index": idx, "count": len(self.draft.get("overlay", []))}
 
     def delete_sticker_track(self, track_index):
-        """删除一条贴纸轨。删空则保留 [[]] 维持不变量。"""
+        """删除一条贴纸轨。"""
         self._reload()
         self._push_undo()
-        tracks = self.draft.setdefault("sticker", [[]])
-        if not isinstance(track_index, int) or track_index < 0 or track_index >= len(tracks):
-            return {"ok": False, "error": f"sticker 没有第 {track_index} 条轨道（共 {len(tracks)} 条）"}
-        tracks.pop(track_index)
-        _remove_track_meta(self.draft, "sticker", track_index)
-        if len(tracks) == 0:
-            tracks.append([])
-        save_state(self.state)
-        return {"ok": True, "track_type": "sticker", "track_index": track_index, "count": len(tracks)}
+        overlay = self.draft.setdefault("overlay", [])
+        cnt = 0
+        for oi, tr in enumerate(overlay):
+            if tr.get("type") == "sticker":
+                if cnt == track_index:
+                    overlay.pop(oi)
+                    _remove_track_meta(self.draft, "sticker", track_index)
+                    save_state(self.state)
+                    return {"ok": True, "track_type": "sticker", "track_index": track_index, "count": len(overlay)}
+                cnt += 1
+        return {"ok": False, "error": f"sticker 没有第 {track_index} 条轨道"}
 
     def add_sticker(self, track_index, path, start_us, duration_us, transform=None, name=None):
         """把一张本地透明图片（PNG/WebP 等）作为贴纸段加到贴纸轨。
@@ -3505,7 +3553,7 @@ class Api:
                 natural_w, natural_h = im.size
         except Exception:
             pass
-        tracks, idx = self._ensure_sticker_track(track_index)
+        segs, idx = self._ensure_sticker_track(track_index)
         tf = dict(DEFAULT_STICKER_TRANSFORM)
         if isinstance(transform, dict):
             for k in ("x", "y", "scale", "rotation", "opacity", "flipH", "flipV"):
@@ -3527,10 +3575,10 @@ class Api:
             "animations": {},
             "masks": [],
         }
-        tracks[idx].append(seg)
+        segs.append(seg)
         _ensure_seg_ids(self.draft)
         save_state(self.state)
-        return {"ok": True, "track_index": idx, "index": len(tracks[idx]) - 1}
+        return {"ok": True, "track_index": idx, "index": len(segs) - 1}
 
     def update_sticker(self, track_type, track_index, index, patch):
         """更新贴纸段：patch 可含 name，或 transform 子字段（x/y/scale/rotation/opacity/flipH/flipV），
@@ -3559,17 +3607,11 @@ class Api:
     # ---- 特效轨（Effect Track：Effect DSL 节点，预览=导出同源）----
 
     def _ensure_effect_track(self, track_index):
-        """确保 effect 轨存在并返回 (tracks, idx)。track_index=None 用 effect[0]。"""
-        tracks = self.draft.setdefault("effect", [[]])
-        if not tracks:
-            tracks.append([])
+        """确保 effect 轨存在并返回 (segs, idx)。track_index=None 用第 0 条。"""
         if track_index is None:
-            idx = 0
-        else:
-            while len(tracks) <= track_index:
-                tracks.append([])
-            idx = track_index
-        return tracks, idx
+            track_index = 0
+        segs = _track_segs(self.draft, "effect", track_index, ensure=True)
+        return segs, track_index
 
     def get_effect_registry(self):
         """返回特效注册表（EFFECT_META）供前端渲染特效库与参数面板。
@@ -3607,11 +3649,12 @@ class Api:
         self._reload()
         self._push_undo()
         if insert_index is not None:
-            # 拖到空白：在指定显示位插入一条新特效轨接住（与前端 computeDrop/dataInsertIndex 同源）
+            # 拖到空白：在指定显示位插入一条新特效轨接住（与前端 computeDrop/insertIndex 同源）
             idx = _insert_track(self.draft, "effect", insert_index)
-            tracks = self.draft["effect"]
+            idx = sum(1 for tr in self.draft.get("overlay", []) if tr.get("type") == "effect") - 1
+            segs = _track_segs(self.draft, "effect", idx)
         else:
-            tracks, idx = self._ensure_effect_track(track_index)
+            segs, idx = self._ensure_effect_track(track_index)
         seg = {
             "id": "effect_" + uuid.uuid4().hex[:12],
             "type": "effect",
@@ -3626,10 +3669,10 @@ class Api:
             "hidden": False,
             "name": name or effect_type,
         }
-        tracks[idx].append(seg)
+        segs.append(seg)
         _ensure_seg_ids(self.draft)
         save_state(self.state)
-        return {"ok": True, "track_index": idx, "index": len(tracks[idx]) - 1, "id": seg["id"]}
+        return {"ok": True, "track_index": idx, "index": len(segs) - 1, "id": seg["id"]}
 
     def update_effect(self, track_index, index, patch=None, **kw):
         """更新特效段：patch 或 kwargs 可含 effect_type/target/params(合并)/keyframes/
@@ -3696,17 +3739,11 @@ class Api:
     }
 
     def _ensure_text_track(self, track_index):
-        """确保 text 轨存在并返回 (tracks, idx)。track_index=None 用 text[0]。"""
-        tracks = self.draft.setdefault("text", [[]])
-        if not tracks:
-            tracks.append([])
+        """确保 text 轨存在并返回 (segs, idx)。track_index=None 用第 0 条。"""
         if track_index is None:
-            idx = 0
-        else:
-            while len(tracks) <= track_index:
-                tracks.append([])
-            idx = track_index
-        return tracks, idx
+            track_index = 0
+        segs = _track_segs(self.draft, "text", track_index, ensure=True)
+        return segs, track_index
 
     def _build_sub_seg(self, cue, style):
         """把一个 cue（秒为单位）转成 text 段。"""
@@ -3753,7 +3790,7 @@ class Api:
             segs.append(self._build_sub_seg(c, style))
         if not segs:
             return {"ok": False, "error": "没有有效字幕文本"}
-        tracks[idx].extend(segs)
+        tracks.extend(segs)
         _ensure_seg_ids(self.draft)
         save_state(self.state)
         return {"ok": True, "track_index": idx, "count": len(segs)}
@@ -3902,11 +3939,7 @@ class Api:
         或 {"ok": False, "error": 原因}。
         """
         self._reload()
-        has_any = any(
-            seg for k in ("video", "audio", "text", "sticker")
-            for track in self.draft.get(k, [])
-            for seg in track
-        )
+        has_any = any(True for _ in _iter_all_segs(self.draft))
         if not has_any:
             return {"ok": False, "error": "草稿还是空的，先双击素材进轨"}
         folder = folder or ""
@@ -3937,28 +3970,34 @@ class Api:
 
             ok_count = 0
             skipped = []
-            # 视频轨：按 our_video[0]（主/底）→ our_video[-1]（最上）顺序 append，
-            # pyJianYingDraft 每次 append 都加在当前最上层，因此顺序正确。
-            video_track_names = []
-            for i, _ in enumerate(self.draft.get("video", [])):
-                tname = f"video_{i}"
-                script.append_track(TrackSpec(TrackType.video, name=tname))
-                video_track_names.append(tname)
-            # 音频轨：同理，多条音轨混音
+            overlay = self.draft.get("overlay", [])
+            main_tr = self.draft.get("main")
+            main_segs = main_tr.get("segs", []) if isinstance(main_tr, dict) else []
+            # 视频轨：main（video_0，最底）→ overlay video 覆盖轨按 overlay 顺序 append（越晚越靠上）
+            video_track_names = ["video_0"]
+            script.append_track(TrackSpec(TrackType.video, name="video_0"))
+            v_cnt = 0
+            video_overlay_idx = {}   # overlay 下标 → tname
+            for oi, tr in enumerate(overlay):
+                if tr.get("type") == "video":
+                    v_cnt += 1
+                    tname = f"video_{v_cnt}"
+                    script.append_track(TrackSpec(TrackType.video, name=tname))
+                    video_track_names.append(tname)
+                    video_overlay_idx[oi] = tname
+            # 音频轨：多条音轨混音
             audio_track_names = []
             for i, _ in enumerate(self.draft.get("audio", [])):
                 tname = f"audio_{i}"
                 script.append_track(TrackSpec(TrackType.audio, name=tname))
                 audio_track_names.append(tname)
-            # 贴纸轨：分两类导出（对齐我们离线贴纸模型）
-            #  - 本地图片贴纸（有 path）：放叠加 video 轨，用 VideoSegment + ClipSettings 还原位置/缩放/旋转/透明度/翻转
-            #  - 导入的剪映贴纸（有 resource_id，无 path）：放 sticker 轨，用 StickerSegment
-            # 两类各自建轨，互不干扰；放在音频之后、文本之前 → 预览 z 序一致（文本在最上）。
-            for ti, segs in enumerate(self.draft.get("sticker", [])):
+            # 贴纸轨（overlay sticker）：分两类导出（本地图片→叠加 video 轨；剪映贴纸→sticker 轨）
+            sticker_ov = [(oi, tr.get("segs", [])) for oi, tr in enumerate(overlay) if tr.get("type") == "sticker"]
+            for si, (oi, segs) in enumerate(sticker_ov):
                 path_segs = [s for s in segs if s.get("path") and os.path.isfile(s["path"])]
                 res_segs = [s for s in segs if not s.get("path") and s.get("resource_id")]
                 if path_segs:
-                    tname = f"sticker_img_{ti}"
+                    tname = f"sticker_img_{si}"
                     script.append_track(TrackSpec(TrackType.video, name=tname))
                     for seg in path_segs:
                         try:
@@ -3977,7 +4016,7 @@ class Api:
                         except Exception as e:
                             skipped.append({"name": seg["name"], "reason": str(e)})
                 if res_segs:
-                    tname = f"sticker_res_{ti}"
+                    tname = f"sticker_res_{si}"
                     script.append_track(TrackSpec(TrackType.sticker, name=tname))
                     for seg in res_segs:
                         try:
@@ -3988,16 +4027,18 @@ class Api:
                             ok_count += 1
                         except Exception as e:
                             skipped.append({"name": seg["name"], "reason": str(e)})
-            # 文本轨：按实际轨道数建轨（多轨字幕/花字）
-            text_track_names = []
-            for i, _ in enumerate(self.draft.get("text", [])):
-                tname = f"text_{i}"
-                script.append_track(TrackSpec(TrackType.text, name=tname))
-                text_track_names.append(tname)
+            # 文本轨（overlay text）
+            text_track_names = {}
+            for oi, tr in enumerate(overlay):
+                if tr.get("type") == "text":
+                    tname = f"text_{oi}"
+                    script.append_track(TrackSpec(TrackType.text, name=tname))
+                    text_track_names[oi] = tname
 
-            # 视频 + 图片
-            for ti, segs in enumerate(self.draft.get("video", [])):
-                tname = video_track_names[ti]
+            # 视频 + 图片：main → video_0；overlay video → 各自 tname
+            for tname, segs in [("video_0", main_segs)] + [(video_overlay_idx[oi], tr.get("segs", []))
+                                                            for oi, tr in enumerate(overlay) if oi in video_overlay_idx]:
+                ti = video_track_names.index(tname)
                 v_meta = self._track_meta("video", ti, ensure=False)
                 if v_meta.get("hidden"):
                     continue  # 隐藏的视频轨：预览和导出都不渲染
@@ -4036,8 +4077,11 @@ class Api:
                         skipped.append({"name": seg["name"], "reason": "同轨片段重叠，请拖到其它轨：" + str(e)})
                     except Exception as e:
                         skipped.append({"name": seg["name"], "reason": str(e)})
-            # 音频
-            for ti, segs in enumerate(self.draft.get("audio", [])):
+            # 音频（dict 列表）
+            for ti, a in enumerate(self.draft.get("audio", [])):
+                if not isinstance(a, dict):
+                    continue
+                segs = a.get("segs", [])
                 tname = audio_track_names[ti]
                 a_meta = self._track_meta("audio", ti, ensure=False)
                 if a_meta.get("muted"):
@@ -4066,12 +4110,15 @@ class Api:
                         skipped.append({"name": seg["name"], "reason": "同轨音频重叠，请拖到其它轨：" + str(e)})
                     except Exception as e:
                         skipped.append({"name": seg["name"], "reason": str(e)})
-            # 文本
-            for ti, segs in enumerate(self.draft.get("text", [])):
-                if ti >= len(text_track_names):
-                    continue  # 防御：轨比实际列表少
-                tname = text_track_names[ti]
-                tx_meta = self._track_meta("text", ti, ensure=False)
+            # 文本（overlay text）
+            for oi, tr in enumerate(overlay):
+                if tr.get("type") != "text":
+                    continue
+                if oi not in text_track_names:
+                    continue
+                tname = text_track_names[oi]
+                segs = tr.get("segs", [])
+                tx_meta = self._track_meta("text", oi, ensure=False)
                 if tx_meta.get("hidden"):
                     continue  # 隐藏的文本轨：预览和导出都不渲染
                 for seg in segs:
