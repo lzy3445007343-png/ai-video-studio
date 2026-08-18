@@ -657,6 +657,70 @@ def _distribute_to_tracks(segments):
     return tracks
 
 
+def _migrate_old_to_x(old):
+    """旧结构草稿（video/audio/text/effect/sticker 分类型数组 + layer_order）→ X 结构（overlay/main/audio）。
+
+    2026-08-19 关键修复：多进程竞争（窗口程序旧版 vs MCP 新版）时，新代码读到旧结构草稿
+    若直接返回空，save_state 会把空草稿覆盖写盘 = 「草稿清道夫」（用户素材莫名消失/放不进的根因）。
+    改为静默迁移：数据全部保留，结构升级，任何版本的进程读写都不丢数据。
+
+    顺序：text→sticker→effect→video 覆盖(倒序)→main→audio（旧 buildTracks 默认序）；
+    有 layer_order 则按它重排 overlay（保留用户重排过的 z 序）。
+    """
+    out = {
+        "overlay": [], "main": {"segs": []}, "audio": [],
+        "canvas": old.get("canvas", {"ratio": DEFAULT_CANVAS, "locked": False}),
+        "_track_meta": {"overlay": [], "main": {}, "audio": []},
+    }
+    om = old.get("_track_meta", {}) or {}
+    # 1) 收集有素材的 overlay 轨（默认序）
+    order_keys = []
+    for t in ("text", "sticker", "effect"):
+        for i, segs in enumerate(old.get(t, []) or []):
+            if segs:
+                order_keys.append((t, i))
+    v = old.get("video", [[]]) or [[]]
+    for i in range(len(v) - 1, 0, -1):
+        if v[i]:
+            order_keys.append(("video", i))
+    # 2) 有 layer_order 则按它重排（保用户 z 序）
+    lo = old.get("layer_order") or []
+    if lo:
+        by_key = {"%s:%d" % (t, i): (t, i) for t, i in order_keys}
+        ordered, seen = [], set()
+        for k in lo:
+            if k in by_key and k not in seen:
+                ordered.append(by_key[k]); seen.add(k)
+        for t, i in order_keys:
+            k = "%s:%d" % (t, i)
+            if k not in seen:
+                ordered.append((t, i)); seen.add(k)
+        order_keys = ordered
+    # 3) 建 overlay + meta
+    o_meta = []
+    for t, i in order_keys:
+        segs = (old.get(t, [[]]) or [[]])[i] if t != "video" else v[i]
+        out["overlay"].append({"type": t, "segs": segs})
+        tmeta = om.get(t, []) or []
+        o_meta.append(tmeta[i] if i < len(tmeta) else {})
+    out["_track_meta"]["overlay"] = o_meta
+    # 4) main（video[0]）
+    main_segs = v[0] if v else []
+    out["main"] = {"segs": main_segs}
+    vmeta = om.get("video", []) or []
+    out["_track_meta"]["main"] = vmeta[0] if vmeta else {}
+    # 5) audio
+    a_meta = []
+    for i, segs in enumerate(old.get("audio", []) or []):
+        out["audio"].append({"segs": segs})
+        ameta = om.get("audio", []) or []
+        a_meta.append(ameta[i] if i < len(ameta) else {})
+    if not out["audio"]:
+        out["audio"] = [{"segs": []}]; a_meta = [{}]
+    out["_track_meta"]["audio"] = a_meta
+    return out
+
+
 def load_state():
     """读取 draft_state.json。不存在/损坏返回空草稿。
 
@@ -686,9 +750,13 @@ def load_state():
         s.setdefault("materials", [])
         s.setdefault("draft", {})
         draft = s["draft"]
-        # 旧结构草稿（无 overlay 字段）→ 直接作废返回空（2026-08-18 用户拍板：旧草稿全删）
+        # 旧结构草稿（无 overlay 字段）→ 静默迁移到 X 结构（数据保留）。
+        # 2026-08-19 关键修复：原来「直接返回空」在多进程竞争（旧窗口程序 vs 新 MCP 进程）下
+        # 会变成草稿清道夫——新代码读到旧结构就清空覆盖，用户素材莫名消失/放不进。
         if "overlay" not in draft or "main" not in draft:
-            return empty
+            migrated = _migrate_old_to_x(draft)
+            s["draft"] = migrated
+            draft = migrated
         s.setdefault("version", 0)
         if isinstance(s["materials"], dict):
             s["materials"] = list(s["materials"].values()) if s["materials"] else []
