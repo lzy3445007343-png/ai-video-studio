@@ -921,15 +921,23 @@ function renderEffectLibrary(s, box) {
   }
 }
 // 从特效库点卡片：有选中媒体段 → 绑定该段(clip)；否则整段调整层(adjustment)。建段后选中并打开参数面板。
-function addEffectFromLibrary(type) {
-  const sel = selectedSeg();
+// drop(可选)：拖放落点 {trackIndex, atTimeUs}——来自时间轴拖入；不传=点击卡片(走选中段/调整层)
+function addEffectFromLibrary(type, drop) {
   let target = { type: "adjustment" };
-  if (sel && (sel.type === "video" || sel.type === "image" || sel.type === "audio" || sel.type === "sticker")) {
-    const k = (Store.state.selectedKey || "").split(":");
-    const ti = parseInt(k[1]), si = parseInt(k[2]);
-    if (!isNaN(ti) && !isNaN(si)) target = { type: "clip", track: ti, ti: ti, si: si };
+  let trackIndex = 0;
+  let startUs = 0;
+  if (drop) {
+    if (typeof drop.trackIndex === "number") trackIndex = drop.trackIndex;
+    if (typeof drop.atTimeUs === "number") startUs = drop.atTimeUs;
+  } else {
+    const sel = selectedSeg();
+    if (sel && (sel.type === "video" || sel.type === "image" || sel.type === "audio" || sel.type === "sticker")) {
+      const k = (Store.state.selectedKey || "").split(":");
+      const ti = parseInt(k[1]), si = parseInt(k[2]);
+      if (!isNaN(ti) && !isNaN(si)) target = { type: "clip", track: ti, ti: ti, si: si };
+    }
   }
-  call("add_effect", 0, type, target).then(r => {
+  call("add_effect", trackIndex, type, target, startUs).then(r => {
     if (r && r.ok) { refresh(); selectKey("effect:" + r.track_index + ":" + r.index); showToolTab("effects"); }
     else alert("添加特效失败：" + (r && r.error ? r.error : "未知"));
   });
@@ -2026,8 +2034,16 @@ function onTimelineDrop(e) {
     // 兜底：部分 webview 在 drop 时 getData 取不到，用拖拽时缓存的 payload
     try { data = JSON.parse(dragGhostData && dragGhostData.payload || "{}"); } catch (_) {}
   }
-  // 特效拖入：新建调整层 / 绑定选中段（与点击行为一致）
-  if (data && data.kind === "effect") { addEffectFromLibrary(data.type); return; }
+  // 特效拖入：尊重落点（Y→特效轨索引，X→起始时间）；落特效轨=调整层，未命中特效轨也建调整层于特效轨
+  if (data && data.kind === "effect") {
+    const rect = $("tlScroll").getBoundingClientRect();
+    const atTimeUs = Math.max(0, Math.round((e.clientX - rect.left + $("tlScroll").scrollLeft) / pps() * 1e6));
+    const effTr = trackUnderY(e.clientY, "effect");
+    const drop = { atTimeUs };
+    if (effTr) drop.trackIndex = effTr.ti;   // 拖到哪条特效轨就落在哪条
+    addEffectFromLibrary(data.type, drop);
+    return;
+  }
   if (!data || !data.path) return;
   const wantType = data.type === "audio" ? "audio" : (data.type === "text" ? "text" : "video");
   const rect = $("tlScroll").getBoundingClientRect();
@@ -2547,7 +2563,7 @@ function bindEvents() {
     e.preventDefault(); e.dataTransfer.dropEffect = "copy";
     let d = null; if (dragGhostData && dragGhostData.payload) { try { d = JSON.parse(dragGhostData.payload); } catch (_) {} }
     const isEffect = d && d.kind === "effect";
-    const wantType = dragTrackType();
+    const wantType = isEffect ? "effect" : dragTrackType();
     const contentRect = $("tlContent").getBoundingClientRect();
     // 类型不兼容：命中的轨道显禁用态（红），提示此处放不进去；特效可放任意处，不做禁用
     const rawTr = trackUnderY(e.clientY, null);
@@ -2558,7 +2574,7 @@ function bindEvents() {
       return;
     }
     const tr = trackUnderY(e.clientY, wantType);
-    const isNewTrack = !tr;
+    const isNewTrack = !tr && !isEffect;   // 特效不新建轨，无落点时不提示「新建轨道」
     showDropPreview(tr ? tr.el : null, e.clientX - contentRect.left, isNewTrack);
   });
   $("timeline").addEventListener("dragleave", e => {

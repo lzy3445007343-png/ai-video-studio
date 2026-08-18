@@ -81,9 +81,11 @@ function buildTracks() {
     if (st[i] && st[i].length > 0) out.push({ type: "sticker", ti: i, label: "贴纸轨" + (i + 1), segs: st[i] });
   }
   // 特效轨：显示在贴纸轨之下、视频轨之上（特效是盖在素材上的图层，时间轴顺序与预览 z 序一致：文本>贴纸>特效>视频）
+  // 恒显示（至少第 0 轨）：否则空轨时不渲染特效轨 DOM，用户既看不到也拖不进特效
   const ef = d.effect || [];
-  for (let i = 0; i < ef.length; i++) {
-    if (ef[i] && ef[i].length > 0) out.push({ type: "effect", ti: i, label: "特效轨" + (i + 1), segs: ef[i] });
+  const efLanes = ef.length || 1;
+  for (let i = 0; i < efLanes; i++) {
+    out.push({ type: "effect", ti: i, label: "特效轨" + (i + 1), segs: ef[i] || [] });
   }
   const v = d.video || [];
   // 先叠加轨(i>0，仅非空显示，高索引在上)，再主轨(i=0，恒显示)
