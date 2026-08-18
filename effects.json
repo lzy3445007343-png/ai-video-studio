@@ -1,0 +1,104 @@
+{
+  "_note": "特效注册表（单一真源）：在这里新增/修改特效后，main.py 启动时自动加载，前端面板与后端导出同步更新。preview 适配器目前仍需在 effects.js 镜像；ffmpeg 适配器由本文件模板生成。",
+  "effects": {
+    "blur": {
+      "label": "模糊",
+      "category": "adjust",
+      "params": {
+        "radius": {"label": "半径", "unit": "px", "default": 0, "min": 0, "max": 50, "step": 0.5, "note": "0=无效果，建议 2~15"}
+      },
+      "filters": {
+        "css": {"expr": "blur({radius}px)", "when": "radius > 0"},
+        "ffmpeg": {"expr": "gblur=sigma={radius}", "when": "radius > 0"}
+      }
+    },
+    "brightness": {
+      "label": "亮度",
+      "category": "adjust",
+      "params": {
+        "value": {"label": "倍数", "unit": "x", "default": 1, "min": 0, "max": 3, "step": 0.05, "note": "1=原样，0=全黑，>1 更亮"}
+      },
+      "filters": {
+        "css": {"expr": "brightness({value})", "when": "value != 1"},
+        "ffmpeg": {"expr": "eq=brightness={value}", "when": "value != 1"}
+      }
+    },
+    "contrast": {
+      "label": "对比度",
+      "category": "adjust",
+      "params": {
+        "value": {"label": "倍数", "unit": "x", "default": 1, "min": 0, "max": 3, "step": 0.05, "note": "1=原样"}
+      },
+      "filters": {
+        "css": {"expr": "contrast({value})", "when": "value != 1"},
+        "ffmpeg": {"expr": "eq=contrast={value}", "when": "value != 1"}
+      }
+    },
+    "saturate": {
+      "label": "饱和度",
+      "category": "adjust",
+      "params": {
+        "value": {"label": "倍数", "unit": "x", "default": 1, "min": 0, "max": 3, "step": 0.05, "note": "1=原样，0=黑白"}
+      },
+      "filters": {
+        "css": {"expr": "saturate({value})", "when": "value != 1"},
+        "ffmpeg": {"expr": "eq=saturation={value}", "when": "value != 1"}
+      }
+    },
+    "hue_rotate": {
+      "label": "色相",
+      "category": "adjust",
+      "params": {
+        "value": {"label": "角度", "unit": "deg", "default": 0, "min": 0, "max": 360, "step": 1, "note": "0=原样"}
+      },
+      "filters": {
+        "css": {"expr": "hue-rotate({value}deg)", "when": "value != 0"},
+        "ffmpeg": {"expr": "hue={value}", "when": "value != 0"}
+      }
+    },
+    "grayscale": {
+      "label": "灰度",
+      "category": "adjust",
+      "params": {
+        "value": {"label": "强度", "unit": "0~1", "default": 0, "min": 0, "max": 1, "step": 0.01, "note": "1=全灰"}
+      },
+      "filters": {
+        "css": {"expr": "grayscale({value})", "when": "value != 0"},
+        "ffmpeg": {"expr": "colorchannelmixer=rr=0.3:gg=0.59:bb=0.11:aa=1", "when": "value != 0"}
+      }
+    },
+    "sepia": {
+      "label": "复古",
+      "category": "adjust",
+      "params": {
+        "value": {"label": "强度", "unit": "0~1", "default": 0, "min": 0, "max": 1, "step": 0.01, "note": "1=全棕"}
+      },
+      "filters": {
+        "css": {"expr": "sepia({value})", "when": "value != 0"},
+        "ffmpeg": {"expr": "colorchannelmixer=rr=0.393:rg=0.769:rb=0.189:gr=0.349:gg=0.686:gb=0.168:br=0.272:bg=0.131:bb=0.131", "when": "value != 0"}
+      }
+    },
+    "invert": {
+      "label": "反相",
+      "category": "adjust",
+      "params": {
+        "value": {"label": "强度", "unit": "0~1", "default": 0, "min": 0, "max": 1, "step": 0.01, "note": "1=反色"}
+      },
+      "filters": {
+        "css": {"expr": "invert({value})", "when": "value != 0"},
+        "ffmpeg": {"expr": "negate", "when": "value != 0"}
+      }
+    },
+    "opacity": {
+      "label": "不透明度",
+      "category": "adjust",
+      "params": {
+        "value": {"label": "透明度", "unit": "0~1", "default": 1, "min": 0, "max": 1, "step": 0.01, "note": "配合 keyframes 做渐入/渐出"}
+      },
+      "filters": {
+        "css": {"expr": "opacity:{value}", "when": "value != 1"},
+        "ffmpeg": {"expr": "format=rgba,colorchannelmixer=aa={value}", "when": "value != 1"}
+      }
+    }
+  }
+}
