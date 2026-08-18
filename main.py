@@ -2303,6 +2303,17 @@ class Api:
         同轨重叠自动避让：若落点被占用，自动推到该轨最近空位（不新建轨、不重叠）。
         返回登记结果（track_type/track_index/该轨段数/总段数/时长/start）。
         """
+        # 2026-08-19：整体 try/except——静默失败（pywebview 桥 promise 永不返回）是"素材放不进"体感根因，
+        # 任何异常都必须变成可见的 {ok:false, error}，让前端 alert/日志能定位。
+        try:
+            return self._add_to_timeline_impl(name, path, mtype, track_index, at_time_us, insert_index)
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            return {"ok": False, "error": "add_to_timeline 异常: %s" % e}
+
+    def _add_to_timeline_impl(self, name, path, mtype, track_index=None, at_time_us=None, insert_index=None):
+        """add_to_timeline 真实实现（被 try/except 包裹）。"""
         self._reload()
         # 严重坑：path 不存在（AI 传了假路径/文件名）就直接进轨，导出剪映时 VideoSegment(None) 抛异常整段失败。
         # 进轨前必须校验文件真实存在，否则明确报错，避免把脏数据带进导出环节。

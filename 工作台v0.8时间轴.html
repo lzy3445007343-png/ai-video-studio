@@ -1872,17 +1872,19 @@ function onPointerUp() {
         });
       } else {
         const crossTrack = (d.targetKind !== "existing") || (d.targetDataTi !== d.ti);
+        // 2026-08-19：所有提交 call 加 failHandler（reject 打日志）——静默失败是"拖了没反应"体感根因
+        const mvFail = (err) => console.error("[move-call-fail]", d.key, err);
         if (d.targetKind === "new") {
           // 新建轨接住（视频→最顶覆盖轨，音频/文本/特效→按 displayIndex 归位，同源一致）
           call("relocate_segment", d.type, d.ti, d.idx, -1, Math.round(d.curLeftUs), d.dataInsertIndex, d.segId)
-            .then(() => { selectKey(null); refresh(); });
+            .then(() => { selectKey(null); refresh(); }, mvFail);
         } else if (d.targetDataTi === d.ti) {
-          call("move_segment", d.type, d.ti, d.idx, Math.round(d.curLeftUs), Store.state.rippleOn, d.segId).then(refresh);
+          call("move_segment", d.type, d.ti, d.idx, Math.round(d.curLeftUs), Store.state.rippleOn, d.segId).then(refresh, mvFail);
         } else if (crossTrack) {
           call("relocate_segment", d.type, d.ti, d.idx, d.targetDataTi, Math.round(d.curLeftUs), null, d.segId)
-            .then(() => { selectKey(null); refresh(); });
+            .then(() => { selectKey(null); refresh(); }, mvFail);
         } else {
-          call("move_segment", d.type, d.ti, d.idx, Math.round(d.curLeftUs), Store.state.rippleOn, d.segId).then(refresh);
+          call("move_segment", d.type, d.ti, d.idx, Math.round(d.curLeftUs), Store.state.rippleOn, d.segId).then(refresh, mvFail);
         }
       }
     } else {
@@ -2154,14 +2156,17 @@ function onTimelineDrop(e) {
   console.log("[drop-media] type=" + wantType + " drop=", drop, "at", atTimeUs);
   // 库拖入落位后自动滚到素材实际落位（2026-08-18 修：避让后落到末尾，用 r.start 而非 atTimeUs）
   // 2026-08-18 修：r.ok=false 必须 alert 错误——否则失败静默，用户以为"没放进去"（MP4 放不进体感根因）
+  // 2026-08-19：成功/失败都打日志 + call reject 打日志——静默失败（promise 不 resolve/reject）必须有痕可查
   const okHandler = (r) => {
+    console.log("[add-result] ok=" + (r && r.ok) + (r && r.start != null ? " start=" + Math.round(r.start / 1e3) / 1e3 + "s" : "") + (r && r.error ? " err=" + r.error : ""));
     if (r && r.ok) { refresh(); if (r.start != null) scrollToSegmentUs(r.start); }
     else alert("添加素材失败：" + ((r && r.error) ? r.error : "未知错误"));
   };
-  if (drop.kind === "existing") call("add_to_timeline", data.name, data.path, data.type, drop.dataTi, atTimeUs).then(okHandler);
+  const failHandler = (err) => { console.error("[add-call-fail]", err); alert("添加素材调用失败：" + (err || "未知错误（看控制台 [add-call-fail]）")); };
+  if (drop.kind === "existing") call("add_to_timeline", data.name, data.path, data.type, drop.dataTi, atTimeUs).then(okHandler, failHandler);
   // new 路径：track_index 必须传 null（不是 -1）——后端 track_index 非 None 时优先于 insert_index，
   // 传 -1 会走 append 到组末尾，insert_index（预览的中间显示位）被忽略 → 新轨落错位置（2026-08-18 修）
-  else call("add_to_timeline", data.name, data.path, data.type, null, atTimeUs, drop.dataInsertIndex).then(okHandler);
+  else call("add_to_timeline", data.name, data.path, data.type, null, atTimeUs, drop.dataInsertIndex).then(okHandler, failHandler);
 }
 /* 落位后自动滚动到指定时间位（库拖入用，轴内移动不滚） */
 function scrollToSegmentUs(us) {
