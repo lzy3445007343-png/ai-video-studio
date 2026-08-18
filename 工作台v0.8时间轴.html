@@ -268,6 +268,7 @@
   .seg.dragging { opacity: .85; cursor: grabbing; pointer-events: none; }
   .track.drop-target { outline: 2px dashed var(--accent); outline-offset: -2px; background: rgba(64,150,255,.08); }
   .track.drop-preview { outline: 2px dashed var(--accent); outline-offset: -2px; background: rgba(64,150,255,.14); }
+  .seg.drop-target-seg { box-shadow: 0 0 0 2.5px var(--accent) !important; }
   .seg .fill { position: absolute; inset: 0; background-position: left center; pointer-events: none; }
   .seg canvas.fill { pointer-events: none; display: block; position: absolute; inset: 0; width: 100%; height: 100%; }
   .seg .hdr { position: absolute; top: 0; left: 0; right: 0; height: 18px; display: flex; align-items: center;
@@ -805,6 +806,7 @@ function initHSplit(side) {
 let dragGhostEl = null;
 let dragGhostData = null;
 let isLibraryDragging = false;   // 素材库/特效库卡片拖拽中：暂停轮询刷新，避免 DOM 重建吞掉 drop
+let libraryDropTarget = null;    // 库拖入当前落点 {kind,type,displayIndex,dataTi,dataInsertIndex}，用于 renderTimeline 注入预览轨
 function createDragGhost(bg, icon) {
   removeDragGhost();
   const el = document.createElement("div");
@@ -883,7 +885,7 @@ function renderMedia(s) {
       moveDragGhost(e.clientX, e.clientY);
     });
     card.addEventListener("drag", e => { moveDragGhost(e.clientX, e.clientY); });
-    card.addEventListener("dragend", () => { isLibraryDragging = false; removeDragGhost(); });
+    card.addEventListener("dragend", () => { isLibraryDragging = false; libraryDropTarget = null; removeDragGhost(); });
     card.addEventListener("click", () => selectMaterial(uid));
     card.querySelector(".add").addEventListener("click", e => {
       e.stopPropagation();
@@ -933,7 +935,7 @@ function renderEffectLibrary(s, box) {
       moveDragGhost(e.clientX, e.clientY);
     });
     card.addEventListener("drag", e => moveDragGhost(e.clientX, e.clientY));
-    card.addEventListener("dragend", () => { isLibraryDragging = false; removeDragGhost(); });
+    card.addEventListener("dragend", () => { isLibraryDragging = false; libraryDropTarget = null; removeDragGhost(); });
     box.appendChild(card);
   }
 }
@@ -945,9 +947,15 @@ function addEffectFromLibrary(type, drop) {
   let startUs = 0;
   let insertIndex = null;
   if (drop) {
-    if (typeof drop.trackIndex === "number") trackIndex = drop.trackIndex;
-    if (typeof drop.atTimeUs === "number") startUs = drop.atTimeUs;
-    if (typeof drop.insertIndex === "number") insertIndex = drop.insertIndex;
+    if (drop.bindTo && typeof drop.bindTo.ti === "number" && typeof drop.bindTo.si === "number") {
+      // 拖到视频/音频/文本/贴纸片段上：特效绑定到该 clip，落到已有特效轨 0（没有则自动创建）
+      target = { type: "clip", track: drop.bindTo.ti, ti: drop.bindTo.ti, si: drop.bindTo.si };
+      trackIndex = 0;
+    } else {
+      if (typeof drop.trackIndex === "number") trackIndex = drop.trackIndex;
+      if (typeof drop.atTimeUs === "number") startUs = drop.atTimeUs;
+      if (typeof drop.insertIndex === "number") insertIndex = drop.insertIndex;
+    }
   } else {
     const sel = selectedSeg();
     if (sel && (sel.type === "video" || sel.type === "image" || sel.type === "audio" || sel.type === "sticker")) {
@@ -1775,6 +1783,7 @@ function onPointerUp() {
   Store.set({ drag: null });   // 退出临时态 → 回到真实草稿位置
   if (d && d.moved) {
     if (d.mode === "move") {
+      console.log("[drop-move] key=" + d.key + " targetKind=" + d.targetKind + " targetDataTi=" + d.targetDataTi + " dataInsertIndex=" + d.dataInsertIndex + " curLeftUs=" + Math.round(d.curLeftUs));
       if (d.type === "effect") {
         if (d.targetKind === "new") {
           // 特效段拖到空白/异类型 → 新建特效轨（displayIndex→dataInsertIndex 同源）
@@ -2066,13 +2075,21 @@ function onTimelineDrop(e) {
     // 兜底：部分 webview 在 drop 时 getData 取不到，用拖拽时缓存的 payload
     try { data = JSON.parse(dragGhostData && dragGhostData.payload || "{}"); } catch (_) {}
   }
-  // 特效拖入：统一走 computeDrop（displayIndex 单一真源），落已有特效轨=调整层/绑段，落空白=新建特效轨
+  // 特效拖入：优先绑定到光标下的 clip（视频/图片/音频/文本/贴纸段）；否则落特效轨（existing=调整层，new=新建特效轨）
   if (data && data.kind === "effect") {
     const rect = $("tlScroll").getBoundingClientRect();
     const atTimeUs = Math.max(0, Math.round((e.clientX - rect.left + $("tlScroll").scrollLeft) / pps() * 1e6));
-    const drop = computeDrop(e, "effect");
-    if (drop.kind === "existing") addEffectFromLibrary(data.type, { trackIndex: drop.dataTi, atTimeUs });
-    else addEffectFromLibrary(data.type, { trackIndex: -1, insertIndex: drop.dataInsertIndex, atTimeUs });
+    const bindSeg = findSegUnderCursor(e);
+    const compatible = bindSeg && ["video", "image", "audio", "text", "sticker"].includes(bindSeg.segType);
+    if (compatible) {
+      console.log("[drop-effect] bind to clip", bindSeg, "at", atTimeUs);
+      addEffectFromLibrary(data.type, { bindTo: bindSeg, atTimeUs });
+    } else {
+      const drop = computeDrop(e, "effect");
+      console.log("[drop-effect] track drop", drop, "at", atTimeUs);
+      if (drop.kind === "existing") addEffectFromLibrary(data.type, { trackIndex: drop.dataTi, atTimeUs });
+      else addEffectFromLibrary(data.type, { trackIndex: -1, insertIndex: drop.dataInsertIndex, atTimeUs });
+    }
     return;
   }
   if (!data || !data.path) return;
@@ -2081,6 +2098,7 @@ function onTimelineDrop(e) {
   const atTimeUs = Math.max(0, Math.round((e.clientX - rect.left + $("tlScroll").scrollLeft) / pps() * 1e6));
   // 统一走 computeDrop：同类型已有轨→精确落点；空白/异类型→新建该类型轨接住（与预览/实际同源）
   const drop = computeDrop(e, wantType);
+  console.log("[drop-media] type=" + wantType + " drop=", drop, "at", atTimeUs);
   if (drop.kind === "existing") call("add_to_timeline", data.name, data.path, data.type, drop.dataTi, atTimeUs).then(refresh);
   else call("add_to_timeline", data.name, data.path, data.type, -1, atTimeUs, drop.dataInsertIndex).then(refresh);
 }
@@ -2098,6 +2116,32 @@ function trackUnderY(y, wantType) {
     if (y >= r.top && y <= r.bottom) return { el: t, ti: +t.dataset.ti, type: t.dataset.type };
   }
   // 所有轨道下方空白：返回 null 表示「新建同类型轨」
+  return null;
+}
+// 查找光标正下方的片段（用于特效拖入绑定到 clip）。
+// .seg 的 dataset.key = "type:ti:idx"，据此反查真实段。
+function findSegUnderCursor(e) {
+  const x = e.clientX, y = e.clientY;
+  let el = document.elementFromPoint(x, y);
+  while (el && !el.classList.contains("seg")) el = el.parentElement;
+  if (el && el.dataset.key) {
+    const parts = el.dataset.key.split(":");
+    const type = parts[0], ti = +parts[1], si = +parts[2];
+    if (type && !isNaN(ti) && !isNaN(si)) {
+      const seg = findSeg(type, ti, si);
+      if (seg) return { type: type, ti: ti, si: si, segType: seg.type || type };
+    }
+  }
+  // 兜底：遍历所有 seg rect
+  for (const segEl of $("tlContent").querySelectorAll(".seg")) {
+    const r = segEl.getBoundingClientRect();
+    if (x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) {
+      const parts = (segEl.dataset.key || "").split(":");
+      const type = parts[0], ti = +parts[1], si = +parts[2];
+      const seg = findSeg(type, ti, si);
+      if (seg) return { type: type, ti: ti, si: si, segType: seg.type || type };
+    }
+  }
   return null;
 }
 function showDropPreview(trackEl, clientX, isNewTrack) {
@@ -2590,21 +2634,34 @@ function bindEvents() {
   $("timeline").addEventListener("dragover", e => {
     const tlMainRect = $("tlMain").getBoundingClientRect();
     // 工具栏上方：不阻止默认行为，显示系统禁止图标
-    if (e.clientY < tlMainRect.top) { hideDropPreview(); return; }
+    if (e.clientY < tlMainRect.top) { hideDropPreview(); libraryDropTarget = null; return; }
     e.preventDefault(); e.dataTransfer.dropEffect = "copy";
     let d = null; if (dragGhostData && dragGhostData.payload) { try { d = JSON.parse(dragGhostData.payload); } catch (_) {} }
     const isEffect = d && d.kind === "effect";
     const wantType = isEffect ? "effect" : dragTrackType();
     const contentRect = $("tlContent").getBoundingClientRect();
     const line = $("dropLine"), hint = $("dropNewTrackHint");
-    // 清除旧高亮/禁用以避免残留
-    $("tlContent").querySelectorAll(".track").forEach(t => { t.classList.remove("drop-target"); t.classList.remove("drop-disabled"); });
     // 统一落点：preview/落点线/实际三位一体
     const drop = computeDrop(e, wantType);
+    // 特效拖到可绑定片段上：不走轨道级 preview，直接高亮片段（OpenCut 行为）
+    let bindSeg = null;
+    if (isEffect) {
+      bindSeg = findSegUnderCursor(e);
+      const compatible = bindSeg && ["video", "image", "audio", "text", "sticker"].includes(bindSeg.segType);
+      if (compatible) {
+        libraryDropTarget = null;   // 绑定到片段时不画轨道 preview
+        Store._emit();
+        const segEl = $("tlContent").querySelector('.seg[data-key="' + bindSeg.type + ":" + bindSeg.ti + ":" + bindSeg.si + '"]');
+        if (segEl) segEl.classList.add("drop-target-seg");
+        hint.style.display = "none";
+        line.style.display = "";
+        line.style.left = (e.clientX - contentRect.left) + "px";
+        return;
+      }
+    }
+    libraryDropTarget = drop;   // 库拖入：把当前落点同步给 renderTimeline 画预览轨
+    Store._emit();
     if (drop.kind === "existing") {
-      const tr = buildTracks()[drop.displayIndex];
-      const el = tr ? trackElOf(tr) : null;
-      if (el) el.classList.add("drop-target");   // 命中同类型已有轨 → 高亮该轨
       hint.style.display = "none";
       line.style.display = "";
       line.style.left = (e.clientX - contentRect.left) + "px";   // 蓝色落点线 = 拖到的横向时间位
@@ -2621,9 +2678,9 @@ function bindEvents() {
   $("timeline").addEventListener("dragleave", e => {
     if (tlDragEnterCount === 0) return;
     tlDragEnterCount--;
-    if (tlDragEnterCount === 0) hideDropPreview();
+    if (tlDragEnterCount === 0) { hideDropPreview(); libraryDropTarget = null; Store._emit(); }
   });
-  $("timeline").addEventListener("drop", e => { tlDragEnterCount = 0; onTimelineDrop(e); });
+  $("timeline").addEventListener("drop", e => { tlDragEnterCount = 0; onTimelineDrop(e); libraryDropTarget = null; Store._emit(); });
   $("playBtn").addEventListener("click", togglePlay);
   $("muteBtn").addEventListener("click", toggleMute);
   $("zoomRange").addEventListener("input", e => setZoom(+e.target.value));

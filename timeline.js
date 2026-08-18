@@ -182,7 +182,6 @@ function computeDrop(e, dragType) {
   const tracks = buildTracks();
   const block = dragTypeBlock(dragType);
   const y = e.clientY;
-  const startY = (window.__dragStartY != null) ? window.__dragStartY : null;
   // 1) 命中某条已有轨
   let insideIdx = -1;
   for (let i = 0; i < tracks.length; i++) {
@@ -209,14 +208,13 @@ function computeDrop(e, dragType) {
   const firstR = firstEl.getBoundingClientRect(); const lastR = lastEl.getBoundingClientRect();
   if (y < firstR.top) return _makeNewDrop(tracks, dragType, 0, true);
   if (y > lastR.bottom) return _makeNewDrop(tracks, dragType, tracks.length, false);
-  // 3) 两条轨之间的间隙：按垂直方向决定归属上/下一条
+  // 3) 两条轨之间的间隙：在两条轨正中间新建一条轨（displayIndex = i+1）
+  //    不再按拖动方向归属到上/下某一条，避免「 preview 和实际落位不一致」
   for (let i = 0; i < tracks.length - 1; i++) {
     const a = trackElOf(tracks[i]).getBoundingClientRect();
     const b = trackElOf(tracks[i + 1]).getBoundingClientRect();
     if (y > a.bottom && y < b.top) {
-      const goUp = (startY != null && y < startY);
-      const refIdx = goUp ? i : i + 1;
-      return _makeNewDrop(tracks, dragType, refIdx, goUp);
+      return _makeNewDrop(tracks, dragType, i + 1, true);
     }
   }
   return _makeNewDrop(tracks, dragType, tracks.length, false);
@@ -363,11 +361,17 @@ function renderTimeline(s) {
   const targetTi = isMove ? ((drag.targetKind === "existing") ? drag.targetDataTi : -1) : null;
   // 构建待渲染轨道列表（显示顺序：叠加→主轨→音频→文本/特效…）
   const tracks = buildTracks();
-  // 移动预览：目标=新建轨 → 按 drag.targetDisplayIndex 绝对注入「预览轨」（与 computeDrop/后端同源），松手才真正建
-  if (isMove && drag.targetKind === "new" && typeof drag.targetDisplayIndex === "number") {
+  // 拖拽预览：目标=新建轨 → 按 targetDisplayIndex 绝对注入「预览轨」（与 computeDrop/后端同源），松手才真正建
+  // 支持两种拖拽源：轴内段移动（Store.state.drag）和素材/特效库拖入（window.libraryDropTarget）
+  const libDrop = (typeof window !== "undefined" && window.libraryDropTarget) || null;
+  const needPreview = (isMove && drag.targetKind === "new" && typeof drag.targetDisplayIndex === "number")
+                   || (libDrop && libDrop.kind === "new" && typeof libDrop.displayIndex === "number");
+  if (needPreview) {
+    const pType = isMove ? drag.type : (libDrop ? libDrop.type : "video");
+    const pDisplay = isMove ? drag.targetDisplayIndex : (libDrop ? libDrop.displayIndex : 0);
     const labelBy = { video: "叠加", audio: "音轨", text: "文本轨", effect: "特效轨", sticker: "贴纸轨" };
-    const previewTrack = { type: drag.type, ti: -1, label: (labelBy[drag.type] || "轨") + "预览", segs: [], preview: true };
-    const di = Math.max(0, Math.min(drag.targetDisplayIndex, tracks.length));
+    const previewTrack = { type: pType, ti: -1, label: (labelBy[pType] || "轨") + "预览", segs: [], preview: true };
+    const di = Math.max(0, Math.min(pDisplay, tracks.length));
     tracks.splice(di, 0, previewTrack);
   }
   tracks.forEach(tr => {
@@ -398,6 +402,7 @@ function renderTimeline(s) {
     if (m.muted && (tr.type === "audio" || tr.type === "video")) track.classList.add("track-muted");
     if (tr.preview) track.classList.add("drop-preview");
     else if (isMove && targetType && targetTi != null && tr.type === targetType && tr.ti === targetTi) track.classList.add("drop-target");
+    else if (libDrop && libDrop.kind === "existing" && tr.type === libDrop.type && tr.ti === libDrop.dataTi) track.classList.add("drop-target");
     let childCount = 0;
     // 目标轨/预览轨：先放被拖段（用源坐标 + 覆盖左边界，保持时长）
     if (isMove && targetType && targetTi != null && tr.type === targetType && tr.ti === targetTi) {
