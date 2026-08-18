@@ -361,7 +361,7 @@ def _ensure_track(draft, track_type, index):
         tracks.append([])
         meta.append({})
         new_idx = len(tracks) - 1
-        _sync_new_layer(draft, track_type, new_idx)
+        _sync_new_layer(draft, track_type, new_idx, _display_index_of_new(draft, track_type, new_idx))
         return new_idx
     while len(tracks) <= index:
         tracks.append([])
@@ -375,6 +375,8 @@ def _insert_track(draft, track_type, insert_index):
 
     同步维护 _track_meta。返回新轨道的索引（clamp 到 [0, len]）。video 列表索引即数据索引，
     render 反转渲染下，前端已按「上边界轨数据索引」换算好 insert_index，这里只负责插在正确位置。
+    插入后同步 layer_order：先把该类型 >= insert_index 的旧 key 索引 +1（数据移位），
+    再按「数据位 → 显示位」把新轨插到 order 的对应位置（与前端预览严格同源，松手后不会跑位）。
     """
     tracks = draft.setdefault(track_type, [[]])
     meta = _ensure_track_meta(draft, track_type)
@@ -388,7 +390,8 @@ def _insert_track(draft, track_type, insert_index):
         ins = max(1, ins)
     tracks.insert(ins, [])
     meta.insert(ins, {})
-    _sync_new_layer(draft, track_type, ins)
+    _shift_layer_order(draft, track_type, ins)
+    _sync_new_layer(draft, track_type, ins, _display_index_of_new(draft, track_type, ins))
     return ins
 
 
@@ -497,8 +500,10 @@ def _clean_layer_order(draft):
     draft["layer_order"] = cleaned
 
 
-def _sync_new_layer(draft, track_type, ti):
-    """新建 overlay 轨后同步 layer_order（新轨插到最顶 = 显示最上）。
+def _sync_new_layer(draft, track_type, ti, display_index=None):
+    """新建 overlay 轨后同步 layer_order。
+    display_index 有值 → 新轨插到该显示位（与前端预览严格同源，松手后不会跑位）；
+    None → 插最顶（旧行为，兼容无明确位置的调用）。
     主场景 video[0] / audio 不参与 overlay 池。layer_order 为空时按默认序初始化。"""
     if track_type == "audio":
         return
@@ -510,7 +515,46 @@ def _sync_new_layer(draft, track_type, ti):
         draft["layer_order"] = order
     key = "%s:%d" % (track_type, ti)
     if key not in order:
-        order.insert(0, key)
+        if display_index is None:
+            order.insert(0, key)
+        else:
+            order.insert(max(0, min(display_index, len(order))), key)
+
+
+def _display_index_of_new(draft, track_type, ti):
+    """新建轨（已插入数据数组）→ overlay 显示位（layer_order 下标，与前端 displayIndex 同源）。
+    video 组显示倒序（高 ti 在上）：显示位 = len(video)-1-ti；其他组显示序 = 数据序。"""
+    order = draft.get("layer_order")
+    if not order:
+        order = _default_layer_order(draft)
+    if track_type == "video":
+        return max(0, len(draft.get("video", [[]]) or [[]]) - 1 - ti)
+    same = [i for i, k in enumerate(order) if k.startswith(track_type + ":")]
+    if not same:
+        return 0 if track_type != "audio" else len(order)
+    if ti < len(same):
+        return same[ti]
+    return same[-1] + 1
+
+
+def _shift_layer_order(draft, track_type, from_index):
+    """数据数组在 from_index 处插入了一条轨 → layer_order 里该类型 >= from_index 的 key 索引 +1
+    （数据移位后旧 key 全部错位，必须先重排再插新 key）。"""
+    order = draft.get("layer_order")
+    if not order:
+        return
+    new_order = []
+    for k in order:
+        if k.startswith(track_type + ":"):
+            try:
+                ti = int(k.split(":", 1)[1])
+            except ValueError:
+                new_order.append(k)
+                continue
+            if ti >= from_index:
+                k = "%s:%d" % (track_type, ti + 1)
+        new_order.append(k)
+    draft["layer_order"] = new_order
 
 
 def _distribute_to_tracks(segments):

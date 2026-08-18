@@ -96,6 +96,19 @@ function buildTracks() {
   for (let i = 0; i < a.length; i++) {
     if (a[i] && a[i].length > 0) out.push({ type: "audio", ti: i, label: "音轨" + (i + 1), segs: a[i] });
   }
+  // label 按视觉序重新编号（B1 重排后 ti 与视觉位解耦）：overlay 区从顶到底 1.2.3...
+  // 主场景/audio 保持数据序 label（音轨N），不动。
+  const counters = {};
+  for (let i = 0; i < out.length; i++) {
+    const tr = out[i];
+    if (tr.type === "video" && tr.ti === 0) break;   // 主场景及之后不再重编号
+    const cnt = (counters[tr.type] || 0) + 1;
+    counters[tr.type] = cnt;
+    if (tr.type === "text") tr.label = "文本轨" + cnt;
+    else if (tr.type === "sticker") tr.label = "贴纸轨" + cnt;
+    else if (tr.type === "effect") tr.label = "特效轨" + cnt;
+    else if (tr.type === "video") tr.label = "叠加" + cnt;
+  }
   return out;
 }
 /* overlay 区轨数（主场景之前的所有轨）——reorder 目标显示位换算用 */
@@ -215,16 +228,19 @@ function resolveNewDrop(direction, preferredDisplay, tracks, dragType) {
 
 /* ============ 统一落点模型（OpenCut 风格 drag direction 归属间隙） ============
    verticalDragDirection: "up" | "down" | null（库拖入用 dragstartY vs 当前 Y 算出；轴内移动同理）
-   isMove: 轴内移动（拖已有段）时为 true——命中「不兼容已有轨」→ reorder（把该段所在轨
-           移到目标显示位，z 序重排，不新建）；库拖入（新素材）时为 false → new（新建同类型轨）。
+   atTimeUs: 落点时间位（库拖入 = clientX 换算；轴内移动 = d.curLeftUs）。库拖入 + 落点
+              已被占用 → 不弹到该轨末尾，改为「新建同类型轨预览」（2026-08-18 用户要求）。
+   isLibrary: 库拖入为 true（做落点冲突检测）；轴内移动为 false（同轨挪动不误判）。
    间隙归属：
    - up    → 间隙归属上方轨（i）       → "above" preferredDisplay i
    - down  → 间隙归属下方轨（i+1）     → "below" preferredDisplay i+1
    - null  → 默认 up 语义（保留兼容）
-   所有轨之上/之下：固定 above/below（与拖动方向无关） */
-function computeDrop(e, dragType, verticalDragDirection, isMove) {
+   所有轨之上/之下：固定 above/below（与拖动方向无关）
+   reorder 已撤（2026-08-18 用户拍板）：拖已有段命中不兼容已有轨 = 新建同类型轨预览（夹到
+   两条轨中间），不再做 z 序重排——预览/落位/后端插入严格同源。 */
+function computeDrop(e, dragType, verticalDragDirection, atTimeUs, isLibrary) {
   verticalDragDirection = verticalDragDirection || null;
-  isMove = !!isMove;
+  isLibrary = !!isLibrary;
   const tracks = buildTracks();
   const block = dragTypeBlock(dragType);
   const y = e.clientY;
@@ -239,29 +255,23 @@ function computeDrop(e, dragType, verticalDragDirection, isMove) {
   if (insideIdx >= 0) {
     const t = tracks[insideIdx];
     if (block.includes(t.type)) {
+      // 库拖入 + 落点已被该轨素材占用 → 不弹末尾，改新建同类型轨（松手后新轨夹在目标位）
+      if (isLibrary && atTimeUs != null && trackBusyAt(t, atTimeUs)) {
+        const el = trackElOf(t);
+        const r = el.getBoundingClientRect();
+        const topHalf = (y < r.top + r.height / 2);
+        return resolveNewDrop(topHalf ? "above" : "below", insideIdx, tracks, dragType);
+      }
       return {
         kind: "existing", type: t.type,
         displayIndex: insideIdx, dataTi: t.ti, dataInsertIndex: null,
         insertPosition: null, targetExisting: true,
       };
     }
-    // 落在不兼容的已有轨：
-    //  - 轴内移动（拖已有段）→ reorder：把该段所在轨移到目标显示位（z 序重排，不新建）
-    //  - 库拖入（新素材）→ new：在目标轨上方/下方新建同类型轨
+    // 落在不兼容的已有轨：统一「新建同类型轨预览」（库拖入 & 轴内移动都走 new，夹到目标位）
     const el = trackElOf(t);
     const r = el.getBoundingClientRect();
     const topHalf = (y < r.top + r.height / 2);
-    if (isMove) {
-      // reorder 目标显示位（buildTracks 全数组下标，后端 clamp 到 overlay 区）
-      // 上半 → 目标轨位置（= 在其上方）；下半 → 目标轨位置+1（= 在其下方，clamp 到主场景之上）
-      const oCount = overlayCount();
-      const target = Math.min(topHalf ? insideIdx : insideIdx + 1, oCount);
-      return {
-        kind: "reorder", type: t.type,
-        displayIndex: target, dataTi: null, dataInsertIndex: null,
-        insertPosition: null, targetExisting: true,
-      };
-    }
     return resolveNewDrop(topHalf ? "above" : "below", insideIdx, tracks, dragType);
   }
   // 2) 所有轨之上 / 之下
@@ -310,6 +320,15 @@ function displayRowCenterY(displayIndex) {
   if (displayIndex >= tracks.length) { const r = trackElOf(tracks[tracks.length - 1]).getBoundingClientRect(); return r.bottom + 18; }
   const r = trackElOf(tracks[displayIndex]).getBoundingClientRect();
   return r.top + r.height / 2;
+}
+
+/* 落点冲突检测：该轨在 atTimeUs 处是否已有素材覆盖（库拖入不弹末尾，改新建轨） */
+function trackBusyAt(track, atTimeUs) {
+  const segs = track.segs || [];
+  for (const s of segs) {
+    if (atTimeUs >= s.start && atTimeUs < s.start + s.duration) return true;
+  }
+  return false;
 }
 
 // 片段几何：优先用拖拽临时态，否则用草稿真实位置
@@ -438,10 +457,9 @@ function renderTimeline(s) {
   const drag = Store.state.drag;
   const isMove = drag && drag.mode === "move" && drag.moved;
   const dragKey = isMove ? drag.key : null;
-  // 目标轨（existing = 真实落点轨；new = 预览轨 ti=-1；reorder = 源轨，被拖段留在原地，z 序重排）
-  // 统一由 computeDrop 输出驱动，保证预览/实际一致
+  // 目标轨（existing = 真实落点轨；new = 预览轨 ti=-1）——统一由 computeDrop 输出驱动，保证预览/实际一致
   const targetType = isMove ? drag.type : null;
-  const targetTi = isMove ? ((drag.targetKind === "existing") ? drag.targetDataTi : (drag.targetKind === "reorder" ? drag.ti : -1)) : null;
+  const targetTi = isMove ? ((drag.targetKind === "existing") ? drag.targetDataTi : -1) : null;
   // 构建待渲染轨道列表（显示顺序：叠加→主轨→音频→文本/特效…）
   const tracks = buildTracks();
   // 拖拽预览（轴内段移动）：目标=新建轨 → 按 targetDisplayIndex 注入「预览轨」（与 computeDrop/后端同源），松手才真正建。
@@ -484,11 +502,6 @@ function renderTimeline(s) {
     if (m.muted && (tr.type === "audio" || tr.type === "video")) track.classList.add("track-muted");
     if (tr.preview) track.classList.add("drop-preview");
     else if (isMove && targetType && targetTi != null && tr.type === targetType && tr.ti === targetTi) track.classList.add("drop-target");
-    else if (isMove && drag.targetKind === "reorder" && typeof drag.targetDisplayIndex === "number") {
-      // reorder：高亮目标显示位轨（被拖段所在轨将移到该位置）
-      const rt = tracks[drag.targetDisplayIndex];
-      if (rt && tr.type === rt.type && tr.ti === rt.ti) track.classList.add("drop-target");
-    }
     let childCount = 0;
     // 目标轨/预览轨：先放被拖段（用源坐标 + 覆盖左边界，保持时长）
     if (isMove && targetType && targetTi != null && tr.type === targetType && tr.ti === targetTi) {
