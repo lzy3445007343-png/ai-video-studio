@@ -804,6 +804,7 @@ function initHSplit(side) {
 /* ---------- 素材拖拽 ghost（仿 OpenCut 自定义跟随鼠标） ---------- */
 let dragGhostEl = null;
 let dragGhostData = null;
+let isLibraryDragging = false;   // 素材库/特效库卡片拖拽中：暂停轮询刷新，避免 DOM 重建吞掉 drop
 function createDragGhost(bg, icon) {
   removeDragGhost();
   const el = document.createElement("div");
@@ -827,19 +828,24 @@ function removeDragGhost() {
 /* ---------- 渲染：素材面板（只读 Store） ---------- */
 let _mediaSig = "";
 let _effectSig = "";   // 特效库独立渲染签名：不共享 _mediaSig，否则异步回填 effects 后不重绘
+let _lastRenderedFilter = ""; // filter 切换时强制重建，避免 tab 切回时缓存命中导致显示错位
 function renderMedia(s) {
+  const filterChanged = _lastRenderedFilter !== s.filter;
+  _lastRenderedFilter = s.filter;
   if (s.filter === "effect") {
+    _mediaSig = "";   // 切到特效 → 下次回媒体/音频/文本时强制重建
     // 懒加载保险：特效注册表是启动异步从后端拉的；若此时尚未回填（时序/失败），点开特效 tab 补拉一次
     if (!Store.state.effects || !Object.keys(Store.state.effects).length) {
       call("get_effect_registry").then(r => { if (r && r.ok) Store.set({ effects: r.meta }); });
     }
     renderEffectLibrary(s, $("mediaList")); return;
   }
+  _effectSig = "";   // 切离特效 → 下次回特效时强制重建
   const list = (s.filter === "media" ? s.materials.filter(m => m.type === "video" || m.type === "image") : s.materials.filter(m => m.type === s.filter));
   const sig = s.filter + "|" + list.map(m => (m.uid || m.path) + ":" + m.name + ":" + m.type).join(",");
   // 仅在素材列表/筛选真正变化时重建 DOM；平时轮询只刷新选中态。
   // 否则每 500ms 把卡片 innerHTML 清空重建，会导致 +/删除 按钮闪烁、且点击时的 DOM 被替换使 click 丢失（加号点了没反应）。
-  if (sig === _mediaSig) {
+  if (!filterChanged && sig === _mediaSig) {
     const box = $("mediaList");
     for (const card of box.children) card.classList.toggle("sel", card.dataset.uid === Store.state.selectedMaterialUid);
     return;
@@ -863,6 +869,7 @@ function renderMedia(s) {
       '<div class="add" title="在播放头加入">+</div>' +
       '<div class="del" title="删除素材 (Del)">🗑</div>';
     card.addEventListener("dragstart", e => {
+      isLibraryDragging = true;
       const payload = JSON.stringify({ name: m.name, path: m.path, type: m.type });
       e.dataTransfer.setData("text/plain", payload);
       e.dataTransfer.effectAllowed = "copy";
@@ -875,7 +882,7 @@ function renderMedia(s) {
       moveDragGhost(e.clientX, e.clientY);
     });
     card.addEventListener("drag", e => { moveDragGhost(e.clientX, e.clientY); });
-    card.addEventListener("dragend", () => removeDragGhost());
+    card.addEventListener("dragend", () => { isLibraryDragging = false; removeDragGhost(); });
     card.addEventListener("click", () => selectMaterial(uid));
     card.querySelector(".add").addEventListener("click", e => {
       e.stopPropagation();
@@ -912,6 +919,7 @@ function renderEffectLibrary(s, box) {
       '<div class="eff-hint">' + (hint || "无参数") + '</div>';
     card.addEventListener("click", () => addEffectFromLibrary(type));
     card.addEventListener("dragstart", e => {
+      isLibraryDragging = true;
       const payload = JSON.stringify({ kind: "effect", type: type, name: label });
       e.dataTransfer.setData("text/plain", payload);
       e.dataTransfer.effectAllowed = "copy";
@@ -923,7 +931,7 @@ function renderEffectLibrary(s, box) {
       moveDragGhost(e.clientX, e.clientY);
     });
     card.addEventListener("drag", e => moveDragGhost(e.clientX, e.clientY));
-    card.addEventListener("dragend", () => removeDragGhost());
+    card.addEventListener("dragend", () => { isLibraryDragging = false; removeDragGhost(); });
     box.appendChild(card);
   }
 }
@@ -1701,8 +1709,10 @@ function onPointerMove(e) {
     // 音频/文本拖到空白 → 新建轨(追加到末尾)。
     const ht = hitTrack(e);
     if (d.type === "effect") {
-      // 特效段只在特效轨内移动/缩放：不跨到视频/音频轨，也不因拖到空白而新建轨
-      d.targetType = "effect"; d.targetTi = d.ti; d.newAboveMain = false;
+      // 特效段可在特效轨之间移动/换轨；拖到空白处则新建一条特效轨
+      const ht = hitTrack(e);
+      if (ht && ht.type === "effect") { d.targetType = "effect"; d.targetTi = ht.ti; d.newAboveMain = false; }
+      else { d.targetType = "effect"; d.targetTi = -1; d.newAboveMain = false; }
     } else if (ht && ht.type === d.type) { d.targetType = ht.type; d.targetTi = ht.ti; d.newAboveMain = false; }
     else if (d.type === "video") { d.targetType = "video"; d.targetTi = -1; d.newAboveMain = true; }
     else { d.targetType = d.type; d.targetTi = -1; d.newAboveMain = false; }
@@ -1759,8 +1769,21 @@ function onPointerUp() {
   if (d && d.moved) {
     if (d.mode === "move") {
       if (d.type === "effect") {
-        // 特效段落库走 update_effect（range 优先），不调 move_segment/relocate_segment
-        call("update_effect", d.ti, d.idx, { range: { startUs: Math.round(d.curLeftUs), endUs: Math.round(d.curLeftUs + d.s0.duration) } }).then(refresh);
+        const crossTrack = d.targetTi !== d.ti;
+        if (crossTrack) {
+          if (d.targetTi === -1) {
+            // 特效段拖到空白 → 新建特效轨
+            call("relocate_segment", "effect", d.ti, d.idx, -1, Math.round(d.curLeftUs), null)
+              .then(() => { selectKey(null); refresh(); });
+          } else {
+            // 特效段拖到另一条特效轨
+            call("relocate_segment", "effect", d.ti, d.idx, d.targetTi, Math.round(d.curLeftUs), null)
+              .then(() => { selectKey(null); refresh(); });
+          }
+        } else {
+          // 同轨内只改时间
+          call("update_effect", d.ti, d.idx, { range: { startUs: Math.round(d.curLeftUs), endUs: Math.round(d.curLeftUs + d.s0.duration) } }).then(refresh);
+        }
       } else if (d.isGroup) {
         // 整组移动：锚点 d.key 的 delta 同步到所有选中段，保持相对时间/轨道布局（对齐 OpenCut resolveGroupMove）
         const anchorNewTi = (d.targetTi >= 0) ? d.targetTi : d.ti;   // 整组不新建轨，落点回退到原轨
@@ -1787,8 +1810,10 @@ function onPointerUp() {
       } else {
         const crossTrack = (d.targetType !== d.type || d.targetTi !== d.ti);
         if (d.targetTi === -1 && d.newAboveMain) {
-          // 视频拖到主轨上方 → 在数据索引 1 处(主轨之上)新建覆盖轨接住（对齐 OpenCut insert_index 保护）
-          call("relocate_segment", d.type, d.ti, d.idx, -1, Math.round(d.curLeftUs), 1)
+          // 视频拖到主轨上方空白 → 新建覆盖轨到最顶层（数据索引末尾），盖住所有现有覆盖轨
+          const videoTracks = Store.state.draft.video || [[]];
+          const insertIndex = videoTracks.length;
+          call("relocate_segment", d.type, d.ti, d.idx, -1, Math.round(d.curLeftUs), insertIndex)
             .then(() => { selectKey(null); refresh(); });
         } else if (d.targetTi === -1) {
           // 音频/文本拖到空白 → 追加新建轨
@@ -2708,7 +2733,7 @@ if (window.pywebview && window.pywebview.api) boot();
 window.addEventListener("pywebviewready", boot);
 let _w = setInterval(() => { if (api()) { clearInterval(_w); boot(); } }, 120);
 // 人和 AI 实时互看：每 0.5s 拉取后端状态
-setInterval(() => { if (booted && !Store.state.drag) refresh(); }, 500);
+setInterval(() => { if (booted && !Store.state.drag && !isLibraryDragging) refresh(); }, 500);
 </script>
 </body>
 </html>
