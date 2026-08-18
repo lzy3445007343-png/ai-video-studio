@@ -232,6 +232,13 @@ function computeDrop(e, dragType, verticalDragDirection, atTimeUs, isLibrary) {
       return resolveNewDrop(topHalf ? "above" : "below", insideIdx, tracks, dragType);
     }
     if (block.includes(t.type)) {
+      // 库拖入 + 目标轨隐藏（hidden）→ 不落隐藏轨（否则段不可见，用户以为"松手后没了"），改新建同类型轨
+      if (isLibrary && trackMeta(t.type, t.ti).hidden) {
+        const el = trackElOf(t);
+        const r = el.getBoundingClientRect();
+        const topHalf = (y < r.top + r.height / 2);
+        return resolveNewDrop(topHalf ? "above" : "below", insideIdx, tracks, dragType);
+      }
       // 库拖入 + 落点已被该轨素材占用 → 不弹末尾，改新建同类型轨（松手后新轨夹在目标位）
       if (isLibrary && atTimeUs != null && trackBusyAt(t, atTimeUs)) {
         const el = trackElOf(t);
@@ -434,17 +441,22 @@ function renderTimeline(s) {
     bm.title = (b.name || "书签") + " · " + usToTime(b.us);
     ruler.appendChild(bm);
   });
-  // 拖拽中：被拖段从源轨取出，渲染到目标轨（预览，不写真实数据）
+  // 拖拽中：被拖段实时显示在目标位置（OpenCut previewElements 语义——段跟手，无虚线预览轨）
   const drag = Store.state.drag;
   const isMove = drag && drag.mode === "move" && drag.moved;
   const dragKey = isMove ? drag.key : null;
-  // 目标轨（existing = 真实落点轨；new = 无目标轨，被拖段留在源轨跟手）——统一由 computeDrop 输出驱动
   const targetType = isMove ? drag.type : null;
   const targetTi = isMove ? ((drag.targetKind === "existing") ? drag.targetDataTi : null) : null;
   // 构建待渲染轨道列表（overlay 直映：叠加→主轨→音频）
   const tracks = buildTracks();
-  // 2026-08-18 用户拍板：不做「预览轨道」虚线轨（OpenCut 也没有）——被拖段自己跟手即可。
-  // new（拖到间隙/空白）= 段留在源轨跟 X 移动 + DragLine 横线提示新轨位置；松手 relocate 到新轨。
+  // new（拖到间隙/空白/不兼容轨）= 在目标显示位插入「临时新轨」，被拖段实时显示其上（跟手 X）
+  // —— OpenCut resolveNewTrackMove 语义：预览即新建轨 + 元素，松手才提交真实数据
+  if (isMove && drag.targetKind === "new" && typeof drag.targetDisplayIndex === "number") {
+    const labelBy = { video: "叠加", audio: "音轨", text: "文本轨", effect: "特效轨", sticker: "贴纸轨" };
+    const previewTrack = { type: drag.type, ti: -1, label: (labelBy[drag.type] || "轨") + "（新）", segs: [], preview: true };
+    const di = Math.max(0, Math.min(drag.targetDisplayIndex, tracks.length));
+    tracks.splice(di, 0, previewTrack);
+  }
   tracks.forEach(tr => {
     const label = document.createElement("div");
     label.className = "track-label";
@@ -473,22 +485,25 @@ function renderTimeline(s) {
     if (tr.preview) track.classList.add("drop-preview");
     else if (isMove && targetType && targetTi != null && tr.type === targetType && tr.ti === targetTi) track.classList.add("drop-target");
     let childCount = 0;
-    // 目标轨：先放被拖段（用源坐标 + 覆盖左边界，保持时长）
-    if (isMove && targetType && targetTi != null && tr.type === targetType && tr.ti === targetTi) {
-      const ds = findSeg(drag.type, drag.ti, drag.idx);
-      if (ds) { track.appendChild(makeSeg(ds, drag.type, drag.ti, drag.idx, drag.curLeftUs, true)); childCount++; }
+    // 被拖段显示位置（OpenCut previewElements）：existing → 目标轨；new → 预览轨（临时新轨）
+    if (isMove && targetType) {
+      const showHere = (tr.preview) || (targetTi != null && tr.type === targetType && tr.ti === targetTi);
+      if (showHere) {
+        const ds = findSeg(drag.type, drag.ti, drag.idx);
+        if (ds) { track.appendChild(makeSeg(ds, drag.type, drag.ti, drag.idx, drag.curLeftUs, true)); childCount++; }
+      }
     }
     tr.segs.forEach((seg, idx) => {
       const k = tr.type + ":" + tr.ti + ":" + idx;
-      // 源轨跳过被拖段：existing（换轨）才跳过；new（拖到间隙/空白）= 段留在源轨跟手
-      if (isMove && k === dragKey && drag.targetKind === "existing") return;
+      // 源轨跳过被拖段（拖动中段已实时显示在目标轨/预览轨）
+      if (isMove && k === dragKey) return;
       track.appendChild(makeSeg(seg, tr.type, tr.ti, idx));
       childCount++;
     });
     if (!childCount) { const hEl = document.createElement("div"); hEl.className = "empty-hint"; track.appendChild(hEl); }
     content.appendChild(track);
   });
-  // 移动预览：蓝色落点竖线（X 时间位）+ new 时 DragLine 横线（新轨目标 Y 位置）
+  // 移动预览：蓝色落点竖线（X 时间位）+ new 时 DragLine 横线（新轨目标 Y 位置）；拖动结束清理残留
   if (isMove) {
     const line = $("dropLine");
     line.style.display = "";
@@ -498,6 +513,11 @@ function renderTimeline(s) {
     } else {
       hideDragLine();
     }
+  } else {
+    hideDragLine();
+    const line = $("dropLine");
+    if (line) line.style.display = "none";
+    hideGhostTrack();
   }
   positionPlayhead();
   drawAllWaves();
