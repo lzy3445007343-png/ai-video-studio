@@ -127,7 +127,7 @@ function renderPreview(s) {
       }
     } else {
       const media = rec.el.firstElementChild;
-      if (media) {
+      if (media && h.seg.type !== "image") {
         // B.5.4-1：re-seek 时不再写 muted（与激活门双写）。活动媒体由激活门/play 生命周期统一负责；renderPreview 顶部(1566/1572)已按轨道/预览静音设好。
         PlayerManager.seek(media, h.seg, us);
         if (isPlaying) media.onseeked = () => { mediaClockReady = true; };

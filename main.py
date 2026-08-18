@@ -109,6 +109,8 @@ class _SilentHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
         try:
             f = open(abs_path, "rb")
         except OSError:
+            # 2026-08-19：404 打真实路径（用户日志"Failed to load resource: 404"一直看不到是哪个文件）
+            print("[HTTP-404]", self.command, repr(abs_path)[:160])
             self.send_error(404, "File not found")
             return
         try:

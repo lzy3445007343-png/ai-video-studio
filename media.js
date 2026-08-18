@@ -471,8 +471,11 @@ const PlayerManager = {
     const localUs = Math.max(0, us - seg.start);
     // B2-A：上界必须是源绝对结束 srcEndUs（而非段时长）。旧写法对 src_start>0 的右段会反复从切点重播。
     const t = Math.max(srcStartUs / 1e6, Math.min(srcEndUs / 1e6, (srcStartUs + localUs) / 1e6));
+    // 2026-08-19 降噪：原日志无条件打印 → 播放头静止时每帧 RAF 调 seek 同位置 → 控制台刷屏。
+    // 只在「确实要写 currentTime」（含 readyState<2 记录 pending 目标）时才打。
+    const needWrite = (el.readyState < 2) || Math.abs((el.currentTime || 0) - t) > 0.05;
     // DIAG-2026-08-16：打印换算用的段字段（排查"to=时间轴秒"疑点——若 seg.start/src_start 为 0 则前端 draft 是旧数据）
-    console.log("[seek]", el.tagName || "?", "to=" + t.toFixed(3), "cur=" + (el.currentTime || 0).toFixed(3), "ready=" + el.readyState, "seg{start=" + ((seg.start || 0) / 1e6).toFixed(1) + " ss=" + (srcStartUs / 1e6).toFixed(1) + " se=" + (srcEndUs / 1e6).toFixed(1) + "} us=" + (us / 1e6).toFixed(3));
+    if (needWrite) console.log("[seek]", el.tagName || "?", "to=" + t.toFixed(3), "cur=" + (el.currentTime || 0).toFixed(3), "ready=" + el.readyState, "seg{start=" + ((seg.start || 0) / 1e6).toFixed(1) + " ss=" + (srcStartUs / 1e6).toFixed(1) + " se=" + (srcEndUs / 1e6).toFixed(1) + "} us=" + (us / 1e6).toFixed(3));
     // 2026-08-16 真机修复（v3）：readyState<2 时**跳过赋值**——WebView2 此刻设 currentTime 必被吞（日志实锤：
     // seek to=5.524 ready=1 → play 从 0 起播）。seek 只记录目标（_seekTarget），由 renderPreview pendingSeek
     // （canplay 后）或 _playWhenReady（play 前 readyState>=2 重设）真正落位。

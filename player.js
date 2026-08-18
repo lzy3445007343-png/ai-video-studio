@@ -542,6 +542,9 @@ function seekActiveMediaToPlayhead(us, reanchorAudio) {
       rec = a; el = a ? a.el : null;   // audio 元素本身直接存于 audioEls.el
     }
     if (!el) { allReady = false; continue; }
+    // 2026-08-19：image 段（<img>）无 currentTime/媒体时间线，seek 无意义且每帧打日志刷屏——
+    // 图片的显隐/内容切换已由 renderPreview 的 image 分支（L496 特判）负责，这里跳过。
+    if (h.seg && h.seg.type === "image") continue;
     // B2-B：跨段只 seek 不复建元素，必须同步刷新 rec.seg/key，否则 playAllMedia 兜底仍用旧段元数据
     // 算时间轴位置 → 播放头反复判定跨段 → 来回 seek → 闪/卡/反复播。仅跨段（seg/key 变化）才写，避免每 tick 无效写对象。
     // Phase C 注：同段内 rec.seg 不变（不触发 destroy），这里仍会因跨段刷新 rec.seg（h.seg 已是新段）。
