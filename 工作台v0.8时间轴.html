@@ -830,7 +830,10 @@ function moveDragGhost(x, y) {
 }
 function removeDragGhost() {
   if (dragGhostEl) { dragGhostEl.remove(); dragGhostEl = null; }
-  dragGhostData = null;
+  // 注意：这里【不清 dragGhostData】。dragstart 顺序是「先设 dragGhostData → createDragGhost()」，
+  // 而 createDragGhost 内部会先调 removeDragGhost——若在这里清空，payload 刚设置就被抹掉，
+  // dragover 里 isEffect/wantType 判定全部失效（特效拖不进/不兼容轨误高亮/MP3 显示"叠加预览"的总根因，2026-08-18 定位）。
+  // dragGhostData 生命周期：dragstart 设置 → dragend 显式清空。
 }
 
 /* ---------- 渲染：素材面板（只读 Store） ---------- */
@@ -891,7 +894,7 @@ function renderMedia(s) {
       moveDragGhost(e.clientX, e.clientY);
     });
     card.addEventListener("drag", e => { moveDragGhost(e.clientX, e.clientY); });
-    card.addEventListener("dragend", () => { isLibraryDragging = false; hideTrackPreview(); removeDragGhost(); });
+    card.addEventListener("dragend", () => { isLibraryDragging = false; hideTrackPreview(); dragGhostData = null; window.__libDropCache = null; removeDragGhost(); });
     card.addEventListener("click", () => selectMaterial(uid));
     card.querySelector(".add").addEventListener("click", e => {
       e.stopPropagation();
@@ -941,7 +944,7 @@ function renderEffectLibrary(s, box) {
       moveDragGhost(e.clientX, e.clientY);
     });
     card.addEventListener("drag", e => moveDragGhost(e.clientX, e.clientY));
-    card.addEventListener("dragend", () => { isLibraryDragging = false; hideTrackPreview(); removeDragGhost(); });
+    card.addEventListener("dragend", () => { isLibraryDragging = false; hideTrackPreview(); dragGhostData = null; window.__libDropCache = null; removeDragGhost(); });
     box.appendChild(card);
   }
 }
@@ -2091,7 +2094,9 @@ function onTimelineDrop(e) {
       console.log("[drop-effect] bind to clip", bindSeg, "at", atTimeUs);
       addEffectFromLibrary(data.type, { bindTo: bindSeg, atTimeUs });
     } else {
-      const drop = computeDrop(e, "effect");
+      // 优先复用 dragover 最后缓存落点（防边界漂移）；缓存缺失/类型不符才重算
+      const cached = window.__libDropCache;
+      const drop = (cached && cached.wantType === "effect") ? cached.drop : computeDrop(e, "effect");
       console.log("[drop-effect] track drop", drop, "at", atTimeUs);
       if (drop.kind === "existing") addEffectFromLibrary(data.type, { trackIndex: drop.dataTi, atTimeUs });
       else addEffectFromLibrary(data.type, { trackIndex: -1, insertIndex: drop.dataInsertIndex, atTimeUs });
@@ -2103,7 +2108,9 @@ function onTimelineDrop(e) {
   const rect = $("tlScroll").getBoundingClientRect();
   const atTimeUs = Math.max(0, Math.round((e.clientX - rect.left + $("tlScroll").scrollLeft) / pps() * 1e6));
   // 统一走 computeDrop：同类型已有轨→精确落点；空白/异类型→新建该类型轨接住（与预览/实际同源）
-  const drop = computeDrop(e, wantType);
+  // 优先复用 dragover 最后缓存落点（防松手瞬间跨边界错位）
+  const cached = window.__libDropCache;
+  const drop = (cached && cached.wantType === wantType) ? cached.drop : computeDrop(e, wantType);
   console.log("[drop-media] type=" + wantType + " drop=", drop, "at", atTimeUs);
   if (drop.kind === "existing") call("add_to_timeline", data.name, data.path, data.type, drop.dataTi, atTimeUs).then(refresh);
   else call("add_to_timeline", data.name, data.path, data.type, -1, atTimeUs, drop.dataInsertIndex).then(refresh);
@@ -2232,7 +2239,8 @@ function doDelete() {
 }
 function selectAll() {
   const keys = [];
-  for (const type of ["video", "audio", "text"]) {
+  // 全选必须覆盖所有轨道类型（含 effect/sticker，否则特效段永远选不中、Delete 删不掉）
+  for (const type of ["video", "audio", "text", "effect", "sticker"]) {
     const tracks = Store.state.draft[type] || [];
     tracks.forEach((segs, ti) => segs.forEach((s, idx) => keys.push(type + ":" + ti + ":" + idx)));
   }
@@ -2684,6 +2692,9 @@ function bindEvents() {
     }
     // 统一落点：preview/落点线/实际三位一体（computeDrop 单一真源）
     const drop = computeDrop(e, wantType);
+    // 缓存最后一次 dragover 落点：drop 时优先复用，避免松手瞬间鼠标微移导致落点跨边界
+    // （dragover 最后一帧与 drop 事件坐标可能差几像素，跨间隙/轨道边界时预览与实际会错位）
+    window.__libDropCache = { wantType: wantType, drop: drop };
     if (drop.kind === "existing") {
       // 命中同类型已有轨 → 直接对该轨 DOM 加高亮（不重建）
       const tr = buildTracks()[drop.displayIndex];
@@ -2707,9 +2718,9 @@ function bindEvents() {
   $("timeline").addEventListener("dragleave", e => {
     if (tlDragEnterCount === 0) return;
     tlDragEnterCount--;
-    if (tlDragEnterCount === 0) { hideDropPreview(); hideTrackPreview(); }
+    if (tlDragEnterCount === 0) { hideDropPreview(); hideTrackPreview(); window.__libDropCache = null; }
   });
-  $("timeline").addEventListener("drop", e => { tlDragEnterCount = 0; hideTrackPreview(); onTimelineDrop(e); });
+  $("timeline").addEventListener("drop", e => { tlDragEnterCount = 0; hideTrackPreview(); onTimelineDrop(e); window.__libDropCache = null; });
   $("playBtn").addEventListener("click", togglePlay);
   $("muteBtn").addEventListener("click", toggleMute);
   $("zoomRange").addEventListener("input", e => setZoom(+e.target.value));

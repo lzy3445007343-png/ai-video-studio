@@ -2053,11 +2053,14 @@ class Api:
             idx = 0
         segs = tracks[idx]
         duration = duration_for(path, mtype)
-        # 落点时间：指定则精确落在拖拽位置（不自动推时间，对齐 OpenCut「放得下就放、放不下新建轨」）；否则接到该轨末尾
+        # 落点时间：指定则精确落在拖拽位置；否则接到该轨末尾
         if at_time_us is not None:
             start = max(0, int(at_time_us))
         else:
             start = sum(s["duration"] for s in segs)
+        # 同轨不重叠（2026-08-18 用户反馈「素材叠到另一素材上」）：落点被占用 → 自动推到该轨最近空位
+        if any(_segments_overlap({"start": start, "duration": duration}, s) for s in segs):
+            start = _free_start_on_track(segs, start, duration)
         seg = {
             "name": name,
             "path": path,
@@ -2744,7 +2747,10 @@ class Api:
         if not isinstance(index, int) or index < 0 or index >= len(segs):
             return {"ok": False, "error": f"{track_type}[{track_index}] 没有第 {index} 段（共 {len(segs)} 段）"}
         new_start = max(0, int(new_start_us))
-        # 精确落点：拖到哪就落在哪（与跨轨/库拖入一致，允许同轨重叠；吸附负责对齐，不自动推时间）
+        # 同轨不重叠（2026-08-18）：落点被占用 → 自动推到该轨最近空位（跳过自身）
+        dur = int(segs[index].get("duration") or 0)
+        if any(_segments_overlap({"start": new_start, "duration": dur}, s) for i2, s in enumerate(segs) if i2 != index):
+            new_start = _free_start_on_track(segs, new_start, dur, exclude_index=index)
         segs[index]["start"] = new_start
         if ripple:
             apply_ripple_adjustments(self.draft, compute_ripple_adjustments(before, self.draft))
@@ -3186,8 +3192,12 @@ class Api:
         else:
             to_idx = _ensure_track(self.draft, track_type, -1)
         to_segs = self.draft[track_type][to_idx]
-        # 精确落点：拖到哪就落在哪（不自动推时间，对齐 OpenCut）；与预览/落点线同源
+        # 精确落点：拖到哪就落在哪；与预览/落点线同源
         start = max(0, int(at_time_us)) if at_time_us is not None else 0
+        # 同轨不重叠（2026-08-18）：落点被占用 → 自动推到该轨最近空位（to_segs 不含自身，已从源轨 pop）
+        dur = int(seg.get("duration") or 0)
+        if any(_segments_overlap({"start": start, "duration": dur}, s) for s in to_segs):
+            start = _free_start_on_track(to_segs, start, dur)
         seg["start"] = start
         to_segs.append(seg)
         # 目标轨道被放入片段，取消 persistent_empty 标记
