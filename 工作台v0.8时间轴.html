@@ -826,8 +826,15 @@ function removeDragGhost() {
 
 /* ---------- 渲染：素材面板（只读 Store） ---------- */
 let _mediaSig = "";
+let _effectSig = "";   // 特效库独立渲染签名：不共享 _mediaSig，否则异步回填 effects 后不重绘
 function renderMedia(s) {
-  if (s.filter === "effect") { renderEffectLibrary(s, $("mediaList")); return; }
+  if (s.filter === "effect") {
+    // 懒加载保险：特效注册表是启动异步从后端拉的；若此时尚未回填（时序/失败），点开特效 tab 补拉一次
+    if (!Store.state.effects || !Object.keys(Store.state.effects).length) {
+      call("get_effect_registry").then(r => { if (r && r.ok) Store.set({ effects: r.meta }); });
+    }
+    renderEffectLibrary(s, $("mediaList")); return;
+  }
   const list = (s.filter === "media" ? s.materials.filter(m => m.type === "video" || m.type === "image") : s.materials.filter(m => m.type === s.filter));
   const sig = s.filter + "|" + list.map(m => (m.uid || m.path) + ":" + m.name + ":" + m.type).join(",");
   // 仅在素材列表/筛选真正变化时重建 DOM；平时轮询只刷新选中态。
@@ -886,9 +893,9 @@ function renderMedia(s) {
 function renderEffectLibrary(s, box) {
   const reg = Store.state.effects || {};
   const keys = Object.keys(reg);
-  const sig = "effect|" + keys.join(",");
-  if (sig === _mediaSig) return;
-  _mediaSig = sig;
+  const sig = keys.join(",");
+  if (sig === _effectSig) return;   // 独立签名：effects 变化（空→已填）才重建，平时不重建（拖拽安全）
+  _effectSig = sig;
   box.innerHTML = "";
   if (!keys.length) { box.innerHTML = '<div class="empty" style="grid-column:1/-1;padding:20px;text-align:center;color:var(--muted)">特效注册表为空</div>'; return; }
   for (const type of keys) {
