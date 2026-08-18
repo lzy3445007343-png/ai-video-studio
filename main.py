@@ -360,7 +360,9 @@ def _ensure_track(draft, track_type, index):
     if index == -1:
         tracks.append([])
         meta.append({})
-        return len(tracks) - 1
+        new_idx = len(tracks) - 1
+        _sync_new_layer(draft, track_type, new_idx)
+        return new_idx
     while len(tracks) <= index:
         tracks.append([])
     while len(meta) < len(tracks):
@@ -386,6 +388,7 @@ def _insert_track(draft, track_type, insert_index):
         ins = max(1, ins)
     tracks.insert(ins, [])
     meta.insert(ins, {})
+    _sync_new_layer(draft, track_type, ins)
     return ins
 
 
@@ -442,7 +445,7 @@ def _collapse_empty_tracks(draft):
     draft["video"] = new_v
     meta["video"] = new_v_meta
 
-    for grp in ("audio", "text", "effect"):
+    for grp in ("audio", "text", "effect", "sticker"):
         tracks = draft.get(grp, [[]])
         t_meta = meta.get(grp, [])
         new_tracks = []
@@ -456,6 +459,58 @@ def _collapse_empty_tracks(draft):
             new_meta = [{}]
         draft[grp] = new_tracks
         meta[grp] = new_meta
+    # 折叠可能改变轨道索引 → 清理 layer_order 里的失效 key（保留已重排轨的相对顺序）
+    _clean_layer_order(draft)
+
+
+def _default_layer_order(draft):
+    """默认 overlay 显示顺序（text→sticker→effect→video>=1 倒序），不含主场景/audio。
+    与前端 buildTracks 的旧默认顺序严格一致（layer_order 空时的回退）。"""
+    out = []
+    for t in ("text", "sticker", "effect"):
+        for i in range(len(draft.get(t, []) or [])):
+            out.append("%s:%d" % (t, i))
+    v = draft.get("video", [[]]) or [[]]
+    for i in range(len(v) - 1, 0, -1):
+        out.append("video:%d" % i)
+    return out
+
+
+def _clean_layer_order(draft):
+    """折叠/删除轨后清理 layer_order：过滤失效 key + 补齐缺失轨（按默认序追加末尾）。
+    保持已重排轨的相对顺序；整个 overlay 池的 z 序 = layer_order。"""
+    order = draft.get("layer_order")
+    if not order:
+        return
+    valid = set()
+    for t in ("text", "sticker", "effect"):
+        for i in range(len(draft.get(t, []) or [])):
+            valid.add("%s:%d" % (t, i))
+    v = draft.get("video", [[]]) or [[]]
+    for i in range(1, len(v)):
+        valid.add("video:%d" % i)
+    cleaned = [k for k in order if k in valid]
+    seen = set(cleaned)
+    for k in _default_layer_order(draft):
+        if k in valid and k not in seen:
+            cleaned.append(k)
+    draft["layer_order"] = cleaned
+
+
+def _sync_new_layer(draft, track_type, ti):
+    """新建 overlay 轨后同步 layer_order（新轨插到最顶 = 显示最上）。
+    主场景 video[0] / audio 不参与 overlay 池。layer_order 为空时按默认序初始化。"""
+    if track_type == "audio":
+        return
+    if track_type == "video" and ti == 0:
+        return
+    order = draft.get("layer_order")
+    if not order:
+        order = _default_layer_order(draft)
+        draft["layer_order"] = order
+    key = "%s:%d" % (track_type, ti)
+    if key not in order:
+        order.insert(0, key)
 
 
 def _distribute_to_tracks(segments):
@@ -500,6 +555,7 @@ def load_state():
         s.setdefault("materials", [])
         s.setdefault("draft", {"video": [[]], "audio": [[]], "text": [[]], "effect": [[]]})
         s["draft"].setdefault("canvas", {"ratio": DEFAULT_CANVAS, "locked": False})
+        s["draft"].setdefault("layer_order", [])   # overlay z 序（OpenCut 同款逻辑池）：空=默认序，非空=按此排
         s.setdefault("version", 0)
         # 兼容历史脏数据：materials 偶尔会被写成 dict（空对象 {}），统一归一化为 list
         if isinstance(s["materials"], dict):
@@ -3218,6 +3274,28 @@ class Api:
             "ok": True, "track_type": track_type, "track_index": final_ti,
             "index": final_idx, "start": start,
         }
+
+    def reorder_overlay(self, layer_key, to_display_index):
+        """重排 overlay 轨 z 序（OpenCut 同款逻辑池，B1 改造 2026-08-18）。
+
+        layer_key: "type:ti"（text/sticker/effect/video>=1 之一，overlay 池成员）
+        to_display_index: 目标显示位（overlay 区下标，0=最顶；主场景/audio 恒固定不参与）
+        把该轨移到目标显示位，其他轨相对顺移。返回 {ok, layer_order}。
+        """
+        self._reload()
+        self._push_undo()
+        draft = self.draft
+        order = draft.get("layer_order")
+        if not order:
+            order = _default_layer_order(draft)
+        if layer_key not in order:
+            return {"ok": False, "error": "未知 overlay 轨：%s（layer_order=%s）" % (layer_key, order)}
+        order.remove(layer_key)
+        ins = max(0, min(int(to_display_index or 0), len(order)))
+        order.insert(ins, layer_key)
+        draft["layer_order"] = order
+        save_state(self.state)
+        return {"ok": True, "layer_order": order}
 
     def add_video_track(self, insert_index=None):
         """新增一条视频覆盖轨。insert_index=None 时追加到最上（主轨之上）；否则插入到指定位置。

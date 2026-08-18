@@ -1741,11 +1741,12 @@ function onPointerMove(e) {
     d.curLeftUs = left;
     d.groupDeltaUs = dUs;   // 整组移动预览用：非锚点段横向跟随量
     // 跨轨解析：统一走 computeDrop（displayIndex 单一真源），预览/落点/实际三位一体
-    const drop = computeDrop(e, d.type, d.verticalDragDirection);
+    // isMove=true：命中不兼容已有轨 → reorder（z 序重排，不新建）；reorder 时被拖段留在源轨（targetDataTi=d.ti）
+    const drop = computeDrop(e, d.type, d.verticalDragDirection, true);
     d.targetKind = drop.kind;
     d.targetType = drop.type;
     d.targetDisplayIndex = drop.displayIndex;
-    d.targetDataTi = (drop.kind === "existing") ? drop.dataTi : null;
+    d.targetDataTi = (drop.kind === "existing") ? drop.dataTi : (drop.kind === "reorder") ? d.ti : null;
     d.targetIsNew = (drop.kind === "new");
     d.dataInsertIndex = (drop.kind === "new") ? drop.dataInsertIndex : null;
     d.newAboveMain = false;
@@ -1820,6 +1821,14 @@ function onPointerUp() {
   if (d && d.moved) {
     if (d.mode === "move") {
       console.log("[drop-move] key=" + d.key + " targetKind=" + d.targetKind + " targetDataTi=" + d.targetDataTi + " dataInsertIndex=" + d.dataInsertIndex + " curLeftUs=" + Math.round(d.curLeftUs));
+      // B1（2026-08-18）：reorder = 命中不兼容已有轨 → z 序重排（该段所在轨移到目标显示位）
+      // 同时提交：move_segment（X 时间位）+ reorder_overlay（Y 图层序）
+      if (d.targetKind === "reorder") {
+        call("move_segment", d.type, d.ti, d.idx, Math.round(d.curLeftUs), Store.state.rippleOn).then(() =>
+          call("reorder_overlay", d.type + ":" + d.ti, d.targetDisplayIndex).then(() => { selectKey(null); refresh(); })
+        );
+        return;
+      }
       if (d.type === "effect") {
         if (d.targetKind === "new") {
           // 特效段拖到空白/异类型 → 新建特效轨（displayIndex→dataInsertIndex 同源）
@@ -2139,9 +2148,14 @@ function onTimelineDrop(e) {
   const cached = window.__libDropCache;
   const drop = (cached && cached.wantType === wantType) ? cached.drop : computeDrop(e, wantType);
   console.log("[drop-media] type=" + wantType + " drop=", drop, "at", atTimeUs);
-  // 库拖入落位后自动滚到素材实际落位（2026-08-18 修：避让后落到末尾，用 r.start 而非 atTimeUs，否则避让后视图还停在中段看不到素材）
-  if (drop.kind === "existing") call("add_to_timeline", data.name, data.path, data.type, drop.dataTi, atTimeUs).then(r => { refresh(); if (r && r.start != null) scrollToSegmentUs(r.start); });
-  else call("add_to_timeline", data.name, data.path, data.type, -1, atTimeUs, drop.dataInsertIndex).then(r => { refresh(); if (r && r.start != null) scrollToSegmentUs(r.start); });
+  // 库拖入落位后自动滚到素材实际落位（2026-08-18 修：避让后落到末尾，用 r.start 而非 atTimeUs）
+  // 2026-08-18 修：r.ok=false 必须 alert 错误——否则失败静默，用户以为"没放进去"（MP4 放不进体感根因）
+  const okHandler = (r) => {
+    if (r && r.ok) { refresh(); if (r.start != null) scrollToSegmentUs(r.start); }
+    else alert("添加素材失败：" + ((r && r.error) ? r.error : "未知错误"));
+  };
+  if (drop.kind === "existing") call("add_to_timeline", data.name, data.path, data.type, drop.dataTi, atTimeUs).then(okHandler);
+  else call("add_to_timeline", data.name, data.path, data.type, -1, atTimeUs, drop.dataInsertIndex).then(okHandler);
 }
 /* 落位后自动滚动到指定时间位（库拖入用，轴内移动不滚） */
 function scrollToSegmentUs(us) {
