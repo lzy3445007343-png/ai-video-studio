@@ -933,7 +933,12 @@ def save_state(state, record=True):
             with open(STATE_PATH, "w", encoding="utf-8") as f:
                 json.dump(state, f, ensure_ascii=False, indent=2)
         return True
-    except Exception:
+    except Exception as e:
+        # 2026-08-19：写盘失败必须可见（之前静默 return False → add 照常 ok=true → 段在内存但没落盘
+        # → 下一个操作 _reload 读旧盘 → 段全丢 = "拖进去了又消失"的元凶）。打后端控制台 + 返回 False。
+        import traceback
+        print("[SAVE-FAIL] 写盘失败:", repr(e))
+        traceback.print_exc()
         return False
 
 
@@ -2409,7 +2414,8 @@ class Api:
         total = (len(self.draft.setdefault("main", {"segs": []}).get("segs", []))
                  + sum(len(t.get("segs", [])) for t in self.draft.get("overlay", []))
                  + sum(len(a.get("segs", [])) for a in self.draft.get("audio", [])))
-        save_state(self.state)
+        if not save_state(self.state):
+            return {"ok": False, "error": "保存草稿失败（写盘异常，看后端控制台 [SAVE-FAIL]）"}
         fallback = (mtype in ("video", "audio") and not has_ffmpeg())
         return {
             "ok": True,
@@ -3559,7 +3565,8 @@ class Api:
         # 定位被移动片段的真实位置（折叠可能改变了轨道索引）
         located = _locate_seg(self.draft, seg)
         final_ti, final_idx = (located[1], located[2]) if located else (to_idx, len(to_segs) - 1)
-        save_state(self.state)
+        if not save_state(self.state):
+            return {"ok": False, "error": "保存草稿失败（写盘异常，看后端控制台 [SAVE-FAIL]）"}
         return {
             "ok": True, "track_type": track_type, "track_index": final_ti,
             "index": final_idx, "start": start,
