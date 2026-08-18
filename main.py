@@ -932,6 +932,20 @@ def save_state(state, record=True):
         else:
             with open(STATE_PATH, "w", encoding="utf-8") as f:
                 json.dump(state, f, ensure_ascii=False, indent=2)
+        # 2026-08-19 读回验证：堵死「假成功」——写盘没抛异常但内容不对（磁盘缓存/另一个进程抢写）
+        # 返回 True 但段没落盘 = "动一下但没素材"的另一条路。读回不一致 → 明确 [SAVE-VERIFY-FAIL]。
+        try:
+            with open(STATE_PATH, "r", encoding="utf-8") as f:
+                back = json.load(f)
+            if back.get("draft") != state["draft"]:
+                print("[SAVE-VERIFY-FAIL] 写盘内容与内存不一致！内存 draft 段数=%d 磁盘=%d" % (
+                    sum(len(t.get("segs", [])) for t in (state["draft"].get("overlay") or [])) + len((state["draft"].get("main") or {}).get("segs", [])),
+                    sum(len(t.get("segs", [])) for t in (back.get("draft", {}).get("overlay") or [])) + len((back.get("draft", {}).get("main") or {}).get("segs", [])),
+                ))
+                return False
+        except Exception as e:
+            print("[SAVE-VERIFY-FAIL] 读回失败:", repr(e))
+            return False
         return True
     except Exception as e:
         # 2026-08-19：写盘失败必须可见（之前静默 return False → add 照常 ok=true → 段在内存但没落盘
