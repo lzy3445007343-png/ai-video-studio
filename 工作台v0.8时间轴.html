@@ -2034,14 +2034,15 @@ function onTimelineDrop(e) {
     // 兜底：部分 webview 在 drop 时 getData 取不到，用拖拽时缓存的 payload
     try { data = JSON.parse(dragGhostData && dragGhostData.payload || "{}"); } catch (_) {}
   }
-  // 特效拖入：尊重落点（Y→特效轨索引，X→起始时间）；落特效轨=调整层，未命中特效轨也建调整层于特效轨
+  // 特效拖入：尊重落点（Y→特效轨索引，X→起始时间）；落特效轨=调整层，拖到无特效轨的空白区=新建一条特效轨
   if (data && data.kind === "effect") {
     const rect = $("tlScroll").getBoundingClientRect();
     const atTimeUs = Math.max(0, Math.round((e.clientX - rect.left + $("tlScroll").scrollLeft) / pps() * 1e6));
     const effTr = trackUnderY(e.clientY, "effect");
-    const drop = { atTimeUs };
-    if (effTr) drop.trackIndex = effTr.ti;   // 拖到哪条特效轨就落在哪条
-    addEffectFromLibrary(data.type, drop);
+    let trackIndex;
+    if (effTr) trackIndex = effTr.ti;                            // 拖到哪条特效轨就落在哪条
+    else trackIndex = (Store.state.draft.effect || []).length;  // 拖到空白 → 追加新建一条特效轨
+    addEffectFromLibrary(data.type, { trackIndex, atTimeUs });
     return;
   }
   if (!data || !data.path) return;
@@ -2565,16 +2566,16 @@ function bindEvents() {
     const isEffect = d && d.kind === "effect";
     const wantType = isEffect ? "effect" : dragTrackType();
     const contentRect = $("tlContent").getBoundingClientRect();
-    // 类型不兼容：命中的轨道显禁用态（红），提示此处放不进去；特效可放任意处，不做禁用
+    // 类型不兼容：命中的轨道显禁用态（红），提示此处放不进去；特效可放任意处，且特效轨本身不作禁用（避免误红）
     const rawTr = trackUnderY(e.clientY, null);
     $("tlContent").querySelectorAll(".track").forEach(t => { t.classList.remove("drop-target"); t.classList.remove("drop-disabled"); });
-    if (!isEffect && rawTr && rawTr.type !== wantType) {
+    if (!isEffect && rawTr && rawTr.type !== wantType && rawTr.type !== "effect") {
       rawTr.el.classList.add("drop-disabled");
       $("dropLine").style.display = "none"; $("dropNewTrackHint").style.display = "none";
       return;
     }
     const tr = trackUnderY(e.clientY, wantType);
-    const isNewTrack = !tr && !isEffect;   // 特效不新建轨，无落点时不提示「新建轨道」
+    const isNewTrack = !tr;   // 拖到任意轨道下方空白 → 提示「新建轨道」（特效拖空白=新建特效轨）
     showDropPreview(tr ? tr.el : null, e.clientX - contentRect.left, isNewTrack);
   });
   $("timeline").addEventListener("dragleave", e => {
