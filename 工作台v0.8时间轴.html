@@ -92,12 +92,14 @@
   .drop-newtrack-hint { position: absolute; left: 50%; top: 50%; transform: translate(-50%,-50%);
     background: rgba(0,0,0,.7); color: #fff; padding: 4px 10px; border-radius: 12px; font-size: 11px;
     pointer-events: none; z-index: 10; white-space: nowrap; display: none; }
-  /* 库拖入「新建轨」预览占位（overlay，dragover 期间只移动位置不重建 DOM；OpenCut DragLine 思路） */
-  .track-preview-overlay { position: absolute; left: 0; right: 0; height: var(--track-h);
-    outline: 2px dashed var(--accent); outline-offset: -2px; background: rgba(64,150,255,.14);
-    pointer-events: none; z-index: 6; display: none; }
-  .track-preview-overlay .tpo-label { position: absolute; left: 8px; top: 2px; font-size: 11px; color: var(--accent);
-    background: rgba(0,0,0,.5); padding: 1px 6px; border-radius: 4px; white-space: nowrap; }
+  /* 库拖入「落点线 + 影子段」反馈（OpenCut DragLine 同款，2026-08-18 收口） */
+  .drag-line { position: absolute; left: 0; right: 0; height: 2px; background: var(--accent);
+    pointer-events: none; z-index: 9; display: none; }
+  .clip-ghost { position: absolute; height: 32px; border-radius: 4px; background: rgba(64,150,255,.18);
+    border: 1.5px dashed var(--accent); pointer-events: none; z-index: 8;
+    align-items: center; padding: 0 6px; }
+  .clip-ghost .cg-label { font-size: 11px; color: var(--accent); background: rgba(0,0,0,.5);
+    padding: 1px 6px; border-radius: 4px; white-space: nowrap; }
   /* 拖拽落点反馈（2026-08-17 参考 OpenCut）：兼容轨道高亮 / 不兼容轨道禁用态 */
   .track.drop-target { box-shadow: inset 0 0 0 2px var(--primary); background: var(--primary-dim); }
   .track.drop-disabled { box-shadow: inset 0 0 0 2px #ff4d4f; background: #ff4d4f18; }
@@ -637,8 +639,9 @@
           <div class="ruler" id="ruler"></div>
           <div class="playhead" id="playhead" style="left:0"><div class="playhead-handle" id="playheadHandle"></div></div>
           <div class="drop-line" id="dropLine" style="display:none"></div>
+          <div class="drag-line" id="dragLine" style="display:none"></div>
+          <div class="clip-ghost" id="clipGhost" style="display:none"><span class="cg-label" id="clipGhostLabel"></span></div>
           <div class="drop-newtrack-hint" id="dropNewTrackHint" style="display:none">松开：新建轨道</div>
-          <div class="track-preview-overlay" id="trackPreviewOverlay" style="display:none"><span class="tpo-label" id="trackPreviewLabel">叠加预览</span></div>
           <div class="snap-guide" id="snapGuide" style="display:none"></div>
           <div class="sel-box" id="selBox" style="display:none"></div>
           <div class="group-box" id="groupBox" style="display:none"><div class="gh l" id="groupHandleL"></div><div class="gh r" id="groupHandleR"></div></div>
@@ -894,7 +897,7 @@ function renderMedia(s) {
       moveDragGhost(e.clientX, e.clientY);
     });
     card.addEventListener("drag", e => { moveDragGhost(e.clientX, e.clientY); });
-    card.addEventListener("dragend", () => { isLibraryDragging = false; hideTrackPreview(); dragGhostData = null; window.__libDropCache = null; removeDragGhost(); });
+    card.addEventListener("dragend", () => { isLibraryDragging = false; hideDragLine(); hideClipGhost(); dragGhostData = null; window.__libDropCache = null; removeDragGhost(); });
     card.addEventListener("click", () => selectMaterial(uid));
     card.querySelector(".add").addEventListener("click", e => {
       e.stopPropagation();
@@ -944,7 +947,7 @@ function renderEffectLibrary(s, box) {
       moveDragGhost(e.clientX, e.clientY);
     });
     card.addEventListener("drag", e => moveDragGhost(e.clientX, e.clientY));
-    card.addEventListener("dragend", () => { isLibraryDragging = false; hideTrackPreview(); dragGhostData = null; window.__libDropCache = null; removeDragGhost(); });
+    card.addEventListener("dragend", () => { isLibraryDragging = false; hideDragLine(); hideClipGhost(); dragGhostData = null; window.__libDropCache = null; removeDragGhost(); });
     box.appendChild(card);
   }
 }
@@ -975,7 +978,7 @@ function addEffectFromLibrary(type, drop) {
   }
   // 拖到空白新建特效轨：传 insertIndex 让后端在指定显示位插入（与 computeDrop/预览同源）
   call("add_effect", trackIndex, type, target, startUs, null, null, null, null, insertIndex).then(r => {
-    if (r && r.ok) { refresh(); selectKey("effect:" + r.track_index + ":" + r.index); showToolTab("effects"); }
+    if (r && r.ok) { refresh(); selectKey("effect:" + r.track_index + ":" + r.index); showToolTab("effects"); scrollToSegmentUs(startUs || 0); }
     else alert("添加特效失败：" + (r && r.error ? r.error : "未知"));
   });
 }
@@ -1682,13 +1685,13 @@ function startPointer(e, seg, mode, side) {
     selectKey(key);
   }
   e.preventDefault();
-  window.__dragStartY = e.clientY;   // 跨轨间隙方向判定（上拖→归属上一条）用
+  window.__dragStartY = e.clientY;   // 库拖入 + 轴内移动 共用：verticalDragDirection 起点 Y
   Store.set({
     pendingDrag: {
       key, mode, side: side || null, type, ti: +ti, idx: +idx,
       isGroup: !!(inSel && multi && !e.ctrlKey && !e.metaKey && mode === "move"),
       anchorKey: key,
-      startMouseX: e.clientX, s0,
+      startMouseX: e.clientX, startMouseY: e.clientY, s0,
       curLeftUs: s0.start, curRightUs: s0.start + s0.duration,
       groupDeltaUs: 0,
       // 跨轨落点：默认目标=源轨；移动中由 computeDrop 实时更新（displayIndex 单一真源）
@@ -1721,6 +1724,13 @@ function onPointerMove(e) {
   const dx = e.clientX - d.startMouseX;
   if (!d.moved) { d.moved = true; }
   const dUs = dx / pps() * 1e6;
+  // 轴内移动的 verticalDragDirection（gap 归属方向，OpenCut 同款）—— 后续 computeDrop 用
+  if (typeof d.startMouseY === "number") {
+    const dy = e.clientY - d.startMouseY;
+    if (dy < -5) d.verticalDragDirection = "up";
+    else if (dy > 5) d.verticalDragDirection = "down";
+    else d.verticalDragDirection = null;
+  }
   if (d.mode === "move") {
     let left = Math.max(0, d.s0.start + dUs);
     if (Store.state.snapOn) {
@@ -1731,7 +1741,7 @@ function onPointerMove(e) {
     d.curLeftUs = left;
     d.groupDeltaUs = dUs;   // 整组移动预览用：非锚点段横向跟随量
     // 跨轨解析：统一走 computeDrop（displayIndex 单一真源），预览/落点/实际三位一体
-    const drop = computeDrop(e, d.type);
+    const drop = computeDrop(e, d.type, d.verticalDragDirection);
     d.targetKind = drop.kind;
     d.targetType = drop.type;
     d.targetDisplayIndex = drop.displayIndex;
@@ -1774,7 +1784,24 @@ function onPointerMove(e) {
     } else hideSnapGuide();
     d.curRightUs = r2;
   }
-  Store._emit(); // 临时态 → 自动重绘（被拖片段位置由 render 绘制，非手动改）
+  // RAF 合并（2026-08-18 收口，FableCut 脏标记思路）：mousemove 高频触发，每帧最多 _emit 一次
+  // 根治"鼠标停了才跟上"卡顿；mousemove 期间只更新 Store.state.drag，下一帧 paint 前统一重绘
+  _scheduleDragRender();
+}
+/* 拖拽期间 RAF 帧合并（fablecut app.js L5186 dirtyTimeline 思路 JS 版） */
+let _dragRenderPending = false;
+let _dragRafHandle = null;
+function _scheduleDragRender() {
+  if (_dragRenderPending) return;
+  _dragRenderPending = true;
+  if (_dragRafHandle !== null) return;
+  _dragRafHandle = requestAnimationFrame(() => {
+    _dragRafHandle = null;
+    if (_dragRenderPending) {
+      _dragRenderPending = false;
+      Store._emit();
+    }
+  });
 }
 function onPointerUp() {
   const d = Store.state.drag;
@@ -2112,8 +2139,16 @@ function onTimelineDrop(e) {
   const cached = window.__libDropCache;
   const drop = (cached && cached.wantType === wantType) ? cached.drop : computeDrop(e, wantType);
   console.log("[drop-media] type=" + wantType + " drop=", drop, "at", atTimeUs);
-  if (drop.kind === "existing") call("add_to_timeline", data.name, data.path, data.type, drop.dataTi, atTimeUs).then(refresh);
-  else call("add_to_timeline", data.name, data.path, data.type, -1, atTimeUs, drop.dataInsertIndex).then(refresh);
+  // 库拖入落位后自动滚到素材位置（2026-08-18 收口：用户反馈"还要滑滑块去找"）
+  if (drop.kind === "existing") call("add_to_timeline", data.name, data.path, data.type, drop.dataTi, atTimeUs).then(r => { refresh(); scrollToSegmentUs(atTimeUs); });
+  else call("add_to_timeline", data.name, data.path, data.type, -1, atTimeUs, drop.dataInsertIndex).then(r => { refresh(); scrollToSegmentUs(atTimeUs); });
+}
+/* 落位后自动滚动到指定时间位（库拖入用，轴内移动不滚） */
+function scrollToSegmentUs(us) {
+  const scroll = $("tlScroll");
+  if (!scroll) return;
+  const targetLeft = Math.max(0, us / 1e6 * pps() - 200);
+  setTimeout(() => { scroll.scrollLeft = targetLeft; }, 50);  // 等 refresh 重绘完再滚（避免 jitter）
 }
 /* 当前被拖素材对应的轨道类型（OpenCut 兼容表：audio→audio, text→text, video/image→video） */
 function dragTrackType() {
@@ -2192,19 +2227,41 @@ function hideDropPreview() {
   $("dropNewTrackHint").style.display = "none";
   $("tlContent").querySelectorAll(".track").forEach(t => { t.classList.remove("drop-target"); t.classList.remove("drop-disabled"); });
 }
-/* 库拖入「新建轨」预览占位：overlay 虚线框，dragover 只移动位置，零 DOM 重建（OpenCut DragLine 思路） */
-function showTrackPreview(drop, contentRect) {
-  const ov = $("trackPreviewOverlay");
-  if (!ov) return;
-  const labelBy = { video: "叠加", audio: "音轨", text: "文本轨", effect: "特效轨", sticker: "贴纸轨" };
-  $("trackPreviewLabel").textContent = (labelBy[drop.type] || "轨") + "预览";
-  const y = displayRowCenterY(drop.displayIndex);
-  ov.style.display = "";
-  ov.style.top = Math.max(0, y - contentRect.top - 24) + "px";   // 24 = 行高一半，让虚线框对齐目标行
+/* OpenCut DragLine 同款：库拖入 / 轴内移动的落点线（蓝细横线，标在落点 Y） */
+function showDragLine(y) {
+  const line = $("dragLine");
+  if (!line) return;
+  const contentRect = $("tlContent").getBoundingClientRect();
+  line.style.display = "";
+  line.style.top = (y - contentRect.top) + "px";
 }
-function hideTrackPreview() {
-  const ov = $("trackPreviewOverlay");
-  if (ov) ov.style.display = "none";
+function hideDragLine() {
+  const line = $("dragLine");
+  if (line) line.style.display = "none";
+}
+/* OpenCut 「影子段」：库拖入时在目标 X 位置显示半透明预览段，让用户直观看到落点+时长+目标轨 */
+function showClipGhost(dragType, xUs) {
+  const ghost = $("clipGhost");
+  if (!ghost) return;
+  const labelBy = { video: "🎬", audio: "♪", text: "T", effect: "✦", sticker: "⭐" };
+  $("clipGhostLabel").textContent = (labelBy[dragType] || "▣") + " 松开放置";
+  const ppsV = pps();
+  const contentRect = $("tlContent").getBoundingClientRect();
+  // 影子段默认宽度 = 4s（库拖入默认时长，无精确素材时长时用占位宽度；有素材时长则用真实）
+  let widthPx = 4 * ppsV;
+  if (dragGhostData && dragGhostData.payload) {
+    try {
+      const p = JSON.parse(dragGhostData.payload);
+      // 媒体时长：后端 duration_for 在 drop 时才算；这里用 4s 占位（足够示意）
+    } catch (_) {}
+  }
+  ghost.style.display = "";
+  ghost.style.width = widthPx + "px";
+  ghost.style.left = (xUs / 1e6 * ppsV - contentRect.left) + "px";
+}
+function hideClipGhost() {
+  const ghost = $("clipGhost");
+  if (ghost) ghost.style.display = "none";
 }
 
 /* 工具栏动作 */
@@ -2654,9 +2711,12 @@ function bindEvents() {
     }
   }, { passive: false });
   /* 时间轴拖放：绑在最外层 #timeline，只在轨道区域（tlMain 内）接。
-     轻量原则（2026-08-18 审计后）：dragover 期间【零整树重建】——
-     高亮=直接对现有 track/seg DOM 切类；新建轨预览=移动 overlay 占位元素；
-     不调 Store._emit()（否则每 mousemove 全量销毁重建时间轴 → 阻尼感）。drop 才提交数据。 */
+     反馈体系（2026-08-18 收口，对标 OpenCut DragLine+ghost+高亮三件套）：
+     ① DragLine 蓝细横线（落点 Y 位置）+ 目标轨高亮（existing）/ 间隙无高亮（new）
+     ② 库拖入时显示「影子段」半透明预览在目标 X 位置（让用户直观看到落点+时长）
+     ③ placement 接受 verticalDragDirection（dragstartY vs 当前 Y，5px 阈值）→
+        间隙归属上/下轨（OpenCut 同款）
+     ④ dragover 期间零整树重建（沿用 bd2eb76 轻量方案） */
   let tlDragEnterCount = 0;
   $("timeline").addEventListener("dragenter", e => {
     e.preventDefault();
@@ -2664,8 +2724,7 @@ function bindEvents() {
   });
   $("timeline").addEventListener("dragover", e => {
     const tlMainRect = $("tlMain").getBoundingClientRect();
-    // 工具栏上方：不阻止默认行为，显示系统禁止图标
-    if (e.clientY < tlMainRect.top) { hideDropPreview(); hideTrackPreview(); return; }
+    if (e.clientY < tlMainRect.top) { hideDropPreview(); hideDragLine(); hideClipGhost(); return; }
     e.preventDefault(); e.dataTransfer.dropEffect = "copy";
     let d = null; if (dragGhostData && dragGhostData.payload) { try { d = JSON.parse(dragGhostData.payload); } catch (_) {} }
     const isEffect = d && d.kind === "effect";
@@ -2675,13 +2734,19 @@ function bindEvents() {
     // 清旧高亮/禁用/片段绑段态，避免残留
     $("tlContent").querySelectorAll(".track").forEach(t => { t.classList.remove("drop-target"); t.classList.remove("drop-disabled"); });
     $("tlContent").querySelectorAll(".seg").forEach(s => s.classList.remove("drop-target-seg"));
-    // 特效拖到可绑定片段上：不走轨道级 preview，直接高亮片段（OpenCut 行为）
-    let bindSeg = null;
+    // 算 verticalDragDirection（库拖入：dragstartY vs 当前 Y，5px 阈值）
+    let vDir = null;
+    if (typeof window.__dragStartY === "number") {
+      const dy = e.clientY - window.__dragStartY;
+      if (dy < -5) vDir = "up";
+      else if (dy > 5) vDir = "down";
+    }
+    // 特效拖到可绑定片段上：直接高亮片段（OpenCut 行为），不走轨道级反馈
     if (isEffect) {
-      bindSeg = findSegUnderCursor(e);
+      const bindSeg = findSegUnderCursor(e);
       const compatible = bindSeg && ["video", "image", "audio", "text", "sticker"].includes(bindSeg.segType);
       if (compatible) {
-        hideTrackPreview();
+        hideDragLine(); hideClipGhost();
         hint.style.display = "none";
         line.style.display = "";
         line.style.left = (e.clientX - contentRect.left) + "px";
@@ -2690,37 +2755,55 @@ function bindEvents() {
         return;
       }
     }
-    // 统一落点：preview/落点线/实际三位一体（computeDrop 单一真源）
-    const drop = computeDrop(e, wantType);
-    // 缓存最后一次 dragover 落点：drop 时优先复用，避免松手瞬间鼠标微移导致落点跨边界
-    // （dragover 最后一帧与 drop 事件坐标可能差几像素，跨间隙/轨道边界时预览与实际会错位）
+    // 统一落点：preview/落点线/实际三位一体（computeDrop 单一真源，verticalDragDirection 决定间隙归属）
+    const drop = computeDrop(e, wantType, vDir);
     window.__libDropCache = { wantType: wantType, drop: drop };
+    // atTimeUs 用 e.clientX 算（与 drop 时同源，避免边界漂移）
+    const atTimeUs = Math.max(0, Math.round((e.clientX - contentRect.left + $("tlScroll").scrollLeft) / pps() * 1e6));
     if (drop.kind === "existing") {
-      // 命中同类型已有轨 → 直接对该轨 DOM 加高亮（不重建）
+      // 命中同类型已有轨：① 目标轨高亮 ② DragLine 蓝细横线在目标轨 Y 位置 ③ 影子段在 X 位置
       const tr = buildTracks()[drop.displayIndex];
       const el = tr ? trackElOf(tr) : null;
-      if (el) el.classList.add("drop-target");
-      hideTrackPreview();
+      if (el) {
+        el.classList.add("drop-target");
+        const r = el.getBoundingClientRect();
+        showDragLine(r.top + r.height / 2);
+      }
+      hideClipGhost();
       hint.style.display = "none";
       line.style.display = "";
-      line.style.left = (e.clientX - contentRect.left) + "px";   // 蓝色落点线 = 拖到的横向时间位
+      line.style.left = (e.clientX - contentRect.left) + "px";
+      // 库拖入时才显示影子段（轴内移动用 isMove 自己的预览）
+      if (!Store.state.drag || !Store.state.drag.moved) {
+        showClipGhost(wantType, atTimeUs);
+      } else {
+        hideClipGhost();
+      }
     } else {
-      // 新建轨：overlay 预览轨占位（虚线框随鼠标实时移动）+ 「新建轨道」提示
+      // 新建轨：① 间隙无目标轨高亮 ② DragLine 在间隙 Y 位置 ③ 影子段在 X 位置 ④ "新建轨道" hint
+      hideClipGhost();
       line.style.display = "none";
-      hint.style.display = "";
+      // DragLine Y = 目标显示行中心（对齐 OpenCut 间隙线）
       const y = displayRowCenterY(drop.displayIndex);
+      showDragLine(y);
+      hint.style.display = "";
       hint.style.top = (y - contentRect.top) + "px";
       hint.style.left = (e.clientX - contentRect.left) + "px";
       hint.style.transform = "translateX(-50%)";
-      showTrackPreview(drop, contentRect);
+      // 库拖入时显示影子段（new 路径：素材将以此时长落在新建轨上）
+      if (!Store.state.drag || !Store.state.drag.moved) {
+        showClipGhost(wantType, atTimeUs);
+      } else {
+        hideClipGhost();
+      }
     }
   });
   $("timeline").addEventListener("dragleave", e => {
     if (tlDragEnterCount === 0) return;
     tlDragEnterCount--;
-    if (tlDragEnterCount === 0) { hideDropPreview(); hideTrackPreview(); window.__libDropCache = null; }
+    if (tlDragEnterCount === 0) { hideDropPreview(); hideDragLine(); hideClipGhost(); window.__libDropCache = null; }
   });
-  $("timeline").addEventListener("drop", e => { tlDragEnterCount = 0; hideTrackPreview(); onTimelineDrop(e); window.__libDropCache = null; });
+  $("timeline").addEventListener("drop", e => { tlDragEnterCount = 0; hideDragLine(); hideClipGhost(); onTimelineDrop(e); window.__libDropCache = null; });
   $("playBtn").addEventListener("click", togglePlay);
   $("muteBtn").addEventListener("click", toggleMute);
   $("zoomRange").addEventListener("input", e => setZoom(+e.target.value));

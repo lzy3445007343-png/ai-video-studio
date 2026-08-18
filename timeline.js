@@ -80,12 +80,12 @@ function buildTracks() {
   for (let i = 0; i < st.length; i++) {
     if (st[i] && st[i].length > 0) out.push({ type: "sticker", ti: i, label: "贴纸轨" + (i + 1), segs: st[i] });
   }
-  // 特效轨：显示在贴纸轨之下、视频轨之上（特效是盖在素材上的图层，时间轴顺序与预览 z 序一致：文本>贴纸>特效>视频）
-  // 恒显示（至少第 0 轨）：否则空轨时不渲染特效轨 DOM，用户既看不到也拖不进特效
+  // 特效轨：按需生成（2026-08-18 用户设计：只固定主场景轨，其他轨全部按需）。
+  // 拖特效到空白 → computeDrop 找不到 effect 轨 → new → DragLine+影子段+「新建特效轨」提示 → 松手新建。
+  // 不再"恒渲染第 0 轨"（旧的 efLanes 兜底与用户「只主场景固定」的设计冲突，已删除）。
   const ef = d.effect || [];
-  const efLanes = ef.length || 1;
-  for (let i = 0; i < efLanes; i++) {
-    out.push({ type: "effect", ti: i, label: "特效轨" + (i + 1), segs: ef[i] || [] });
+  for (let i = 0; i < ef.length; i++) {
+    if (ef[i] && ef[i].length > 0) out.push({ type: "effect", ti: i, label: "特效轨" + (i + 1), segs: ef[i] });
   }
   const v = d.video || [];
   // 先叠加轨(i>0，仅非空显示，高索引在上)，再主轨(i=0，恒显示)
@@ -167,18 +167,57 @@ function dataInsertIndexFromTargetDisplay(type, targetDisplayIndex, draft) {
 }
 
 function _makeNewDrop(tracks, dragType, refDisplayIndex, above) {
-  const targetRaw = above ? refDisplayIndex : refDisplayIndex + 1;
-  const targetDisplayIndex = clampTargetDisplay(dragType, targetRaw);
-  const dataInsertIndex = dataInsertIndexFromTargetDisplay(dragType, targetDisplayIndex, Store.state.draft);
+  // 兼容旧调用（不再被 computeDrop 内部使用，但留这里防止外部误用导致 undefined 行为）
+  const direction = above ? "above" : "below";
+  return resolveNewDrop(direction, refDisplayIndex, tracks, dragType);
+}
+
+/* 新建轨解析（OpenCut 同款：verticalDragDirection → direction → 公式换算 dataInsertIndex）
+   视频组 display 倒序（高 data index 在上），其他组顺序（display = data）。
+   核心：用户拖动方向决定"above/below"（新轨在 preferredTrack 的上方还是下方），
+   再按显示/数据映射公式换算 dataInsertIndex，让预览/落位/后端插入严格同源。
+   - above preferredDisplay p：新轨显示在 p 位置（原 preferredTrack 下移到 p+1）
+     - 视频组：dataInsertIndex = L - p（新轨 data index = L-p，append 到末尾 = 显示最上）
+     - 其他组：dataInsertIndex = p（原轨 +1）
+   - below preferredDisplay p：新轨显示在 p+1 位置
+     - 视频组：dataInsertIndex = L - 1 - p（preferredTrack 不动，新轨插在它位置，原轨 +1）
+     - 其他组：dataInsertIndex = p + 1
+   - 视频组主场景保护：dataInsertIndex 钳到 [1, L]（不能在主场景之下） */
+function resolveNewDrop(direction, preferredDisplay, tracks, dragType) {
+  if (dragType === "video") {
+    const v = Store.state.draft.video || [[]];
+    const L = v.length;
+    const rawIns = direction === "above" ? L - preferredDisplay : L - 1 - preferredDisplay;
+    const dataInsertIndex = Math.max(1, Math.min(rawIns, L));
+    // 显示索引反推：displayIndex + dataInsertIndex = L（display 倒序，新轨使数组长度 L+1）
+    const displayIndex = (L + 1) - 1 - dataInsertIndex;
+    return {
+      kind: "new", type: dragType,
+      displayIndex, dataTi: null, dataInsertIndex,
+      insertPosition: direction, targetExisting: false,
+    };
+  }
+  // 顺序显示（audio/text/effect/sticker）：display 与 data 同序
+  const len = (Store.state.draft[dragType] || []).length;
+  const rawIns = direction === "above" ? preferredDisplay : preferredDisplay + 1;
+  const dataInsertIndex = Math.max(0, Math.min(rawIns, len));
   return {
     kind: "new", type: dragType,
-    displayIndex: targetDisplayIndex,
-    dataTi: null, dataInsertIndex: dataInsertIndex,
-    targetExisting: false,
+    displayIndex: dataInsertIndex, dataTi: null, dataInsertIndex,
+    insertPosition: direction, targetExisting: false,
   };
 }
 
-function computeDrop(e, dragType) {
+/* ============ 统一落点模型（OpenCut 风格 drag direction 归属间隙） ============
+   verticalDragDirection: "up" | "down" | null（库拖入用 dragstartY vs 当前 Y 算出；轴内移动同理）
+   间隙归属：
+   - up    → 间隙归属上方轨（i）       → "above" preferredDisplay i
+   - down  → 间隙归属下方轨（i+1）     → "below" preferredDisplay i+1
+   - null  → 默认 up 语义（保留兼容）
+   不兼容轨归属：上半分 → above，下半分 → below
+   所有轨之上/之下：固定 above/below（与拖动方向无关） */
+function computeDrop(e, dragType, verticalDragDirection) {
+  verticalDragDirection = verticalDragDirection || null;
   const tracks = buildTracks();
   const block = dragTypeBlock(dragType);
   const y = e.clientY;
@@ -193,31 +232,54 @@ function computeDrop(e, dragType) {
   if (insideIdx >= 0) {
     const t = tracks[insideIdx];
     if (block.includes(t.type)) {
-      // 落入同类型已有轨
-      return { kind: "existing", type: t.type, displayIndex: insideIdx, dataTi: t.ti, dataInsertIndex: null, targetExisting: true };
+      return {
+        kind: "existing", type: t.type,
+        displayIndex: insideIdx, dataTi: t.ti, dataInsertIndex: null,
+        insertPosition: null, targetExisting: true,
+      };
     }
-    // 落在不兼容的已有轨：上半→新轨在其上方，下半→新轨在其下方（OpenCut 同式）
+    // 落在不兼容的已有轨：上半分→新轨在其上方（above），下半分→新轨在其下方（below）
     const el = trackElOf(t);
     const r = el.getBoundingClientRect();
     const topHalf = (y < r.top + r.height / 2);
-    return _makeNewDrop(tracks, dragType, insideIdx + (topHalf ? 0 : 1), !topHalf);
+    return resolveNewDrop(topHalf ? "above" : "below", insideIdx, tracks, dragType);
   }
   // 2) 所有轨之上 / 之下
-  if (tracks.length === 0) return _makeNewDrop(tracks, dragType, 0, true);
-  const firstEl = trackElOf(tracks[0]); const lastEl = trackElOf(tracks[tracks.length - 1]);
-  const firstR = firstEl.getBoundingClientRect(); const lastR = lastEl.getBoundingClientRect();
-  if (y < firstR.top) return _makeNewDrop(tracks, dragType, 0, true);
-  if (y > lastR.bottom) return _makeNewDrop(tracks, dragType, tracks.length, false);
-  // 3) 两条轨之间的间隙：在两条轨正中间新建一条轨（displayIndex = i+1）
-  //    不再按拖动方向归属到上/下某一条，避免「 preview 和实际落位不一致」
+  if (tracks.length === 0) {
+    // 空时间轴：第一个目标轨固定 above（主场景之上）
+    return resolveNewDrop("above", 0, tracks, dragType);
+  }
+  const firstR = trackElOf(tracks[0]).getBoundingClientRect();
+  const lastR = trackElOf(tracks[tracks.length - 1]).getBoundingClientRect();
+  if (y < firstR.top) {
+    // 所有轨之上：固定 above（最顶位置新建）
+    return resolveNewDrop("above", 0, tracks, dragType);
+  }
+  if (y > lastR.bottom) {
+    // 所有轨之下：固定 below（最底位置新建）
+    return resolveNewDrop("below", tracks.length - 1, tracks, dragType);
+  }
+  // 3) 两条轨之间的间隙：按 verticalDragDirection 归属上/下轨（OpenCut 同款）
   for (let i = 0; i < tracks.length - 1; i++) {
     const a = trackElOf(tracks[i]).getBoundingClientRect();
     const b = trackElOf(tracks[i + 1]).getBoundingClientRect();
     if (y > a.bottom && y < b.top) {
-      return _makeNewDrop(tracks, dragType, i + 1, true);
+      let direction, preferredDisplay;
+      if (verticalDragDirection === "up") {
+        direction = "above";
+        preferredDisplay = i;       // 归属上方轨
+      } else if (verticalDragDirection === "down") {
+        direction = "below";
+        preferredDisplay = i + 1;   // 归属下方轨
+      } else {
+        // 拖动方向未知：回退到"above preferredDisplay i"（向上默认，与旧行为兼容）
+        direction = "above";
+        preferredDisplay = i;
+      }
+      return resolveNewDrop(direction, preferredDisplay, tracks, dragType);
     }
   }
-  return _makeNewDrop(tracks, dragType, tracks.length, false);
+  return resolveNewDrop("below", tracks.length - 1, tracks, dragType);
 }
 
 function displayRowCenterY(displayIndex) {
@@ -361,9 +423,9 @@ function renderTimeline(s) {
   const targetTi = isMove ? ((drag.targetKind === "existing") ? drag.targetDataTi : -1) : null;
   // 构建待渲染轨道列表（显示顺序：叠加→主轨→音频→文本/特效…）
   const tracks = buildTracks();
-  // 拖拽预览（轴内段移动）：目标=新建轨 → 按 targetDisplayIndex 绝对注入「预览轨」（与 computeDrop/后端同源），松手才真正建。
-  // 素材/特效库拖入的新建轨预览由 HTML overlay 承担（showTrackPreview 只移动位置），不进 buildTracks ——
-  // 否则 dragover 每 mousemove 全量重建时间轴 DOM，产生阻尼感（2026-08-18 审计结论）。
+  // 拖拽预览（轴内段移动）：目标=新建轨 → 按 targetDisplayIndex 注入「预览轨」（与 computeDrop/后端同源），松手才真正建。
+  // 库拖入的预览由 HTML 端 OpenCut 三件套承担（DragLine 落点线 + 影子段 + 目标轨高亮）——
+  // 不进 buildTracks，避免 dragover 每 mousemove 全量重建时间轴 DOM（2026-08-18 收口）。
   const needPreview = isMove && drag.targetKind === "new" && typeof drag.targetDisplayIndex === "number";
   if (needPreview) {
     const pType = drag.type;
