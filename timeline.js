@@ -358,7 +358,11 @@ function makeSeg(s, type, ti, idx, overrideLeftUs, forceDragging) {
         "background-size:" + tileW + "px " + th + "px, " + tileW + "px " + th + "px;" +
         "background-repeat:repeat-x, repeat-x;background-position:left center, left center;";
     } else {
-      bgStyle = "background:" + getCssVar("--seg-video");
+      // 无缩略图时仍走 tile 平铺（暗缝 + 平铺底色）——保留「胶片条」视觉，而非整块色块
+      bgStyle =
+        "background-image:repeating-linear-gradient(to right, " + getCssVar("--seg-video") + " 0px, " + getCssVar("--seg-video") + " calc(" + tileW + "px - 1px), rgba(0,0,0,.35) calc(" + tileW + "px - 1px), rgba(0,0,0,.35) " + tileW + "px);" +
+        "background-size:" + tileW + "px " + th + "px;" +
+        "background-repeat:repeat-x;background-position:left center;";
     }
   } else if (type === "audio") {
     // 有峰值数据 → 用 canvas 画真实波形（OpenCut 同款：bar 宽 1px + 间隙 1px、上下对称）；否则降级为色块

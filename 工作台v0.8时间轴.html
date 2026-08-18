@@ -107,8 +107,8 @@
     pointer-events: none; z-index: 7; display: none; }
   .ghost-track .gt-label { position: absolute; left: 8px; top: 2px; font-size: 11px; color: var(--accent);
     background: rgba(0,0,0,.6); padding: 1px 6px; border-radius: 4px; white-space: nowrap; }
-  /* 拖拽落点反馈（2026-08-17 参考 OpenCut）：兼容轨道高亮 / 不兼容轨道禁用态 */
-  .track.drop-target { box-shadow: inset 0 0 0 2px var(--primary); background: var(--primary-dim); }
+  /* 拖拽落点反馈（OpenCut 同款：明确可见的蓝线 + 目标轨高亮） */
+  .track.drop-target { box-shadow: inset 0 0 0 2.5px #2ea8ff, 0 0 10px rgba(46,168,255,.35); background: rgba(46,168,255,.12); }
   .track.drop-disabled { box-shadow: inset 0 0 0 2px #ff4d4f; background: #ff4d4f18; }
 
   .preview { flex: 1; min-height: 0; min-width: 0; background: #0e0e10; display: flex; flex-direction: column; overflow: hidden; }
@@ -308,7 +308,9 @@
     width: 17px; height: 17px; border-radius: 50%; background: #ff4d4f; border: 2px solid rgba(255,255,255,.7);
     cursor: col-resize; pointer-events: auto; z-index: 11; box-shadow: 0 1px 4px rgba(0,0,0,.5); }
   .playhead-handle:hover, .playhead-handle.dragging { background: #ff6b6d; border-color: #fff; }
-  .drop-line { position: absolute; top: 28px; bottom: 0; width: 2px; background: var(--accent); z-index: 7; pointer-events: none; display: none; }
+  .drop-line { position: absolute; top: 28px; bottom: 0; width: 3px; background: #2ea8ff;
+    z-index: 9; pointer-events: none; display: none;
+    box-shadow: 0 0 8px 2px rgba(46,168,255,.55); }
   /* 吸附参考线：拖拽/拖播放头吸附命中时，在吸附点位置贯穿时间轴画一条蓝线（对齐 OpenCut SnapGuides vertical） */
   .snap-guide { position: absolute; top: 0; bottom: 0; width: 2px; background: #4096ff; z-index: 7; pointer-events: none; display: none; box-shadow: 0 0 6px rgba(64,150,255,.85); }
   .ruler .bm-mark { position: absolute; top: 0; width: 0; height: 15px; border-left: 2px solid #ff4d4f; transform: translateX(-1px); cursor: pointer; pointer-events: auto; z-index: 6; }
@@ -1794,20 +1796,11 @@ function onPointerMove(e) {
   // 根治"鼠标停了才跟上"卡顿；mousemove 期间只更新 Store.state.drag，下一帧 paint 前统一重绘
   _scheduleDragRender();
 }
-/* 拖拽期间 RAF 帧合并（fablecut app.js L5186 dirtyTimeline 思路 JS 版） */
-let _dragRenderPending = false;
-let _dragRafHandle = null;
+/* 拖拽期间重绘：同步 _emit 立即触发（浏览器自然 vsync 节流到每帧 1 次 paint）。
+   上一轮用 RAF 合并——但 RAF 的 ~16ms 延迟会让段"鼠标停了才跟上"，体感像不跟手。
+   同步 _emit 让 d.curLeftUs 立刻反映到 segGeom（makeSeg.leftUs）→ 段精确跟手。 */
 function _scheduleDragRender() {
-  if (_dragRenderPending) return;
-  _dragRenderPending = true;
-  if (_dragRafHandle !== null) return;
-  _dragRafHandle = requestAnimationFrame(() => {
-    _dragRafHandle = null;
-    if (_dragRenderPending) {
-      _dragRenderPending = false;
-      Store._emit();
-    }
-  });
+  Store._emit();
 }
 function onPointerUp() {
   const d = Store.state.drag;
