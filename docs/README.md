@@ -19,6 +19,9 @@
 - `effect-track-design.md`：**特效轨设计稿（路线 B #290，待 sign-off）**——独立轨模型（不学 FableCut 属性式）+ CSS filter 原语（亮度/对比/饱和/模糊/灰度/色差/反相/不透明度）+ 5 步接入铁律（Schema/buildPlaybackGraph/renderer/导出/MCP）+ 预览=导出同源 + 顺带补 A1 一致性（text/sticker 平铺 effectNodes/textNodes/stickerNodes）。
 - `timeline-drag-unified-design.md`：**时间轴拖拽与轨道管理统一设计稿（2026-08-18）**——对比 OpenCut 落点/新建轨/预览/空轨折叠行为，提出 displayIndex + direction 统一模型，覆盖用户反馈的 7 项拖拽问题（覆盖轨预览方向、特效拖不进/新建方向/空轨不删、音频向上拖、媒体落位乱）。待 sign-off 后落码。
 - `timeline-drag-vs-opencut-audit.md`：**拖拽交互审计（2026-08-18，75e638e 回归诊断）**——OpenCut/FableCut/我们三端 dragover 渲染方式逐项对比；铁证三个真机问题根因（卡顿=75e638e 在 dragover 引入 `Store._emit()` 全量重建；无高亮=高亮依赖重建存活；特效不能落轨=绑段拦截+高亮缺失）；修复方案= dragover 零整树重建（切 CSS 类 + overlay 预览轨）。待 sign-off。
+- `OpenCut对齐对照-2026-08-19.md`：**时间轴操作 OpenCut vs 我们 逐项对照表（26 项）**——21 项已对齐，差异 5 处（D1-D5）；后端数据流已对齐。用户确认按此执行（2026-08-19 01:18）。
+- `timeline-D1-D5实施计划-2026-08-19.md`：**D1-D5 实施手册（已确认，待明早执行）**——D1 主场景可入（删 main 禁止分支）/ D2 已有段拖动重叠检测（trackBusyAt 加排除参数）/ D3 删预览轨弹动（previewTrack+ghostTrack）/ D4 落点线=目标轨顶（getDropLineY）/ D5 没动不提交（didMove）。全在前端计算层，后端不动。
+- `timeline-A轨道tid实施计划-2026-08-19.md`：**A 方案轨道 tid 全链路手册（D1-D5 后执行）**——A1 数据模型 tid+迁移 / A2 后端 _track_by_tid+命令签名升级 / A3 前端 key 改 tid:segid / A4 播放器导出适配 / A5 回归。段 id 已做（b9a9206），轨道 tid 未做。凌晨不做大重构。
 
 ## audits/（审计 / 核查类：描述“现状是什么”）
 - `opencut-analysis.md`：与 OpenCut 开源项目的架构对照诊断。
