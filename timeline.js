@@ -361,14 +361,13 @@ function renderTimeline(s) {
   const targetTi = isMove ? ((drag.targetKind === "existing") ? drag.targetDataTi : -1) : null;
   // 构建待渲染轨道列表（显示顺序：叠加→主轨→音频→文本/特效…）
   const tracks = buildTracks();
-  // 拖拽预览：目标=新建轨 → 按 targetDisplayIndex 绝对注入「预览轨」（与 computeDrop/后端同源），松手才真正建
-  // 支持两种拖拽源：轴内段移动（Store.state.drag）和素材/特效库拖入（window.libraryDropTarget）
-  const libDrop = (typeof window !== "undefined" && window.libraryDropTarget) || null;
-  const needPreview = (isMove && drag.targetKind === "new" && typeof drag.targetDisplayIndex === "number")
-                   || (libDrop && libDrop.kind === "new" && typeof libDrop.displayIndex === "number");
+  // 拖拽预览（轴内段移动）：目标=新建轨 → 按 targetDisplayIndex 绝对注入「预览轨」（与 computeDrop/后端同源），松手才真正建。
+  // 素材/特效库拖入的新建轨预览由 HTML overlay 承担（showTrackPreview 只移动位置），不进 buildTracks ——
+  // 否则 dragover 每 mousemove 全量重建时间轴 DOM，产生阻尼感（2026-08-18 审计结论）。
+  const needPreview = isMove && drag.targetKind === "new" && typeof drag.targetDisplayIndex === "number";
   if (needPreview) {
-    const pType = isMove ? drag.type : (libDrop ? libDrop.type : "video");
-    const pDisplay = isMove ? drag.targetDisplayIndex : (libDrop ? libDrop.displayIndex : 0);
+    const pType = drag.type;
+    const pDisplay = drag.targetDisplayIndex;
     const labelBy = { video: "叠加", audio: "音轨", text: "文本轨", effect: "特效轨", sticker: "贴纸轨" };
     const previewTrack = { type: pType, ti: -1, label: (labelBy[pType] || "轨") + "预览", segs: [], preview: true };
     const di = Math.max(0, Math.min(pDisplay, tracks.length));
@@ -402,7 +401,6 @@ function renderTimeline(s) {
     if (m.muted && (tr.type === "audio" || tr.type === "video")) track.classList.add("track-muted");
     if (tr.preview) track.classList.add("drop-preview");
     else if (isMove && targetType && targetTi != null && tr.type === targetType && tr.ti === targetTi) track.classList.add("drop-target");
-    else if (libDrop && libDrop.kind === "existing" && tr.type === libDrop.type && tr.ti === libDrop.dataTi) track.classList.add("drop-target");
     let childCount = 0;
     // 目标轨/预览轨：先放被拖段（用源坐标 + 覆盖左边界，保持时长）
     if (isMove && targetType && targetTi != null && tr.type === targetType && tr.ti === targetTi) {

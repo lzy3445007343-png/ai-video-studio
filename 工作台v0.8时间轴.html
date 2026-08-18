@@ -92,6 +92,12 @@
   .drop-newtrack-hint { position: absolute; left: 50%; top: 50%; transform: translate(-50%,-50%);
     background: rgba(0,0,0,.7); color: #fff; padding: 4px 10px; border-radius: 12px; font-size: 11px;
     pointer-events: none; z-index: 10; white-space: nowrap; display: none; }
+  /* 库拖入「新建轨」预览占位（overlay，dragover 期间只移动位置不重建 DOM；OpenCut DragLine 思路） */
+  .track-preview-overlay { position: absolute; left: 0; right: 0; height: var(--track-h);
+    outline: 2px dashed var(--accent); outline-offset: -2px; background: rgba(64,150,255,.14);
+    pointer-events: none; z-index: 6; display: none; }
+  .track-preview-overlay .tpo-label { position: absolute; left: 8px; top: 2px; font-size: 11px; color: var(--accent);
+    background: rgba(0,0,0,.5); padding: 1px 6px; border-radius: 4px; white-space: nowrap; }
   /* 拖拽落点反馈（2026-08-17 参考 OpenCut）：兼容轨道高亮 / 不兼容轨道禁用态 */
   .track.drop-target { box-shadow: inset 0 0 0 2px var(--primary); background: var(--primary-dim); }
   .track.drop-disabled { box-shadow: inset 0 0 0 2px #ff4d4f; background: #ff4d4f18; }
@@ -632,6 +638,7 @@
           <div class="playhead" id="playhead" style="left:0"><div class="playhead-handle" id="playheadHandle"></div></div>
           <div class="drop-line" id="dropLine" style="display:none"></div>
           <div class="drop-newtrack-hint" id="dropNewTrackHint" style="display:none">松开：新建轨道</div>
+          <div class="track-preview-overlay" id="trackPreviewOverlay" style="display:none"><span class="tpo-label" id="trackPreviewLabel">叠加预览</span></div>
           <div class="snap-guide" id="snapGuide" style="display:none"></div>
           <div class="sel-box" id="selBox" style="display:none"></div>
           <div class="group-box" id="groupBox" style="display:none"><div class="gh l" id="groupHandleL"></div><div class="gh r" id="groupHandleR"></div></div>
@@ -806,7 +813,6 @@ function initHSplit(side) {
 let dragGhostEl = null;
 let dragGhostData = null;
 let isLibraryDragging = false;   // 素材库/特效库卡片拖拽中：暂停轮询刷新，避免 DOM 重建吞掉 drop
-let libraryDropTarget = null;    // 库拖入当前落点 {kind,type,displayIndex,dataTi,dataInsertIndex}，用于 renderTimeline 注入预览轨
 function createDragGhost(bg, icon) {
   removeDragGhost();
   const el = document.createElement("div");
@@ -885,7 +891,7 @@ function renderMedia(s) {
       moveDragGhost(e.clientX, e.clientY);
     });
     card.addEventListener("drag", e => { moveDragGhost(e.clientX, e.clientY); });
-    card.addEventListener("dragend", () => { isLibraryDragging = false; libraryDropTarget = null; removeDragGhost(); });
+    card.addEventListener("dragend", () => { isLibraryDragging = false; hideTrackPreview(); removeDragGhost(); });
     card.addEventListener("click", () => selectMaterial(uid));
     card.querySelector(".add").addEventListener("click", e => {
       e.stopPropagation();
@@ -935,7 +941,7 @@ function renderEffectLibrary(s, box) {
       moveDragGhost(e.clientX, e.clientY);
     });
     card.addEventListener("drag", e => moveDragGhost(e.clientX, e.clientY));
-    card.addEventListener("dragend", () => { isLibraryDragging = false; libraryDropTarget = null; removeDragGhost(); });
+    card.addEventListener("dragend", () => { isLibraryDragging = false; hideTrackPreview(); removeDragGhost(); });
     box.appendChild(card);
   }
 }
@@ -2179,6 +2185,20 @@ function hideDropPreview() {
   $("dropNewTrackHint").style.display = "none";
   $("tlContent").querySelectorAll(".track").forEach(t => { t.classList.remove("drop-target"); t.classList.remove("drop-disabled"); });
 }
+/* 库拖入「新建轨」预览占位：overlay 虚线框，dragover 只移动位置，零 DOM 重建（OpenCut DragLine 思路） */
+function showTrackPreview(drop, contentRect) {
+  const ov = $("trackPreviewOverlay");
+  if (!ov) return;
+  const labelBy = { video: "叠加", audio: "音轨", text: "文本轨", effect: "特效轨", sticker: "贴纸轨" };
+  $("trackPreviewLabel").textContent = (labelBy[drop.type] || "轨") + "预览";
+  const y = displayRowCenterY(drop.displayIndex);
+  ov.style.display = "";
+  ov.style.top = Math.max(0, y - contentRect.top - 24) + "px";   // 24 = 行高一半，让虚线框对齐目标行
+}
+function hideTrackPreview() {
+  const ov = $("trackPreviewOverlay");
+  if (ov) ov.style.display = "none";
+}
 
 /* 工具栏动作 */
 function doSplit() {
@@ -2625,7 +2645,10 @@ function bindEvents() {
       $("tlScroll").scrollLeft += e.deltaY;
     }
   }, { passive: false });
-  /* 时间轴拖放：绑在最外层 #timeline，只在轨道区域（tlMain 内）接 */
+  /* 时间轴拖放：绑在最外层 #timeline，只在轨道区域（tlMain 内）接。
+     轻量原则（2026-08-18 审计后）：dragover 期间【零整树重建】——
+     高亮=直接对现有 track/seg DOM 切类；新建轨预览=移动 overlay 占位元素；
+     不调 Store._emit()（否则每 mousemove 全量销毁重建时间轴 → 阻尼感）。drop 才提交数据。 */
   let tlDragEnterCount = 0;
   $("timeline").addEventListener("dragenter", e => {
     e.preventDefault();
@@ -2634,53 +2657,59 @@ function bindEvents() {
   $("timeline").addEventListener("dragover", e => {
     const tlMainRect = $("tlMain").getBoundingClientRect();
     // 工具栏上方：不阻止默认行为，显示系统禁止图标
-    if (e.clientY < tlMainRect.top) { hideDropPreview(); libraryDropTarget = null; return; }
+    if (e.clientY < tlMainRect.top) { hideDropPreview(); hideTrackPreview(); return; }
     e.preventDefault(); e.dataTransfer.dropEffect = "copy";
     let d = null; if (dragGhostData && dragGhostData.payload) { try { d = JSON.parse(dragGhostData.payload); } catch (_) {} }
     const isEffect = d && d.kind === "effect";
     const wantType = isEffect ? "effect" : dragTrackType();
     const contentRect = $("tlContent").getBoundingClientRect();
     const line = $("dropLine"), hint = $("dropNewTrackHint");
-    // 统一落点：preview/落点线/实际三位一体
-    const drop = computeDrop(e, wantType);
+    // 清旧高亮/禁用/片段绑段态，避免残留
+    $("tlContent").querySelectorAll(".track").forEach(t => { t.classList.remove("drop-target"); t.classList.remove("drop-disabled"); });
+    $("tlContent").querySelectorAll(".seg").forEach(s => s.classList.remove("drop-target-seg"));
     // 特效拖到可绑定片段上：不走轨道级 preview，直接高亮片段（OpenCut 行为）
     let bindSeg = null;
     if (isEffect) {
       bindSeg = findSegUnderCursor(e);
       const compatible = bindSeg && ["video", "image", "audio", "text", "sticker"].includes(bindSeg.segType);
       if (compatible) {
-        libraryDropTarget = null;   // 绑定到片段时不画轨道 preview
-        Store._emit();
-        const segEl = $("tlContent").querySelector('.seg[data-key="' + bindSeg.type + ":" + bindSeg.ti + ":" + bindSeg.si + '"]');
-        if (segEl) segEl.classList.add("drop-target-seg");
+        hideTrackPreview();
         hint.style.display = "none";
         line.style.display = "";
         line.style.left = (e.clientX - contentRect.left) + "px";
+        const segEl = $("tlContent").querySelector('.seg[data-key="' + bindSeg.type + ":" + bindSeg.ti + ":" + bindSeg.si + '"]');
+        if (segEl) segEl.classList.add("drop-target-seg");
         return;
       }
     }
-    libraryDropTarget = drop;   // 库拖入：把当前落点同步给 renderTimeline 画预览轨
-    Store._emit();
+    // 统一落点：preview/落点线/实际三位一体（computeDrop 单一真源）
+    const drop = computeDrop(e, wantType);
     if (drop.kind === "existing") {
+      // 命中同类型已有轨 → 直接对该轨 DOM 加高亮（不重建）
+      const tr = buildTracks()[drop.displayIndex];
+      const el = tr ? trackElOf(tr) : null;
+      if (el) el.classList.add("drop-target");
+      hideTrackPreview();
       hint.style.display = "none";
       line.style.display = "";
       line.style.left = (e.clientX - contentRect.left) + "px";   // 蓝色落点线 = 拖到的横向时间位
     } else {
-      // 新建轨：显示「新建轨道」提示，定位到目标显示行的垂直中心（与松手后实际插入位一致）
+      // 新建轨：overlay 预览轨占位（虚线框随鼠标实时移动）+ 「新建轨道」提示
       line.style.display = "none";
       hint.style.display = "";
       const y = displayRowCenterY(drop.displayIndex);
       hint.style.top = (y - contentRect.top) + "px";
       hint.style.left = (e.clientX - contentRect.left) + "px";
       hint.style.transform = "translateX(-50%)";
+      showTrackPreview(drop, contentRect);
     }
   });
   $("timeline").addEventListener("dragleave", e => {
     if (tlDragEnterCount === 0) return;
     tlDragEnterCount--;
-    if (tlDragEnterCount === 0) { hideDropPreview(); libraryDropTarget = null; Store._emit(); }
+    if (tlDragEnterCount === 0) { hideDropPreview(); hideTrackPreview(); }
   });
-  $("timeline").addEventListener("drop", e => { tlDragEnterCount = 0; onTimelineDrop(e); libraryDropTarget = null; Store._emit(); });
+  $("timeline").addEventListener("drop", e => { tlDragEnterCount = 0; hideTrackPreview(); onTimelineDrop(e); });
   $("playBtn").addEventListener("click", togglePlay);
   $("muteBtn").addEventListener("click", toggleMute);
   $("zoomRange").addEventListener("input", e => setZoom(+e.target.value));

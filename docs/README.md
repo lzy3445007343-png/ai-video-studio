@@ -18,6 +18,7 @@
 - `fablecut-comparison.md`：**FableCut 架构对照（2026-08-16，B 步）**——开源"AI 经 MCP 操作 JSON 时间轴"项目源码对照：patch 批量 op + conflict-safe（P0 借鉴）、props/keyframes 统一动画模型（P0，关键帧/特效地基）、textAnim/chromaKey/adjustment layer（P1 差异化）、渲染路线差异与特效一致性风险（§3.1）。
 - `effect-track-design.md`：**特效轨设计稿（路线 B #290，待 sign-off）**——独立轨模型（不学 FableCut 属性式）+ CSS filter 原语（亮度/对比/饱和/模糊/灰度/色差/反相/不透明度）+ 5 步接入铁律（Schema/buildPlaybackGraph/renderer/导出/MCP）+ 预览=导出同源 + 顺带补 A1 一致性（text/sticker 平铺 effectNodes/textNodes/stickerNodes）。
 - `timeline-drag-unified-design.md`：**时间轴拖拽与轨道管理统一设计稿（2026-08-18）**——对比 OpenCut 落点/新建轨/预览/空轨折叠行为，提出 displayIndex + direction 统一模型，覆盖用户反馈的 7 项拖拽问题（覆盖轨预览方向、特效拖不进/新建方向/空轨不删、音频向上拖、媒体落位乱）。待 sign-off 后落码。
+- `timeline-drag-vs-opencut-audit.md`：**拖拽交互审计（2026-08-18，75e638e 回归诊断）**——OpenCut/FableCut/我们三端 dragover 渲染方式逐项对比；铁证三个真机问题根因（卡顿=75e638e 在 dragover 引入 `Store._emit()` 全量重建；无高亮=高亮依赖重建存活；特效不能落轨=绑段拦截+高亮缺失）；修复方案= dragover 零整树重建（切 CSS 类 + overlay 预览轨）。待 sign-off。
 
 ## audits/（审计 / 核查类：描述“现状是什么”）
 - `opencut-analysis.md`：与 OpenCut 开源项目的架构对照诊断。
