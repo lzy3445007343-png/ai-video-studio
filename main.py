@@ -442,7 +442,7 @@ def _collapse_empty_tracks(draft):
     draft["video"] = new_v
     meta["video"] = new_v_meta
 
-    for grp in ("audio", "text"):
+    for grp in ("audio", "text", "effect"):
         tracks = draft.get(grp, [[]])
         t_meta = meta.get(grp, [])
         new_tracks = []
@@ -2053,9 +2053,9 @@ class Api:
             idx = 0
         segs = tracks[idx]
         duration = duration_for(path, mtype)
-        # 落点时间：指定则按落点 + 同轨重叠避让；否则接到该轨末尾
+        # 落点时间：指定则精确落在拖拽位置（不自动推时间，对齐 OpenCut「放得下就放、放不下新建轨」）；否则接到该轨末尾
         if at_time_us is not None:
-            start = _free_start_on_track(segs, at_time_us, duration)
+            start = max(0, int(at_time_us))
         else:
             start = sum(s["duration"] for s in segs)
         seg = {
@@ -2744,8 +2744,7 @@ class Api:
         if not isinstance(index, int) or index < 0 or index >= len(segs):
             return {"ok": False, "error": f"{track_type}[{track_index}] 没有第 {index} 段（共 {len(segs)} 段）"}
         new_start = max(0, int(new_start_us))
-        # 同轨重叠自动避让：拖动到被占位置自动推到最近空位（跳过自身）
-        new_start = _free_start_on_track(segs, new_start, segs[index]["duration"], exclude_index=index)
+        # 精确落点：拖到哪就落在哪（与跨轨/库拖入一致，允许同轨重叠；吸附负责对齐，不自动推时间）
         segs[index]["start"] = new_start
         if ripple:
             apply_ripple_adjustments(self.draft, compute_ripple_adjustments(before, self.draft))
@@ -3187,9 +3186,8 @@ class Api:
         else:
             to_idx = _ensure_track(self.draft, track_type, -1)
         to_segs = self.draft[track_type][to_idx]
-        desired = max(0, int(at_time_us)) if at_time_us is not None else 0
-        # 同轨重叠自动避让（目标轨里此刻没有这个片段，无需 exclude）
-        start = _free_start_on_track(to_segs, desired, seg["duration"])
+        # 精确落点：拖到哪就落在哪（不自动推时间，对齐 OpenCut）；与预览/落点线同源
+        start = max(0, int(at_time_us)) if at_time_us is not None else 0
         seg["start"] = start
         to_segs.append(seg)
         # 目标轨道被放入片段，取消 persistent_empty 标记
@@ -3449,7 +3447,7 @@ class Api:
         return {"ok": True, "meta": EFFECT_META}
 
     def add_effect(self, track_index, effect_type, target=None, start_us=0, duration_us=2_000_000,
-                   params=None, keyframes=None, name=None):
+                   params=None, keyframes=None, name=None, insert_index=None):
         """新增一个特效段到特效轨（Effect DSL 节点）。
 
         effect_type: 注册表 key（blur/brightness/contrast/saturate/hue_rotate/grayscale/sepia/invert/opacity；
@@ -3462,8 +3460,8 @@ class Api:
         if not effect_type or effect_type not in EFFECT_REGISTRY:
             return {"ok": False, "error": f"未知 effect_type：{effect_type}（合法值见 EFFECT_REGISTRY）"}
         try:
-            start_us = int(start_us)
-            duration_us = int(duration_us)
+            start_us = int(start_us) if start_us is not None else 0
+            duration_us = int(duration_us) if duration_us is not None else 2_000_000
         except Exception:
             return {"ok": False, "error": "start/duration 必须是整数微秒"}
         if duration_us <= 0:
@@ -3476,7 +3474,12 @@ class Api:
             return {"ok": False, "error": "target.type='clip' 需要 track/ti/si 字段"}
         self._reload()
         self._push_undo()
-        tracks, idx = self._ensure_effect_track(track_index)
+        if insert_index is not None:
+            # 拖到空白：在指定显示位插入一条新特效轨接住（与前端 computeDrop/dataInsertIndex 同源）
+            idx = _insert_track(self.draft, "effect", insert_index)
+            tracks = self.draft["effect"]
+        else:
+            tracks, idx = self._ensure_effect_track(track_index)
         seg = {
             "id": "effect_" + uuid.uuid4().hex[:12],
             "type": "effect",

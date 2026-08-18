@@ -99,6 +99,139 @@ function buildTracks() {
   }
   return out;
 }
+
+/* ============ 统一落点模型（对齐 OpenCut resolveTrackPlacement） ============
+   单一 displayIndex 真源：buildTracks() 返回的数组下标，0=最顶层，依次向下。
+   所有拖拽落点 / 新建轨 / 预览注入，先算 displayIndex，再映射回各类型数据索引。
+   关键不变量：预览（targetDisplayIndex）+ 落点线（computeDrop 输出）+ 后端实际插入（dataInsertIndex→_insert_track）严格同源，
+   保证「预览 / 落点 / 实际三位一体」。 */
+
+function trackElOf(tr) {
+  // 由 display track 反查 DOM .track（按 type+ti 唯一定位，避免依赖渲染顺序）
+  return document.querySelector('#tlContent .track[data-type="' + tr.type + '"][data-ti="' + tr.ti + '"]');
+}
+
+function dragTypeBlock(dragType) {
+  // 拖拽类型能落入的「已有同类型轨」集合
+  if (dragType === "video") return ["video"];
+  if (dragType === "audio") return ["audio"];
+  if (dragType === "text") return ["text"];
+  if (dragType === "effect") return ["effect"];
+  if (dragType === "sticker") return ["sticker"];
+  return ["video"];
+}
+
+function typeGroupRange(type) {
+  // 返回 type 在显示顺序里的 [gTop, gBottom]；gBottom 是该类型最后一条已有轨的显示下标
+  const tracks = buildTracks();
+  let gTop = -1, gBottom = -1;
+  for (let i = 0; i < tracks.length; i++) {
+    if (tracks[i].type === type) { if (gTop < 0) gTop = i; gBottom = i; }
+  }
+  return { gTop, gBottom, n: tracks.length };
+}
+
+function clampTargetDisplay(type, targetDisplayIndex) {
+  // 把新建轨的目标显示位钳制到该类型自己的显示组内（避免新建轨插错组、渲染错位）
+  if (type === "video") {
+    const { gTop, gBottom } = typeGroupRange("video");
+    if (gTop < 0) return Math.max(0, targetDisplayIndex);
+    // 视频组：新覆盖轨 ∈ [gTop, gBottom-1]（gBottom 是主场景，不能在主场景之下）
+    return Math.max(gTop, Math.min(gBottom - 1, targetDisplayIndex));
+  }
+  const { gTop, gBottom, n } = typeGroupRange(type);
+  if (gTop < 0) {
+    // 该类型当前无轨：放到其自然默认位（text/贴纸/effect 在视频之上→0；audio 在底部→n）
+    return (type === "audio") ? Math.max(0, n) : 0;
+  }
+  // 非视频：新轨 ∈ [gTop, gBottom+1]（gBottom+1 = 追加到该类型组底部）
+  return Math.max(gTop, Math.min(gBottom + 1, targetDisplayIndex));
+}
+
+function dataInsertIndexFromTargetDisplay(type, targetDisplayIndex, draft) {
+  // 由「新轨在显示顺序中的目标位 targetDisplayIndex」反推后端 _insert_track 需要的数据索引。
+  // 预览（targetDisplayIndex）与实际（dataInsertIndex→_insert_track→重渲染）严格同源，保证一致。
+  if (type === "video") {
+    const v = draft.video || [[]];
+    const L = v.length;
+    // 插入一条后显示 = (L_after-1) - data，L_after = L+1 → data = L - targetDisplayIndex
+    let ins = L - targetDisplayIndex;
+    return Math.max(1, Math.min(ins, L)); // can't go below main; clamp 到 [1, L]
+  }
+  // audio/text/effect/sticker：显示顺序 == 数据顺序（且连续成组，display = gTop + data_index）
+  const { gTop } = typeGroupRange(type);
+  const len = (draft[type] || []).length;
+  if (gTop < 0) return Math.max(0, Math.min(targetDisplayIndex, len));
+  let dataIdx = targetDisplayIndex - gTop; // display = gTop + data_index → 反推
+  return Math.max(0, Math.min(dataIdx, len));
+}
+
+function _makeNewDrop(tracks, dragType, refDisplayIndex, above) {
+  const targetRaw = above ? refDisplayIndex : refDisplayIndex + 1;
+  const targetDisplayIndex = clampTargetDisplay(dragType, targetRaw);
+  const dataInsertIndex = dataInsertIndexFromTargetDisplay(dragType, targetDisplayIndex, Store.state.draft);
+  return {
+    kind: "new", type: dragType,
+    displayIndex: targetDisplayIndex,
+    dataTi: null, dataInsertIndex: dataInsertIndex,
+    targetExisting: false,
+  };
+}
+
+function computeDrop(e, dragType) {
+  const tracks = buildTracks();
+  const block = dragTypeBlock(dragType);
+  const y = e.clientY;
+  const startY = (window.__dragStartY != null) ? window.__dragStartY : null;
+  // 1) 命中某条已有轨
+  let insideIdx = -1;
+  for (let i = 0; i < tracks.length; i++) {
+    const el = trackElOf(tracks[i]);
+    if (!el) continue;
+    const r = el.getBoundingClientRect();
+    if (y >= r.top && y <= r.bottom) { insideIdx = i; break; }
+  }
+  if (insideIdx >= 0) {
+    const t = tracks[insideIdx];
+    if (block.includes(t.type)) {
+      // 落入同类型已有轨
+      return { kind: "existing", type: t.type, displayIndex: insideIdx, dataTi: t.ti, dataInsertIndex: null, targetExisting: true };
+    }
+    // 落在不兼容的已有轨：上半→新轨在其上方，下半→新轨在其下方（OpenCut 同式）
+    const el = trackElOf(t);
+    const r = el.getBoundingClientRect();
+    const topHalf = (y < r.top + r.height / 2);
+    return _makeNewDrop(tracks, dragType, insideIdx + (topHalf ? 0 : 1), !topHalf);
+  }
+  // 2) 所有轨之上 / 之下
+  if (tracks.length === 0) return _makeNewDrop(tracks, dragType, 0, true);
+  const firstEl = trackElOf(tracks[0]); const lastEl = trackElOf(tracks[tracks.length - 1]);
+  const firstR = firstEl.getBoundingClientRect(); const lastR = lastEl.getBoundingClientRect();
+  if (y < firstR.top) return _makeNewDrop(tracks, dragType, 0, true);
+  if (y > lastR.bottom) return _makeNewDrop(tracks, dragType, tracks.length, false);
+  // 3) 两条轨之间的间隙：按垂直方向决定归属上/下一条
+  for (let i = 0; i < tracks.length - 1; i++) {
+    const a = trackElOf(tracks[i]).getBoundingClientRect();
+    const b = trackElOf(tracks[i + 1]).getBoundingClientRect();
+    if (y > a.bottom && y < b.top) {
+      const goUp = (startY != null && y < startY);
+      const refIdx = goUp ? i : i + 1;
+      return _makeNewDrop(tracks, dragType, refIdx, goUp);
+    }
+  }
+  return _makeNewDrop(tracks, dragType, tracks.length, false);
+}
+
+function displayRowCenterY(displayIndex) {
+  // 库拖入时把「新建轨道」提示定位到目标显示行的垂直中心
+  const tracks = buildTracks();
+  if (tracks.length === 0) return 60;
+  if (displayIndex <= 0) { const r = trackElOf(tracks[0]).getBoundingClientRect(); return r.top + r.height / 2; }
+  if (displayIndex >= tracks.length) { const r = trackElOf(tracks[tracks.length - 1]).getBoundingClientRect(); return r.bottom + 18; }
+  const r = trackElOf(tracks[displayIndex]).getBoundingClientRect();
+  return r.top + r.height / 2;
+}
+
 // 片段几何：优先用拖拽临时态，否则用草稿真实位置
 function segGeom(s, type, ti, idx) {
   let leftUs = s.start, rightUs = s.start + s.duration;
@@ -225,19 +358,17 @@ function renderTimeline(s) {
   const drag = Store.state.drag;
   const isMove = drag && drag.mode === "move" && drag.moved;
   const dragKey = isMove ? drag.key : null;
-  const eff = isMove ? (drag.targetTi === -1 ? { type: drag.type, ti: -1 } : { type: drag.targetType, ti: drag.targetTi }) : null;
-  // 构建待渲染轨道列表（显示顺序：叠加→主轨→音频→文本）
+  // 目标轨（existing = 真实落点轨；new = 预览轨 ti=-1）；统一由 computeDrop 输出驱动，保证预览/实际一致
+  const targetType = isMove ? drag.type : null;
+  const targetTi = isMove ? ((drag.targetKind === "existing") ? drag.targetDataTi : -1) : null;
+  // 构建待渲染轨道列表（显示顺序：叠加→主轨→音频→文本/特效…）
   const tracks = buildTracks();
-  // 移动预览：目标=新建轨 → 注入一条「预览轨」(纯渲染，不进数据)，松手才真正建（对齐 OpenCut preview 机制）
-  if (isMove && drag.targetTi === -1) {
-    const previewTrack = { type: drag.type, ti: -1, label: (drag.type === "video" ? "叠加" : "轨") + "预览", segs: [], preview: true };
-    if (drag.type === "video" || drag.newAboveMain) {
-      // 视频新轨恒显示在 main 上方；音频/文本才追加到末尾
-      const mainIdx = tracks.findIndex(t => t.type === "video" && t.ti === 0);
-      if (mainIdx >= 0) tracks.splice(mainIdx, 0, previewTrack); else tracks.unshift(previewTrack);
-    } else {
-      tracks.push(previewTrack);
-    }
+  // 移动预览：目标=新建轨 → 按 drag.targetDisplayIndex 绝对注入「预览轨」（与 computeDrop/后端同源），松手才真正建
+  if (isMove && drag.targetKind === "new" && typeof drag.targetDisplayIndex === "number") {
+    const labelBy = { video: "叠加", audio: "音轨", text: "文本轨", effect: "特效轨", sticker: "贴纸轨" };
+    const previewTrack = { type: drag.type, ti: -1, label: (labelBy[drag.type] || "轨") + "预览", segs: [], preview: true };
+    const di = Math.max(0, Math.min(drag.targetDisplayIndex, tracks.length));
+    tracks.splice(di, 0, previewTrack);
   }
   tracks.forEach(tr => {
     const label = document.createElement("div");
@@ -266,10 +397,10 @@ function renderTimeline(s) {
     if (m.hidden) track.classList.add("track-hidden");
     if (m.muted && (tr.type === "audio" || tr.type === "video")) track.classList.add("track-muted");
     if (tr.preview) track.classList.add("drop-preview");
-    else if (isMove && eff && eff.type === tr.type && eff.ti === tr.ti) track.classList.add("drop-target");
+    else if (isMove && targetType && targetTi != null && tr.type === targetType && tr.ti === targetTi) track.classList.add("drop-target");
     let childCount = 0;
     // 目标轨/预览轨：先放被拖段（用源坐标 + 覆盖左边界，保持时长）
-    if (isMove && eff && eff.type === tr.type && eff.ti === tr.ti) {
+    if (isMove && targetType && targetTi != null && tr.type === targetType && tr.ti === targetTi) {
       const ds = findSeg(drag.type, drag.ti, drag.idx);
       if (ds) { track.appendChild(makeSeg(ds, drag.type, drag.ti, drag.idx, drag.curLeftUs, true)); childCount++; }
     }
