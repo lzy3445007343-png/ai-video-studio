@@ -571,6 +571,53 @@ def _collapse_empty_tracks(draft):
     meta["audio"] = new_a_meta
 
 
+def _seg_by_id(draft, segid):
+    """按稳定段 id 在 X 模型中定位段（main/overlay/audio 全查）。找不到返回 None。
+    A 方案核心（2026-08-18）：段 id 是稳定引用，不受折叠/新建轨导致的 ti 漂移影响——
+    拖动/选中/提交只要带 segid，结构怎么变都能定位到正确的段。"""
+    if not segid:
+        return None
+    main = draft.get("main")
+    if isinstance(main, dict):
+        for seg in main.get("segs", []):
+            if isinstance(seg, dict) and seg.get("id") == segid:
+                return seg
+    for tr in draft.get("overlay", []):
+        if isinstance(tr, dict):
+            for seg in tr.get("segs", []):
+                if isinstance(seg, dict) and seg.get("id") == segid:
+                    return seg
+    for a in draft.get("audio", []):
+        if isinstance(a, dict):
+            for seg in a.get("segs", []):
+                if isinstance(seg, dict) and seg.get("id") == segid:
+                    return seg
+    return None
+
+
+def _pop_seg_by_ref(draft, seg):
+    """按对象引用从所在轨移除段（main/overlay/audio 全查）。成功返回 True。"""
+    main = draft.get("main")
+    if isinstance(main, dict):
+        for i, s in enumerate(main.get("segs", [])):
+            if s is seg:
+                main["segs"].pop(i)
+                return True
+    for tr in draft.get("overlay", []):
+        if isinstance(tr, dict):
+            for i, s in enumerate(tr.get("segs", [])):
+                if s is seg:
+                    tr["segs"].pop(i)
+                    return True
+    for a in draft.get("audio", []):
+        if isinstance(a, dict):
+            for i, s in enumerate(a.get("segs", [])):
+                if s is seg:
+                    a["segs"].pop(i)
+                    return True
+    return False
+
+
 def _locate_seg(draft, seg):
     """在 X 模型中定位一个段对象 → (track_type, type_ti, index) 或 None。
     video 覆盖轨的 ti 从 1 起（0=主场景）；text/sticker/effect/audio 从 0 起。"""
@@ -2222,6 +2269,7 @@ class Api:
         if any(_segments_overlap({"start": start, "duration": duration}, s) for s in segs):
             start = _free_start_on_track(segs, start, duration)
         seg = {
+            "id": uuid.uuid4().hex,   # A 方案：新段必须带稳定 id（拖动/选中/提交按 id 定位，不受 ti 漂移影响）
             "name": name,
             "path": path,
             "type": mtype,
@@ -2741,28 +2789,35 @@ class Api:
         save_state(self.state)
         return {"ok": True, "hidden": m["hidden"]}
 
-    def remove_segment(self, track_type, track_index, index):
-        """删除指定轨道里的第 index 段，并重排该轨道后续片段的 start 时间。
+    def remove_segment(self, track_type, track_index, index, segid=None):
+        """删除指定段。
 
-        track_type: video / audio / text；track_index: 该类型内的轨道序号（0=主轨/第一条）；
-        index: 段序号，从 0 开始。
-        返回 {"ok": True, "removed": {...}, "track_type": ..., "track_index": ..., "count": 剩余段数}
-        或 {"ok": False, "error": 原因}。
+        A 方案（2026-08-18）：传 segid（稳定段 id）时按 segid 定位（不受 ti 漂移影响）；
+        不传则回退 (track_type, track_index, index)。
+        不做重排：保留其余片段的绝对 start。返回 {"ok": True, "removed": {...}}。
         """
         self._reload()
         self._push_undo()
-        segs = _track_segs(self.draft, track_type, track_index)
-        if segs is None:
-            return {"ok": False, "error": f"{track_type} 没有第 {track_index} 条轨道"}
-        if not isinstance(index, int) or index < 0 or index >= len(segs):
-            return {"ok": False, "error": f"{track_type}[{track_index}] 没有第 {index} 段（共 {len(segs)} 段）"}
-        removed = segs.pop(index)
+        if segid:
+            seg = _seg_by_id(self.draft, segid)
+            if seg is None:
+                return {"ok": False, "error": f"未找到段 id={segid}"}
+            removed = _pop_seg_by_ref(self.draft, seg)
+            if not removed:
+                return {"ok": False, "error": f"段 id={segid} 定位失败"}
+        else:
+            segs = _track_segs(self.draft, track_type, track_index)
+            if segs is None:
+                return {"ok": False, "error": f"{track_type} 没有第 {track_index} 条轨道"}
+            if not isinstance(index, int) or index < 0 or index >= len(segs):
+                return {"ok": False, "error": f"{track_type}[{track_index}] 没有第 {index} 段（共 {len(segs)} 段）"}
+            removed = segs.pop(index)
         # 不做重排：保留其余片段的绝对 start（与 move_segment 的自由拖动手感一致，删除不抹掉曾移动留下的空档）
         _collapse_empty_tracks(self.draft)  # 片段移走后留下的空轨自动消失
         save_state(self.state)
         return {
             "ok": True, "removed": removed,
-            "track_type": track_type, "track_index": track_index, "count": len(segs),
+            "track_type": track_type, "track_index": track_index, "count": -1,
         }
 
     def remove_segments(self, keys, ripple=False):
@@ -2885,29 +2940,53 @@ class Api:
         save_state(self.state)
         return {"ok": True, "pasted": pasted, "count": len(pasted)}
 
-    def move_segment(self, track_type, track_index, index, new_start_us, ripple=False):
-        """把指定轨道第 index 段移动到新的起始时间（微秒）。
+    def move_segment(self, track_type, track_index, index, new_start_us, ripple=False, segid=None):
+        """把指定段移动到新的起始时间（微秒）。
 
         鼠标在时间轴拖动片段后调用。只改该段的 start，不重排后续片段
         （允许片段之间留空档或重叠，符合 PR 的自由拖动手感，后续用吸附处理对齐）。
-        track_type: video/audio/text；track_index: 该类型内轨道序号；index: 段序号。
+        A 方案（2026-08-18）：传 segid（稳定段 id）时按 segid 定位（不受 ti 漂移影响）；
+        不传则回退 (track_type, track_index, index)。
         ripple=True 时（同轨左移波纹）：该段左移后，其右侧空出来的区间让后续片段整体左移收拢。
         返回 {"ok": True, "track_type": ..., "track_index": ..., "index": ..., "start": new_start}。
         """
         self._reload()
         self._push_undo()
         before = copy.deepcopy(self.draft)
-        segs = _track_segs(self.draft, track_type, track_index)
-        if segs is None:
-            return {"ok": False, "error": f"{track_type} 没有第 {track_index} 条轨道"}
-        if not isinstance(index, int) or index < 0 or index >= len(segs):
-            return {"ok": False, "error": f"{track_type}[{track_index}] 没有第 {index} 段（共 {len(segs)} 段）"}
+        if segid:
+            seg = _seg_by_id(self.draft, segid)
+            if seg is None:
+                return {"ok": False, "error": f"未找到段 id={segid}"}
+            segs = None
+            main = self.draft.get("main")
+            if isinstance(main, dict) and seg in main.get("segs", []):
+                segs = main["segs"]
+            if segs is None:
+                for tr in self.draft.get("overlay", []):
+                    if isinstance(tr, dict) and seg in tr.get("segs", []):
+                        segs = tr["segs"]
+                        break
+            if segs is None:
+                for a in self.draft.get("audio", []):
+                    if isinstance(a, dict) and seg in a.get("segs", []):
+                        segs = a["segs"]
+                        break
+            if segs is None:
+                return {"ok": False, "error": f"段 id={segid} 定位失败"}
+            index = segs.index(seg)
+        else:
+            segs = _track_segs(self.draft, track_type, track_index)
+            if segs is None:
+                return {"ok": False, "error": f"{track_type} 没有第 {track_index} 条轨道"}
+            if not isinstance(index, int) or index < 0 or index >= len(segs):
+                return {"ok": False, "error": f"{track_type}[{track_index}] 没有第 {index} 段（共 {len(segs)} 段）"}
+            seg = segs[index]
         new_start = max(0, int(new_start_us))
         # 同轨不重叠（2026-08-18）：落点被占用 → 自动推到该轨最近空位（跳过自身）
-        dur = int(segs[index].get("duration") or 0)
+        dur = int(seg.get("duration") or 0)
         if any(_segments_overlap({"start": new_start, "duration": dur}, s) for i2, s in enumerate(segs) if i2 != index):
             new_start = _free_start_on_track(segs, new_start, dur, exclude_index=index)
-        segs[index]["start"] = new_start
+        seg["start"] = new_start
         if ripple:
             apply_ripple_adjustments(self.draft, compute_ripple_adjustments(before, self.draft))
         save_state(self.state)
@@ -3312,9 +3391,11 @@ class Api:
         }
 
 
-    def relocate_segment(self, track_type, from_track, index, to_track, at_time_us=None, insert_index=None):
-        """把一个已存在的片段从 (track_type, from_track, index) 移动到目标轨道。
+    def relocate_segment(self, track_type, from_track, index, to_track, at_time_us=None, insert_index=None, segid=None):
+        """把一个已存在的片段移动到目标轨道。
 
+        A 方案（2026-08-18）：传 segid（稳定段 id）时**优先按 segid 定位源段**（不受 ti 漂移影响）；
+        不传则回退 (track_type, from_track, index) 定位。
         to_track 为同类型已有轨道序号；to_track=-1 表示自动新建一条该类型轨道接住。
         落点 at_time_us（微秒）来自拖拽松手横向位置；为 None 则置 0。
         同轨重叠自动避让：落到被占位置会自动推到该轨最近空位。
@@ -3322,12 +3403,50 @@ class Api:
         """
         self._reload()
         self._push_undo()
-        from_segs = _track_segs(self.draft, track_type, from_track)
-        if from_segs is None:
-            return {"ok": False, "error": f"{track_type} 没有第 {from_track} 条轨道"}
-        if not isinstance(index, int) or index < 0 or index >= len(from_segs):
-            return {"ok": False, "error": f"{track_type}[{from_track}] 没有第 {index} 段"}
-        seg = from_segs.pop(index)  # 从源轨取出（不重排源轨，留空档）
+        if segid:
+            seg = _seg_by_id(self.draft, segid)
+            if seg is None:
+                return {"ok": False, "error": f"未找到段 id={segid}"}
+            # 从段所在轨移除（_seg_by_id 不返回位置，这里用对象引用逐个找）
+            removed = False
+            main = self.draft.get("main")
+            if isinstance(main, dict):
+                for i, s in enumerate(main.get("segs", [])):
+                    if s is seg:
+                        main["segs"].pop(i)
+                        removed = True
+                        break
+            if not removed:
+                for tr in self.draft.get("overlay", []):
+                    if not isinstance(tr, dict):
+                        continue
+                    for i, s in enumerate(tr.get("segs", [])):
+                        if s is seg:
+                            tr["segs"].pop(i)
+                            removed = True
+                            break
+                    if removed:
+                        break
+            if not removed:
+                for a in self.draft.get("audio", []):
+                    if not isinstance(a, dict):
+                        continue
+                    for i, s in enumerate(a.get("segs", [])):
+                        if s is seg:
+                            a["segs"].pop(i)
+                            removed = True
+                            break
+                    if removed:
+                        break
+            if not removed:
+                return {"ok": False, "error": f"段 id={segid} 定位失败"}
+        else:
+            from_segs = _track_segs(self.draft, track_type, from_track)
+            if from_segs is None:
+                return {"ok": False, "error": f"{track_type} 没有第 {from_track} 条轨道"}
+            if not isinstance(index, int) or index < 0 or index >= len(from_segs):
+                return {"ok": False, "error": f"{track_type}[{from_track}] 没有第 {index} 段"}
+            seg = from_segs.pop(index)  # 从源轨取出（不重排源轨，留空档）
         # 目标轨道：to_track 为已有轨道序号；to_track 为 None/-1（前端传 null）表示「新建一条该类型轨道接住」，
         # 此时若给了 insert_index 则在指定位置插入（拖到两条轨道中间的空隙），否则追加到末尾。
         if to_track is not None and to_track != -1:

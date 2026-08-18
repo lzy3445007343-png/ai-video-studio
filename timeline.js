@@ -138,6 +138,22 @@ function draftSegs(type, ti) {
   return null;
 }
 
+/* A 方案（2026-08-18）：按稳定段 id 全草稿定位段（main/overlay/audio）——不受 ti 漂移影响 */
+function segById(segid) {
+  if (!segid) return null;
+  const d = Store.state.draft;
+  const main = (d.main && typeof d.main === "object") ? (d.main.segs || []) : [];
+  for (const s of main) if (s && s.id === segid) return s;
+  for (const tr of (Array.isArray(d.overlay) ? d.overlay : [])) {
+    if (!tr || !Array.isArray(tr.segs)) continue;
+    for (const s of tr.segs) if (s && s.id === segid) return s;
+  }
+  for (const a of (Array.isArray(d.audio) ? d.audio : [])) {
+    if (a && typeof a === "object") for (const s of (a.segs || [])) if (s && s.id === segid) return s;
+  }
+  return null;
+}
+
 /* X 模型轨道 meta 定位：(type, ti) → _track_meta 里对应 dict（video ti=0→main，video ti>=1→overlay 第 ti-1 条 video 轨） */
 function trackMeta(type, ti) {
   const meta = Store.state.draft._track_meta || {};
@@ -316,11 +332,13 @@ function trackBusyAt(track, atTimeUs) {
 }
 
 // 片段几何：优先用拖拽临时态，否则用草稿真实位置
+// A 方案（2026-08-18）：被拖段匹配改用稳定段 id（d.segId === s.id），不再依赖 key 的 ti（折叠后 ti 会漂移）
 function segGeom(s, type, ti, idx) {
   let leftUs = s.start, rightUs = s.start + s.duration;
   const d = Store.state.drag;
   const k = type + ":" + ti + ":" + idx;
-  if (d && d.key === k && d.moved) {
+  const isDraggingSeg = d && d.segId && s.id && d.segId === s.id;
+  if (isDraggingSeg && d.moved) {
     if (d.mode === "move") { leftUs = d.curLeftUs; rightUs = d.curLeftUs + s.duration; } // 移动：保持时长，仅平移
     else if (d.mode === "resize") { if (d.side === "left") leftUs = d.curLeftUs; else rightUs = d.curRightUs; }
   }
@@ -329,7 +347,7 @@ function segGeom(s, type, ti, idx) {
   if (gs && Store.state.selectedKeys.includes(k)) {
     const ns = gs.pivot + (leftUs - gs.pivot) * gs.factor;
     leftUs = ns; rightUs = ns + s.duration * gs.factor;
-  } else if (d && d.isGroup && d.moved && d.mode === "move" && Store.state.selectedKeys.includes(k) && k !== d.key) {
+  } else if (d && d.isGroup && d.moved && d.mode === "move" && Store.state.selectedKeys.includes(k) && !isDraggingSeg) {
     // 整组移动预览：非锚点段横向跟随锚点的 dUs（保持相对布局）
     leftUs = s.start + d.groupDeltaUs; rightUs = leftUs + s.duration;
   }
@@ -339,10 +357,12 @@ function makeSeg(s, type, ti, idx, overrideLeftUs, forceDragging) {
   const key = type + ":" + ti + ":" + idx;
   const g = segGeom(s, type, ti, idx);
   const leftUs = (overrideLeftUs != null) ? overrideLeftUs : g.leftUs;
-  const dragging = !!forceDragging || (Store.state.drag && Store.state.drag.mode === "move" && Store.state.drag.moved && Store.state.drag.key === key);
+  const dragging = !!forceDragging || (Store.state.drag && Store.state.drag.mode === "move" && Store.state.drag.moved && Store.state.drag.segId && s.id && Store.state.drag.segId === s.id);
   const seg = document.createElement("div");
-  seg.className = "seg" + (type === "effect" ? " effect" : "") + (Store.state.selectedKeys.includes(key) ? " sel" : "") + (dragging ? " dragging" : "");
+  const isSel = (Store.state.selectedSegId && s.id && Store.state.selectedSegId === s.id) || Store.state.selectedKeys.includes(key);
+  seg.className = "seg" + (type === "effect" ? " effect" : "") + (isSel ? " sel" : "") + (dragging ? " dragging" : "");
   seg.dataset.key = key;
+  seg.dataset.segid = s.id || "";   // A 方案：DOM 也带稳定段 id，拖动定位不依赖 ti
   seg.dataset.leftUs = leftUs;        // 缩放重定位用：存原始时间值，避免播放期重建 timeline DOM
   seg.dataset.widthUs = g.widthUs;
   seg.style.left = (leftUs / 1e6 * pps()) + "px";
@@ -486,17 +506,17 @@ function renderTimeline(s) {
     else if (isMove && targetType && targetTi != null && tr.type === targetType && tr.ti === targetTi) track.classList.add("drop-target");
     let childCount = 0;
     // 被拖段显示位置（OpenCut previewElements）：existing → 目标轨；new → 预览轨（临时新轨）
+    // A 方案：用稳定段 id 定位被拖段（drag.segId），不依赖 key 的 ti
     if (isMove && targetType) {
       const showHere = (tr.preview) || (targetTi != null && tr.type === targetType && tr.ti === targetTi);
       if (showHere) {
-        const ds = findSeg(drag.type, drag.ti, drag.idx);
+        const ds = segById(drag.segId);
         if (ds) { track.appendChild(makeSeg(ds, drag.type, drag.ti, drag.idx, drag.curLeftUs, true)); childCount++; }
       }
     }
     tr.segs.forEach((seg, idx) => {
-      const k = tr.type + ":" + tr.ti + ":" + idx;
-      // 源轨跳过被拖段（拖动中段已实时显示在目标轨/预览轨）
-      if (isMove && k === dragKey) return;
+      // 源轨跳过被拖段（拖动中段已实时显示在目标轨/预览轨）——按段 id 匹配
+      if (isMove && drag.segId && seg.id && drag.segId === seg.id) return;
       track.appendChild(makeSeg(seg, tr.type, tr.ti, idx));
       childCount++;
     });

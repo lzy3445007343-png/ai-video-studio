@@ -1320,8 +1320,14 @@ function renderSpeedTab() {
 
 /* 选中：改 Store，自动重绘（含高亮与把手） */
 function selectKey(key) {
-  if (key == null) Store.set({ selectedKey: null, selectedKeys: [], selectedMaterialUid: null });
-  else Store.set({ selectedKey: key, selectedKeys: [key], selectedMaterialUid: null });
+  // A 方案：selectedKey 仍是 "type:ti:idx"（兼容显示），同时存稳定段 id（selectedSegId）供定位
+  let segId = null;
+  if (key) {
+    const seg = findSegByKey(key);
+    if (seg && seg.id) segId = seg.id;
+  }
+  if (key == null) Store.set({ selectedKey: null, selectedKeys: [], selectedMaterialUid: null, selectedSegId: null });
+  else Store.set({ selectedKey: key, selectedKeys: [key], selectedMaterialUid: null, selectedSegId: segId });
   updateToolbarState();
   renderKfPanel();
 }
@@ -1569,13 +1575,19 @@ function addKfAtPlayhead(path, valStr) {
 /* 选中态 → 工具栏按钮可用性（对齐 OpenCut canToggleSelectedSourceAudio）。
    提取原声按钮：仅当选中「视频段」且（已知含音轨 / 旧段未知时乐观允许）时启用；
    已提取过的视频段显示「还原音频」。其余（无选中 / 非视频 / 已知无音轨）禁用。 */
-function selectedSeg() {
-  const k = Store.state.selectedKey;
-  if (!k) return null;
-  const [type, ti, idx] = k.split(":");
+function findSegByKey(key) {
+  if (!key) return null;
+  const [type, ti, idx] = key.split(":");
   const segs = draftSegs(type, +ti);
-  if (!segs || !segs[+idx]) return null;
-  return segs[+idx];
+  return (segs && segs[+idx]) ? segs[+idx] : null;
+}
+function selectedSeg() {
+  // A 方案：优先用稳定段 id 定位（折叠/新建轨后 ti 漂移也不怕）；回退 (type,ti,idx)
+  if (Store.state.selectedSegId) {
+    const s = segById(Store.state.selectedSegId);
+    if (s) return s;
+  }
+  return findSegByKey(Store.state.selectedKey);
 }
 function updateToolbarState() {
   const srcBtn = $("srcAudioBtn");
@@ -1673,8 +1685,10 @@ function deleteMaterial(uid) {
 function startPointer(e, seg, mode, side) {
   if (e.button !== 0) return;
   const key = seg.dataset.key;
+  const segId = seg.dataset.segid || null;   // A 方案：DOM 带稳定段 id，拖动定位不依赖 ti
   const [type, ti, idx] = key.split(":");
-  const s0 = findSeg(type, +ti, idx);
+  // 优先按段 id 定位源段（mousedown 时 DOM 是刚渲染的，id 一定准确；ti 可能因折叠漂移）
+  const s0 = segId ? segById(segId) : null;
   if (!s0) return;
   // 选中语义（对齐 OpenCut selectable-surface.tsx handleItemClick）：
   //   Ctrl/Cmd+点击 = 切换该段进/出多选集合；普通点击 = 单选替换。
@@ -1696,6 +1710,7 @@ function startPointer(e, seg, mode, side) {
   Store.set({
     pendingDrag: {
       key, mode, side: side || null, type, ti: +ti, idx: +idx,
+      segId,   // A 方案：拖动全程用稳定段 id 定位/匹配，折叠后 ti 漂移也不影响
       isGroup: !!(inSel && multi && !e.ctrlKey && !e.metaKey && mode === "move"),
       anchorKey: key,
       startMouseX: e.clientX, startMouseY: e.clientY, s0,
@@ -1822,14 +1837,14 @@ function onPointerUp() {
       if (d.type === "effect") {
         if (d.targetKind === "new") {
           // 特效段拖到空白/异类型 → 新建特效轨（displayIndex→dataInsertIndex 同源）
-          call("relocate_segment", "effect", d.ti, d.idx, -1, Math.round(d.curLeftUs), d.dataInsertIndex)
+          call("relocate_segment", "effect", d.ti, d.idx, -1, Math.round(d.curLeftUs), d.dataInsertIndex, d.segId)
             .then(() => { selectKey(null); refresh(); });
         } else if (d.targetDataTi === d.ti) {
           // 同特效轨内只改时间
           call("update_effect", d.ti, d.idx, { range: { startUs: Math.round(d.curLeftUs), endUs: Math.round(d.curLeftUs + d.s0.duration) } }).then(refresh);
         } else {
           // 特效段拖到另一条已有特效轨
-          call("relocate_segment", "effect", d.ti, d.idx, d.targetDataTi, Math.round(d.curLeftUs), null)
+          call("relocate_segment", "effect", d.ti, d.idx, d.targetDataTi, Math.round(d.curLeftUs), null, d.segId)
             .then(() => { selectKey(null); refresh(); });
         }
       } else if (d.isGroup) {
@@ -1859,15 +1874,15 @@ function onPointerUp() {
         const crossTrack = (d.targetKind !== "existing") || (d.targetDataTi !== d.ti);
         if (d.targetKind === "new") {
           // 新建轨接住（视频→最顶覆盖轨，音频/文本/特效→按 displayIndex 归位，同源一致）
-          call("relocate_segment", d.type, d.ti, d.idx, -1, Math.round(d.curLeftUs), d.dataInsertIndex)
+          call("relocate_segment", d.type, d.ti, d.idx, -1, Math.round(d.curLeftUs), d.dataInsertIndex, d.segId)
             .then(() => { selectKey(null); refresh(); });
         } else if (d.targetDataTi === d.ti) {
-          call("move_segment", d.type, d.ti, d.idx, Math.round(d.curLeftUs), Store.state.rippleOn).then(refresh);
+          call("move_segment", d.type, d.ti, d.idx, Math.round(d.curLeftUs), Store.state.rippleOn, d.segId).then(refresh);
         } else if (crossTrack) {
-          call("relocate_segment", d.type, d.ti, d.idx, d.targetDataTi, Math.round(d.curLeftUs), null)
+          call("relocate_segment", d.type, d.ti, d.idx, d.targetDataTi, Math.round(d.curLeftUs), null, d.segId)
             .then(() => { selectKey(null); refresh(); });
         } else {
-          call("move_segment", d.type, d.ti, d.idx, Math.round(d.curLeftUs), Store.state.rippleOn).then(refresh);
+          call("move_segment", d.type, d.ti, d.idx, Math.round(d.curLeftUs), Store.state.rippleOn, d.segId).then(refresh);
         }
       }
     } else {
@@ -2898,9 +2913,11 @@ function refresh() {
     const wm = {};
     (st.materials || []).forEach(x => { if (x.thumbnail) m[x.path] = x.thumbnail; else if (x.type === "image") m[x.path] = x.path; if (x.peaks) wm[x.path] = x.peaks; });
     const draft = st.draft || { overlay: [], main: { segs: [] }, audio: [{ segs: [] }], canvas: { ratio: "16:9", locked: false } };
-    // 选中的片段若已被删，清空选中，避免悬空
+    // 选中的片段若已被删，清空选中，避免悬空（A 方案：优先按稳定段 id 校验，ti 漂移不怕）
     let selOk = false;
-    if (Store.state.selectedKey) {
+    if (Store.state.selectedSegId) {
+      selOk = !!segById(Store.state.selectedSegId);
+    } else if (Store.state.selectedKey) {
       const [type, ti, idx] = Store.state.selectedKey.split(":");
       const segs = draftSegs(type, +ti);
       if (segs && segs[+idx]) selOk = true;
