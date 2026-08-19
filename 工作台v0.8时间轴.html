@@ -189,6 +189,12 @@
   .insp-num input { flex: 1; min-width: 0; height: 26px; background: var(--panel-2); color: var(--text); border: 1px solid var(--border); border-radius: 5px; padding: 0 8px; font-size: 12px; outline: none; cursor: text; }
   /* 2026-08-19：参数面板内的文本类输入控件强制 I-beam 光标（防任何祖先 cursor 继承导致"像抓手工canvas"无法输入） */
   .insp-panel input[type="text"], .insp-panel input[type="number"], .insp-panel textarea, .insp-panel select { cursor: text; }
+  /* 2026-08-19 22:55 通用修复：全局兜底——任何文本输入控件永远 I-beam，!important 压过一切面板类/状态/覆盖层。
+     kf/mask/effect/subtitle/sticker 面板用的不是 .insp-panel 类(.kf-*/.mask-*/.subpanel/.stickerpanel)，
+     之前只给 .insp-panel 加 cursor:text 就是"修一个补一个"的根源。现在一次性覆盖所有面板所有输入控件。 */
+  input[type="text"], input[type="number"], input[type="search"], input[type="email"],
+  input[type="password"], input[type="url"], input[type="tel"], input:not([type]),
+  textarea, select, [contenteditable="true"] { cursor: text !important; }
   .insp-num input:focus { border-color: var(--primary); }
   .insp-num .unit { font-size: 11px; color: var(--muted); flex: none; width: 14px; }
   .insp-num .reset { width: 20px; height: 20px; border-radius: 4px; border: 1px solid var(--border); background: var(--panel); color: var(--muted); cursor: pointer; font-size: 11px; line-height: 1; flex: none; padding: 0; }
@@ -1112,10 +1118,10 @@ function renderAll(s) {
   // 2026-08-19 根因修复：仅后台轮询/非用户动作时冻结属性面板重建。
   // 否则每 0.5s refresh()→Store.set→这里会无条件推倒重建所有面板 innerHTML，
   // 按钮在 mousedown→mouseup 之间被替换，click 永不触发 → “点不动”。用户动作(_suppressPanelRender=false)仍正常重渲。
+  // 2026-08-19 23:00 全面板持久化：只渲染 active tab 面板（showToolTab→renderPropertyPanel），
+  // 不再无条件调 renderMaskPanel/renderSubtitlePanel/renderStickerPanel——非 active 面板 display:none 无需渲染，
+  // 否则每个 500ms 轮询都在重建隐藏面板 = 整个参数面板每 0.5s 全量刷新（"哪里都是抓手"的根源）。
   if (!_suppressPanelRender) {
-    renderMaskPanel();
-    renderSubtitlePanel();
-    renderStickerPanel();
     showToolTab(activeToolTab);
   }
 }
@@ -1223,10 +1229,10 @@ function renderPropertyPanel() {
     b.classList.toggle("active", tab === activeTab);
   });
 
-  // 调对应 panel 渲染函数
+  // 调对应 panel 渲染函数（2026-08-19：sub 同时渲染 ASR 控件层 renderSubtitlePanel + 段名层 renderSubPanel）
   if (activePanel === "kfPanel") renderKfPanel();
   else if (activePanel === "maskPanel") renderMaskPanel();
-  else if (activePanel === "subPanel") renderSubPanel();
+  else if (activePanel === "subPanel") { renderSubtitlePanel(); renderSubPanel(); }
   else if (activePanel === "stickerPanel") renderStickerPanel();
   else if (activePanel === "effectPanel") renderEffectPanel();
   else if (activePanel === "audioPanel") renderAudioTab();
@@ -1250,49 +1256,70 @@ function renderEffectPanel() {
   const parts = key.split(":");
   const ti = parts[1] != null ? parseInt(parts[1]) : null;
   const idx = parts[2] != null ? parseInt(parts[2]) : null;
-
-  let html = '<div class="insp-sub">作用对象：' + tgtLabel + '</div>';
-  if (meta && meta.params) {
-    html += '<div class="insp-sub">参数</div>';
-    const cur = s.params || {};
-    for (const pname in meta.params) {
-      const pm = meta.params[pname];
-      const rr = parseRange(pm.range); const mn = rr[0], mx = rr[1];
-      const step = rangeStep(mn, mx);
-      const def = (pm.default != null) ? pm.default : mn;
-      const val = (cur[pname] != null) ? cur[pname] : def;
-      const unit = pm.unit || "";
-      html += '<div class="insp-row" data-p="' + pname + '" data-unit="' + unit + '">'
-        + '<label>' + (pm.label || pname) + '</label>'
-        + '<input type="range" min="' + mn + '" max="' + mx + '" step="' + step + '" value="' + val + '">'
-        + '<span class="val">' + fmtVal(val) + (unit ? " " + unit : "") + '</span>'
-        + '</div>';
+  // 2026-08-19 23:00 持久化修复（对齐 OpenCut 组件复用）：结构(段身份+特效类型+参数集合)不变时
+  // 绝不 innerHTML 重建，滑块拖动不被 500ms 轮询打断；事件只在 build 时绑一次。
+  const paramKeys = meta && meta.params ? Object.keys(meta.params).join(",") : "";
+  const structKey = (s.id || key) + "|" + (s.effect_type || "") + "|" + paramKeys;
+  if (ctrlsEl.__key !== structKey) {
+    ctrlsEl.__key = structKey;
+    let html = '<div class="insp-sub">作用对象：' + tgtLabel + '</div>';
+    if (meta && meta.params) {
+      html += '<div class="insp-sub">参数</div>';
+      const cur = s.params || {};
+      for (const pname in meta.params) {
+        const pm = meta.params[pname];
+        const rr = parseRange(pm.range); const mn = rr[0], mx = rr[1];
+        const step = rangeStep(mn, mx);
+        const def = (pm.default != null) ? pm.default : mn;
+        const val = (cur[pname] != null) ? cur[pname] : def;
+        const unit = pm.unit || "";
+        html += '<div class="insp-row" data-p="' + pname + '" data-unit="' + unit + '">'
+          + '<label>' + (pm.label || pname) + '</label>'
+          + '<input type="range" min="' + mn + '" max="' + mx + '" step="' + step + '" value="' + val + '">'
+          + '<span class="val">' + fmtVal(val) + (unit ? " " + unit : "") + '</span>'
+          + '</div>';
+      }
+    } else {
+      html += '<div class="insp-status">该特效暂无可调参数。</div>';
     }
-  } else {
-    html += '<div class="insp-status">该特效暂无可调参数。</div>';
-  }
-  html += '<button class="insp-gen" id="effRemove" style="background:#3a2326;color:#ff9b9b">删除特效</button>';
-  ctrlsEl.innerHTML = html;
+    html += '<button class="insp-gen" id="effRemove" style="background:#3a2326;color:#ff9b9b">删除特效</button>';
+    ctrlsEl.innerHTML = html;
 
-  ctrlsEl.querySelectorAll(".insp-row input[type=range]").forEach(inp => {
-    inp.addEventListener("input", () => {
-      const row = inp.closest(".insp-row");
-      const pname = row.dataset.p; const unit = row.dataset.unit || "";
-      const v = parseFloat(inp.value);
-      const valEl = row.querySelector(".val");
-      if (valEl) valEl.textContent = fmtVal(v) + (unit ? " " + unit : "");
-      if (ti == null || idx == null) return;
-      clearTimeout(inp._t);
-      inp._t = setTimeout(() => {
-        call("update_effect", ti, idx, { params: { [pname]: v } }).then(refresh);
-      }, 250);
+    ctrlsEl.querySelectorAll(".insp-row input[type=range]").forEach(inp => {
+      inp.addEventListener("input", () => {
+        const row = inp.closest(".insp-row");
+        const pname = row.dataset.p; const unit = row.dataset.unit || "";
+        const v = parseFloat(inp.value);
+        const valEl = row.querySelector(".val");
+        if (valEl) valEl.textContent = fmtVal(v) + (unit ? " " + unit : "");
+        if (ti == null || idx == null) return;
+        clearTimeout(inp._t);
+        inp._t = setTimeout(() => {
+          call("update_effect", ti, idx, { params: { [pname]: v } }).then(refresh);
+        }, 250);
+      });
     });
-  });
-  const rm = $("effRemove");
-  if (rm) rm.addEventListener("click", () => {
-    if (ti == null || idx == null) return;
-    call("remove_effect", ti, idx).then(() => { selectKey(null); refresh(); });
-  });
+    const rm = $("effRemove");
+    if (rm) rm.addEventListener("click", () => {
+      if (ti == null || idx == null) return;
+      call("remove_effect", ti, idx).then(() => { selectKey(null); refresh(); });
+    });
+  } else {
+    // 结构不变 → 只更新滑块值（跳过正在拖动的滑块）
+    ctrlsEl.querySelectorAll(".insp-row input[type=range]").forEach(inp => {
+      if (document.activeElement === inp) return;
+      const row = inp.closest(".insp-row");
+      const pname = row.dataset.p;
+      const pm = meta && meta.params ? meta.params[pname] : null;
+      if (!pm) return;
+      const rr = parseRange(pm.range);
+      const def = (pm.default != null) ? pm.default : rr[0];
+      const val = (s.params && s.params[pname] != null) ? s.params[pname] : def;
+      inp.value = val;
+      const valEl = row.querySelector(".val");
+      if (valEl) valEl.textContent = fmtVal(val) + ((pm.unit || "") ? " " + pm.unit : "");
+    });
+  }
 }
 // range "0~20" / "0~1" → [min,max]
 function parseRange(r) {
@@ -1797,9 +1824,11 @@ function renderKfPanel() {
     if (s && s.type === "audio") {
       emptyEl.style.display = "none"; rowsEl.style.display = "";
       rowsEl.innerHTML = '<div style="padding:16px 8px;font-size:11px;color:var(--muted);text-align:center;line-height:1.6">音频段不支持位移/缩放/旋转关键帧（无画面）；调音量请切到 🔊 audio tab。</div>';
+      rowsEl.__key = null;
     } else if (s && s.type === "text") {
       emptyEl.style.display = "none"; rowsEl.style.display = "";
       rowsEl.innerHTML = '<div style="padding:16px 8px;font-size:11px;color:var(--muted);text-align:center;line-height:1.6">文本段的字号/颜色等字段在字幕面板（💬 sub tab），不在 transform 关键帧里。</div>';
+      rowsEl.__key = null;
     } else {
       emptyEl.style.display = ""; rowsEl.style.display = "none";
     }
@@ -1811,27 +1840,48 @@ function renderKfPanel() {
   const local = Math.max(0, Math.min(Store.state.playheadUs - s.start, s.duration));
   // 按 type 过滤 KF_PATHS（2026-08-16：audio/text 无 transform 概念）
   const paths = KF_PATHS_BY_TYPE[s.type] || [];
-  let html = "";
-  for (const [path, lab, step, def] of paths) {
-    const on = !!(anims[path] && anims[path].keys && anims[path].keys.length);
-    const cur = kfVal(anims, path, local);
-    const shown = cur == null ? def : cur;
-    html += '<div class="kf-row" data-path="' + path + '">'
-      + '<button class="tog' + (on ? ' on' : '') + '" data-act="tog" title="开/关该属性动画">◆</button>'
-      + '<span class="lab">' + lab + '</span>'
-      + '<input class="val" data-act="val" value="' + round2(shown) + '" step="' + step + '">'
-      + '<button class="add" data-act="add" title="在播放头处添加关键帧">＋</button>'
-      + '</div>';
-  }
-  rowsEl.innerHTML = html;
-  rowsEl.querySelectorAll(".kf-row").forEach(row => {
-    const path = row.dataset.path;
-    row.querySelector('[data-act="tog"]').addEventListener("click", () => toggleKf(path));
-    row.querySelector('[data-act="add"]').addEventListener("click", () => {
-      const v = row.querySelector('[data-act="val"]').value;
-      addKfAtPlayhead(path, v);
+  const selId = s.id || (Store.state.selectedKey || "");
+  // 2026-08-19 23:00 持久化修复（对齐 OpenCut 组件复用）：结构(段身份+每通道开/关状态)不变时
+  // 绝不 innerHTML 重建，输入框光标/◆/＋按钮 handler 永活 → 500ms 轮询不再吞交互。
+  const stateKey = paths.map(([path]) => (anims[path] && anims[path].keys && anims[path].keys.length ? "1" : "0")).join("");
+  const structKey = selId + "|" + stateKey;
+  if (rowsEl.__key !== structKey) {
+    rowsEl.__key = structKey;
+    let html = "";
+    for (const [path, lab, step, def] of paths) {
+      const on = !!(anims[path] && anims[path].keys && anims[path].keys.length);
+      const cur = kfVal(anims, path, local);
+      const shown = cur == null ? def : cur;
+      html += '<div class="kf-row" data-path="' + path + '">'
+        + '<button class="tog' + (on ? ' on' : '') + '" data-act="tog" title="开/关该属性动画">◆</button>'
+        + '<span class="lab">' + lab + '</span>'
+        + '<input class="val" data-act="val" value="' + round2(shown) + '" step="' + step + '">'
+        + '<button class="add" data-act="add" title="在播放头处添加关键帧">＋</button>'
+        + '</div>';
+    }
+    rowsEl.innerHTML = html;
+    rowsEl.querySelectorAll(".kf-row").forEach(row => {
+      const path = row.dataset.path;
+      row.querySelector('[data-act="tog"]').addEventListener("click", () => toggleKf(path));
+      row.querySelector('[data-act="add"]').addEventListener("click", () => {
+        const v = row.querySelector('[data-act="val"]').value;
+        addKfAtPlayhead(path, v);
+      });
     });
-  });
+  } else {
+    // 结构不变 → 只更新值/高亮（跳过正在编辑的输入框）
+    let i = 0;
+    rowsEl.querySelectorAll(".kf-row").forEach(row => {
+      const path = row.dataset.path;
+      const cur = kfVal(anims, path, local);
+      const def = paths[i] ? paths[i][3] : 0; i++;
+      const shown = cur == null ? def : cur;
+      const inp = row.querySelector('[data-act="val"]');
+      if (inp && document.activeElement !== inp) inp.value = round2(shown);
+      const tog = row.querySelector('[data-act="tog"]');
+      if (tog) tog.classList.toggle("on", !!(anims[path] && anims[path].keys && anims[path].keys.length));
+    });
+  }
   renderKfGraph(s);
   if (selectedKf.path && selectedKf.id && anims[selectedKf.path] && anims[selectedKf.path].keys
       && anims[selectedKf.path].keys.some(k => k.id === selectedKf.id)) {
