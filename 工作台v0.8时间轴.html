@@ -1303,7 +1303,7 @@ function buildSegRefs() {
 // 支持批量：多选视频/音频段时应用到全部（set_segments_props 一次提交）
 function renderAudioTab() {
   const bodyEl = $("audBody"), nameEl = $("audSegName");
-  // DEBUG 2026-08-19：JS 强制设样式（不依赖 HTML inline style 解析），并完整报告
+  // DEBUG 2026-08-19：JS 强制设样式 + 完整报告（同时写到屏幕，用户直接看，不用 console）
   const p = document.getElementById("audioPanel");
   if (p) {
     p.style.position = "fixed";
@@ -1317,23 +1317,32 @@ function renderAudioTab() {
   }
   const t = document.getElementById("toolsPanel");
   const tc = document.querySelector(".tools-content");
-  console.log("[debug-audio] renderAudioTab", {
+  const r = {
     selectedKey: Store.state.selectedKey,
-    audioPanel_tag: p?.tagName,
-    audioPanel_classList: p?.className,
-    audioPanel_computedDisplay: p ? getComputedStyle(p).display : null,
-    audioPanel_computedZIndex: p ? getComputedStyle(p).zIndex : null,
-    audioPanel_computedPosition: p ? getComputedStyle(p).position : null,
-    audioPanel_computedWidth: p ? getComputedStyle(p).width : null,
-    audioPanel_computedHeight: p ? getComputedStyle(p).height : null,
-    audioPanel_inlineStyle: p?.getAttribute("style")?.substring(0, 200),
-    audioPanel_outerHTML: p?.outerHTML?.substring(0, 150),
-    audioPanel_bbox: p?.getBoundingClientRect(),
-    toolsPanel_bbox: t?.getBoundingClientRect(),
-    toolsContent_bbox: tc?.getBoundingClientRect(),
-    toolsContent_computedWidth: tc ? getComputedStyle(tc).width : null,
-    toolsContent_computedOverflow: tc ? getComputedStyle(tc).overflow : null,
-  });
+    tag: p?.tagName,
+    cls: p?.className,
+    dis: p ? getComputedStyle(p).display : null,
+    pos: p ? getComputedStyle(p).position : null,
+    w: p ? getComputedStyle(p).width : null,
+    h: p ? getComputedStyle(p).height : null,
+    offsetW: p?.offsetWidth,
+    offsetH: p?.offsetHeight,
+    inlineStyle: p?.getAttribute("style")?.substring(0, 80),
+    outerHTML: p?.outerHTML?.substring(0, 120),
+    parentTag: p?.parentElement?.tagName,
+    parentCls: p?.parentElement?.className,
+    bbox: p?.getBoundingClientRect(),
+    toolsW: tc ? getComputedStyle(tc).width : null,
+    toolsOverflow: tc ? getComputedStyle(tc).overflow : null,
+  };
+  console.log("[debug-audio]", r);
+  // 同步显示到屏幕（红底白字）——用户直接看，不用 DevTools
+  if (bodyEl) {
+    bodyEl.innerHTML =
+      '<div style="background:#000;color:#0f0;font:11px/1.5 monospace;padding:8px;white-space:pre;overflow:auto">' +
+      "🔍 DEBUG: " + JSON.stringify(r, null, 2) +
+      "</div>";
+  }
   if (!bodyEl) return;
   const refs = buildSegRefs();
   if (!refs.length) { bodyEl.innerHTML = '<div class="empty-hint" style="padding:24px;text-align:center">未选中片段</div>'; if (nameEl) nameEl.textContent = ""; return; }
