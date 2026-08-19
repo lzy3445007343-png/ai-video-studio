@@ -148,14 +148,24 @@
   .tools-content .effectpanel,
   .tools-content .empty-panel, .tools-content .multi-panel, .tools-content .placeholder-panel,
   .tools-content .audioPanel, .tools-content .speedPanel {
-    display: none; border-top: none; width: 100%; flex: none; min-width: 0;
+    display: none; border-top: none; width: 100%; flex: 1; min-width: 0; min-height: 0;
     background: var(--panel); border-left: 1px solid var(--border); overflow: hidden;
+    flex-direction: column;
   }
   .tools-content .panel-active { display: flex !important; flex-direction: column; }
-  /* 兼容 body 子元素（若 .tools-content 塌陷导致 panel 不可见，body 子元素 fallback 仍然能匹配） */
+  /* 兼容 body 子元素 */
   .audioPanel, .speedPanel { background: var(--panel); border-left: 1px solid var(--border); overflow-y: auto; }
   .audioPanel:not(.panel-active), .speedPanel:not(.panel-active) { display: none; }
   .audioPanel > .head, .speedPanel > .head { padding: 10px; border-bottom: 1px solid var(--border); font-weight: 600; font-size: 12px; display: flex; align-items: center; gap: 6px; }
+  /* OpenCut 风格 EmptyView / multiView（2026-08-19 替换原 emptyPanel/multiPanel） */
+  .tools-content { display:flex; flex-direction:column; }
+  .prop-empty-view, .prop-multi-view { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:10px; padding:24px 16px; height:100%; min-height:300px; color:var(--muted); }
+  .prop-empty-icon { font-size:48px; opacity:0.55; margin-bottom:4px; }
+  .prop-empty-title { font-size:13px; font-weight:500; color:var(--text); }
+  .prop-empty-hint { font-size:11px; color:var(--muted); text-align:center; max-width:240px; }
+  .prop-multi-icon { font-size:36px; opacity:0.6; margin-bottom:4px; }
+  .prop-multi-count { font-size:13px; font-weight:500; color:var(--text); }
+  .prop-multi-hint { font-size:11px; color:var(--muted); text-align:center; max-width:200px; }
   .empty-panel { align-items: center; justify-content: center; text-align: center; color: var(--muted); font-size: 12px; padding: 32px 20px; line-height: 1.7; }
   .empty-panel .empty-icon { font-size: 36px; margin-bottom: 12px; opacity: .6; }
   .empty-panel .empty-title { font-size: 13px; font-weight: 500; color: var(--text); margin-bottom: 6px; }
@@ -1140,53 +1150,82 @@ function showToolTab(tab) {
   renderPropertyPanel();
 }
 
+/* 2026-08-19 OpenCut PropertiesPanel 风格（vanilla JS 翻译）：
+   整个函数在 .tools-content 内渲染三态：
+   - 无选中：EmptyView（图标 + "这里空无一人" + 提示）
+   - 多选：multiPanel（N 个片段已选中）
+   - 单选：当前 active tab 的内容（用现有 panel 元素 + panel-active class 切换）
+   与 OpenCut 区别：我们的 tab 切换仍走 .tools-rail 按钮（用户已习惯），OpenCut 是内部 tooltip 按钮。
+*/
 function renderPropertyPanel() {
+  const root = $("toolsContent");
+  if (!root) return;
   const s = selectedSeg();
   const multiCount = (Store.state.selectedKeys || []).length;
   const type = s ? s.type : null;
-  let activePanel, activeTab;
 
+  // 1. 无选中：EmptyView（OpenCut 风格 ⚙ 图标 + 文案）
   if (!type && multiCount === 0) {
-    activePanel = "emptyPanel"; activeTab = null;
-  } else if (multiCount > 1) {
-    activePanel = "multiPanel";
-    const mc = document.getElementById("multiCount");
-    if (mc) mc.textContent = multiCount + " 个片段已选中";
-    activeTab = null;
-  } else {
-    const enabled = new Set(PROPERTY_TABS_BY_TYPE[type] || ["kf"]);
-    activeTab = (activeToolTab && enabled.has(activeToolTab)) ? activeToolTab
-              : (PROPERTY_DEFAULT_TAB_BY_TYPE[type] || "kf");
-    activePanel = TAB_TO_PANEL[activeTab] || "kfPanel";
+    // 清空 root，隐藏所有 panel
+    root.innerHTML = '<div class="prop-empty-view">'
+      + '<div class="prop-empty-icon">⚙</div>'
+      + '<div class="prop-empty-title">这里空无一人</div>'
+      + '<div class="prop-empty-hint">点击时间轴上的片段以编辑其属性</div>'
+      + '</div>';
+    // 隐藏所有 panel（清掉 panel-active）
+    ["kfPanel","maskPanel","subPanel","stickerPanel","effectPanel","audioPanel","speedPanel","multiPanel","emptyPanel","placeholderPanel"].forEach(id => {
+      const el = document.getElementById(id); if (el) el.classList.remove("panel-active");
+    });
+    // 禁用所有 rail
+    document.querySelectorAll("#toolsRail .rail-btn").forEach(b => { b.setAttribute("disabled", "true"); b.classList.remove("active"); });
+    return;
   }
 
+  // 2. 多选：multiPanel
+  if (multiCount > 1) {
+    root.innerHTML = '<div class="prop-multi-view">'
+      + '<div class="prop-multi-icon">◫</div>'
+      + '<div class="prop-multi-count">' + multiCount + ' 个片段已选中</div>'
+      + '<div class="prop-multi-hint">批量音量/速度：选中全为视频/音频段时可同时修改</div>'
+      + '</div>';
+    ["kfPanel","maskPanel","subPanel","stickerPanel","effectPanel","audioPanel","speedPanel","multiPanel","emptyPanel","placeholderPanel"].forEach(id => {
+      const el = document.getElementById(id); if (el) el.classList.remove("panel-active");
+    });
+    document.querySelectorAll("#toolsRail .rail-btn").forEach(b => { b.setAttribute("disabled", "true"); b.classList.remove("active"); });
+    return;
+  }
+
+  // 3. 单选：清 root 暂时为空，把现有 panel 元素（kfPanel/audioPanel/...）按 active tab 显示
+  // 关键：root.innerHTML = '' 不再丢失 panel 元素——而是把 panel 元素 appendChild 到 root
+  //      这样保持原 panel 元素的事件绑定和数据
+  // 但用户已经点击 tab 时，renderAll 周期性调用——保持 root 不动
+  // 简化：root 不重写，让 panel-active class 控制
+  const enabled = new Set(PROPERTY_TABS_BY_TYPE[type] || ["kf"]);
+  const activeTab = (activeToolTab && enabled.has(activeToolTab)) ? activeToolTab
+                  : (PROPERTY_DEFAULT_TAB_BY_TYPE[type] || "kf");
+  const activePanel = TAB_TO_PANEL[activeTab] || "kfPanel";
+
+  // 清 root 之前的 empty/multi view
+  if (root.querySelector(".prop-empty-view") || root.querySelector(".prop-multi-view")) {
+    root.innerHTML = "";
+  }
+
+  // 切换 panel-active
   ["kfPanel", "maskPanel", "subPanel", "stickerPanel", "effectPanel", "emptyPanel", "multiPanel", "placeholderPanel", "audioPanel", "speedPanel"].forEach(id => {
     const el = document.getElementById(id);
-    if (!el) return;        // 防御：id 找不到跳过，不影响其他面板
+    if (!el) return;
     if (id === activePanel) el.classList.add("panel-active");
     else el.classList.remove("panel-active");
   });
 
+  // rail 启用/禁用 + active
   document.querySelectorAll("#toolsRail .rail-btn").forEach(b => {
     const tab = b.dataset.tab;
-    if (!type) {
-      b.setAttribute("disabled", "true");
-      b.classList.remove("active");
-    } else {
-      const enabled = new Set(PROPERTY_TABS_BY_TYPE[type] || ["kf"]);
-      if (enabled.has(tab)) b.removeAttribute("disabled"); else b.setAttribute("disabled", "true");
-      b.classList.toggle("active", tab === activeTab);
-    }
+    if (enabled.has(tab)) b.removeAttribute("disabled"); else b.setAttribute("disabled", "true");
+    b.classList.toggle("active", tab === activeTab);
   });
 
-  if (activePanel === "placeholderPanel") {
-    const t = document.getElementById("phTitle");
-    const h = document.getElementById("phHint");
-    if (t) t.textContent = PLACEHOLDER_TITLES[activeTab] || "暂未实现";
-    if (h) h.textContent = "已加入路线图，后续版本实现";
-    const c = $("phContent"); if (c) c.innerHTML = "";
-  }
-
+  // 调对应 panel 渲染函数
   if (activePanel === "kfPanel") renderKfPanel();
   else if (activePanel === "maskPanel") renderMaskPanel();
   else if (activePanel === "subPanel") renderSubPanel();
