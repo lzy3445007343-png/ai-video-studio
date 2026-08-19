@@ -367,6 +367,51 @@ def _overlay_index(draft, track_type, ti):
     return -1
 
 
+def _new_tid(prefix):
+    """生成轨道稳定 id（A1，对齐 OpenCut trackId）。前缀区分类型：ov_=overlay / main_=主场景 / au_=音轨。"""
+    import uuid
+    return prefix + "_" + uuid.uuid4().hex[:12]
+
+
+def _ensure_track_tids(draft):
+    """给所有轨道补稳定 tid（A1）。overlay[i]/main/audio[i] 各轨 dict 加 tid。
+    tid 一旦生成保持不变（折叠/重排/新建都不改已有 tid），AI/MCP 可用 tid 稳定引用轨道——
+    这是 A 方案「轨道也引入稳定 id」的地基（段 id 已在 b9a9206 完成）。"""
+    for tr in draft.get("overlay", []):
+        if isinstance(tr, dict) and not tr.get("tid"):
+            tr["tid"] = _new_tid("ov")
+    main = draft.get("main")
+    if isinstance(main, dict) and not main.get("tid"):
+        main["tid"] = _new_tid("main")
+    for a in draft.get("audio", []):
+        if isinstance(a, dict) and not a.get("tid"):
+            a["tid"] = _new_tid("au")
+
+
+def _track_by_tid(draft, tid):
+    """按轨道稳定 id 定位（A2）。返回 (track_type, ti, segs) 或 None。
+    ti = 该类型内序号（video 覆盖轨从 1 起，0=主场景；其他类型 0 起）——与外部命令 (type,ti) 语义一致。"""
+    if not tid:
+        return None
+    main = draft.get("main")
+    if isinstance(main, dict) and main.get("tid") == tid:
+        return ("video", 0, main.get("segs", []))
+    counters = {}
+    for tr in draft.get("overlay", []):
+        if not isinstance(tr, dict):
+            continue
+        t = tr.get("type") or "video"
+        n = counters.get(t, 0) + 1
+        counters[t] = n
+        if tr.get("tid") == tid:
+            ti = n if t == "video" else n - 1   # video 覆盖轨从 1 起，其他从 0 起
+            return (t, ti, tr.get("segs", []))
+    for i, a in enumerate(draft.get("audio", [])):
+        if isinstance(a, dict) and a.get("tid") == tid:
+            return ("audio", i, a.get("segs", []))
+    return None
+
+
 def _track_segs(draft, track_type, ti, ensure=False):
     """统一取轨段列表（X 模型访问层）。返回 None 表示轨不存在（ensure=False 时）。"""
     if track_type == "audio":
@@ -422,10 +467,10 @@ def _ensure_track(draft, track_type, index):
     if index == -1:
         if track_type == "audio":
             audio = draft.setdefault("audio", [{"segs": []}])
-            audio.append({"segs": []})
+            audio.append({"segs": [], "tid": _new_tid("au")})
             return len(audio) - 1
         overlay = draft.setdefault("overlay", [])
-        overlay.append({"type": track_type, "segs": []})
+        overlay.append({"type": track_type, "segs": [], "tid": _new_tid("ov")})
         if track_type == "video":
             return sum(1 for tr in overlay if tr.get("type") == "video")   # 第 N 条覆盖轨 ti=N
         return sum(1 for tr in overlay if tr.get("type") == track_type) - 1  # 0-based
@@ -448,11 +493,11 @@ def _insert_track(draft, track_type, insert_index):
     if track_type == "audio":
         audio = draft.setdefault("audio", [{"segs": []}])
         ins = max(0, min(int(insert_index), len(audio)))
-        audio.insert(ins, {"segs": []})
+        audio.insert(ins, {"segs": [], "tid": _new_tid("au")})
         return ins
     overlay = draft.setdefault("overlay", [])
     ins = max(0, min(int(insert_index), len(overlay)))
-    overlay.insert(ins, {"type": track_type, "segs": []})
+    overlay.insert(ins, {"type": track_type, "segs": [], "tid": _new_tid("ov")})
     return ins
 
 
@@ -745,6 +790,7 @@ def load_state():
         "version": 0,
     }
     if not os.path.exists(STATE_PATH):
+        _ensure_track_tids(empty["draft"])   # A1：空草稿也要有 tid（统一不变量）
         return empty
     try:
         with open(STATE_PATH, "r", encoding="utf-8") as f:
@@ -802,6 +848,8 @@ def load_state():
             m.setdefault("hidden", False)
         meta["main"].setdefault("muted", False)
         meta["main"].setdefault("hidden", False)
+        # A1（2026-08-19）：轨道稳定 tid——加载时给缺 tid 的轨补 uuid（含旧草稿迁移/新建轨）
+        _ensure_track_tids(draft)
         # 兼容旧项目：给所有段补 speed/change_pitch / animations 默认值
         _ensure_seg_speeds(draft)
         _ensure_seg_animations(draft)
@@ -922,6 +970,10 @@ def save_state(state, record=True):
         # Step 5：压「快照 Command」入 Command 栈（5a 兜底；5b 包壳操作改走 CommandManager.execute）
         if Api.cmd_mgr is not None:
             Api.cmd_mgr.push_snapshot(copy.deepcopy(Api.last_committed))
+    # A1（2026-08-19）：写盘前统一确保轨道 tid——任何途径新建的轨（_track_segs ensure /
+    # _ensure_*_track / add_* 系列）落盘前自动带 tid，不依赖每个建轨点手动加。
+    if isinstance(state.get("draft"), dict):
+        _ensure_track_tids(state["draft"])
     Api.last_committed = copy.deepcopy(state["draft"])
     try:
         state["version"] = int(time.time() * 1000)
@@ -2311,7 +2363,7 @@ class Api:
         self._reload()
         return Api.cmd_mgr.redo(self)
 
-    def add_to_timeline(self, name, path, mtype, track_index=None, at_time_us=None, insert_index=None):
+    def add_to_timeline(self, name, path, mtype, track_index=None, at_time_us=None, insert_index=None, track_tid=None):
         """把素材登记进草稿对应轨道（双击或拖拽都走这里，真实进轨）。
 
         多轨模型：
@@ -2325,13 +2377,13 @@ class Api:
         # 2026-08-19：整体 try/except——静默失败（pywebview 桥 promise 永不返回）是"素材放不进"体感根因，
         # 任何异常都必须变成可见的 {ok:false, error}，让前端 alert/日志能定位。
         try:
-            return self._add_to_timeline_impl(name, path, mtype, track_index, at_time_us, insert_index)
+            return self._add_to_timeline_impl(name, path, mtype, track_index, at_time_us, insert_index, track_tid)
         except Exception as e:
             import traceback
             traceback.print_exc()
             return {"ok": False, "error": "add_to_timeline 异常: %s" % e}
 
-    def _add_to_timeline_impl(self, name, path, mtype, track_index=None, at_time_us=None, insert_index=None):
+    def _add_to_timeline_impl(self, name, path, mtype, track_index=None, at_time_us=None, insert_index=None, track_tid=None):
         """add_to_timeline 真实实现（被 try/except 包裹）。"""
         self._reload()
         # 严重坑：path 不存在（AI 传了假路径/文件名）就直接进轨，导出剪映时 VideoSegment(None) 抛异常整段失败。
@@ -2342,8 +2394,15 @@ class Api:
         if mtype not in TYPE_TRACK:
             return {"ok": False, "error": f"不支持的素材类型：{mtype}"}
         track_type = TYPE_TRACK[mtype]
-        # 落点轨道优先级：指定 track_index（-1=新建追加）> insert_index（中间插入新轨）> 默认主轨/第一条
-        if track_index is not None:
+        # 落点轨道优先级：track_tid（稳定 id，A2）> track_index（-1=新建追加）> insert_index（中间插入新轨）> 默认主轨/第一条
+        if track_tid:
+            located = _track_by_tid(self.draft, track_tid)
+            if located is None:
+                return {"ok": False, "error": f"未找到轨道 tid={track_tid}"}
+            tt, idx, segs = located
+            if tt != track_type:
+                return {"ok": False, "error": f"轨道类型不匹配：tid={track_tid} 是 {tt}，素材类型 {mtype} 需要 {track_type}"}
+        elif track_index is not None:
             if track_index == -1:
                 idx = _ensure_track(self.draft, track_type, -1)
             else:
@@ -2890,16 +2949,26 @@ class Api:
         save_state(self.state)
         return {"ok": True, "hidden": m["hidden"]}
 
-    def remove_segment(self, track_type, track_index, index, segid=None):
+    def remove_segment(self, track_type, track_index, index, segid=None, track_tid=None):
         """删除指定段。
 
         A 方案（2026-08-18）：传 segid（稳定段 id）时按 segid 定位（不受 ti 漂移影响）；
-        不传则回退 (track_type, track_index, index)。
+        不传则回退 (track_type, track_index, index)。A2（2026-08-19）：track_tid（源轨稳定 id）优先。
         不做重排：保留其余片段的绝对 start。返回 {"ok": True, "removed": {...}}。
         """
         self._reload()
         self._push_undo()
-        if segid:
+        if track_tid:
+            located = _track_by_tid(self.draft, track_tid)
+            if located is None:
+                return {"ok": False, "error": f"未找到轨道 tid={track_tid}"}
+            tt, track_index, segs = located
+            if tt != track_type:
+                return {"ok": False, "error": f"轨道类型不匹配：tid={track_tid} 是 {tt}，段是 {track_type}"}
+            if not isinstance(index, int) or index < 0 or index >= len(segs):
+                return {"ok": False, "error": f"tid={track_tid} 轨没有第 {index} 段（共 {len(segs)} 段）"}
+            removed = segs.pop(index)
+        elif segid:
             seg = _seg_by_id(self.draft, segid)
             if seg is None:
                 return {"ok": False, "error": f"未找到段 id={segid}"}
@@ -3041,20 +3110,30 @@ class Api:
         save_state(self.state)
         return {"ok": True, "pasted": pasted, "count": len(pasted)}
 
-    def move_segment(self, track_type, track_index, index, new_start_us, ripple=False, segid=None):
+    def move_segment(self, track_type, track_index, index, new_start_us, ripple=False, segid=None, track_tid=None):
         """把指定段移动到新的起始时间（微秒）。
 
         鼠标在时间轴拖动片段后调用。只改该段的 start，不重排后续片段
         （允许片段之间留空档或重叠，符合 PR 的自由拖动手感，后续用吸附处理对齐）。
         A 方案（2026-08-18）：传 segid（稳定段 id）时按 segid 定位（不受 ti 漂移影响）；
-        不传则回退 (track_type, track_index, index)。
+        不传则回退 (track_type, track_index, index)。A2（2026-08-19）：track_tid（源轨稳定 id）优先。
         ripple=True 时（同轨左移波纹）：该段左移后，其右侧空出来的区间让后续片段整体左移收拢。
         返回 {"ok": True, "track_type": ..., "track_index": ..., "index": ..., "start": new_start}。
         """
         self._reload()
         self._push_undo()
         before = copy.deepcopy(self.draft)
-        if segid:
+        if track_tid:
+            located = _track_by_tid(self.draft, track_tid)
+            if located is None:
+                return {"ok": False, "error": f"未找到轨道 tid={track_tid}"}
+            tt, track_index, segs = located
+            if tt != track_type:
+                return {"ok": False, "error": f"轨道类型不匹配：tid={track_tid} 是 {tt}，段是 {track_type}"}
+            if not isinstance(index, int) or index < 0 or index >= len(segs):
+                return {"ok": False, "error": f"tid={track_tid} 轨没有第 {index} 段（共 {len(segs)} 段）"}
+            seg = segs[index]
+        elif segid:
             seg = _seg_by_id(self.draft, segid)
             if seg is None:
                 return {"ok": False, "error": f"未找到段 id={segid}"}
@@ -3492,11 +3571,12 @@ class Api:
         }
 
 
-    def relocate_segment(self, track_type, from_track, index, to_track, at_time_us=None, insert_index=None, segid=None):
+    def relocate_segment(self, track_type, from_track, index, to_track, at_time_us=None, insert_index=None, segid=None, to_track_tid=None):
         """把一个已存在的片段移动到目标轨道。
 
         A 方案（2026-08-18）：传 segid（稳定段 id）时**优先按 segid 定位源段**（不受 ti 漂移影响）；
         不传则回退 (track_type, from_track, index) 定位。
+        A2（2026-08-19）：to_track_tid（目标轨稳定 id）优先于 to_track/insert_index——AI/MCP 可用 tid 换轨。
         to_track 为同类型已有轨道序号；to_track=-1 表示自动新建一条该类型轨道接住。
         落点 at_time_us（微秒）来自拖拽松手横向位置；为 None 则置 0。
         同轨重叠自动避让：落到被占位置会自动推到该轨最近空位。
@@ -3548,9 +3628,16 @@ class Api:
             if not isinstance(index, int) or index < 0 or index >= len(from_segs):
                 return {"ok": False, "error": f"{track_type}[{from_track}] 没有第 {index} 段"}
             seg = from_segs.pop(index)  # 从源轨取出（不重排源轨，留空档）
-        # 目标轨道：to_track 为已有轨道序号；to_track 为 None/-1（前端传 null）表示「新建一条该类型轨道接住」，
+        # 目标轨道：to_track_tid（稳定 id，A2）> to_track 已有轨道序号；to_track 为 None/-1（前端传 null）表示「新建一条该类型轨道接住」，
         # 此时若给了 insert_index 则在指定位置插入（拖到两条轨道中间的空隙），否则追加到末尾。
-        if to_track is not None and to_track != -1:
+        if to_track_tid:
+            located = _track_by_tid(self.draft, to_track_tid)
+            if located is None:
+                return {"ok": False, "error": f"未找到轨道 tid={to_track_tid}"}
+            tt, to_idx, to_segs = located
+            if tt != track_type:
+                return {"ok": False, "error": f"轨道类型不匹配：tid={to_track_tid} 是 {tt}，段是 {track_type}"}
+        elif to_track is not None and to_track != -1:
             to_idx = _ensure_track(self.draft, track_type, to_track)
             to_segs = _track_segs(self.draft, track_type, to_idx)
         elif insert_index is not None:
