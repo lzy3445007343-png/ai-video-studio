@@ -726,6 +726,7 @@
 <script src="property/speed-panel.js"></script>
 <script src="property/mask-panel.js"></script>
 <script src="property/effect-panel.js"></script>
+<script src="property/kf-panel.js"></script>
 <script>
 "use strict";
 
@@ -1240,7 +1241,7 @@ function renderPropertyPanel() {
   });
 
   // 调对应 panel 渲染函数（2026-08-19：sub 同时渲染 ASR 控件层 renderSubtitlePanel + 段名层 renderSubPanel）
-  if (activePanel === "kfPanel") renderKfPanel();
+  if (activePanel === "kfPanel") renderKfPanelPF();   // Phase 4：Property Framework 版（property/kf-panel.js）
   else if (activePanel === "maskPanel") renderMaskPanelPF();   // Phase 3：Property Framework 版（property/mask-panel.js）
   else if (activePanel === "subPanel") { renderSubtitlePanel(); renderSubPanel(); }
   else if (activePanel === "stickerPanel") renderStickerPanel();
