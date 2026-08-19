@@ -1836,8 +1836,8 @@ function onPointerUp() {
           // 同特效轨内只改时间
           call("update_effect", d.ti, d.idx, { range: { startUs: Math.round(d.curLeftUs), endUs: Math.round(d.curLeftUs + d.s0.duration) } }).then(refresh);
         } else {
-          // 特效段拖到另一条已有特效轨
-          call("relocate_segment", "effect", d.ti, d.idx, d.targetDataTi, Math.round(d.curLeftUs), null, d.segId)
+          // 特效段拖到另一条已有特效轨；A3：目标轨带稳定 tid（后端 to_track_tid 优先）
+          call("relocate_segment", "effect", d.ti, d.idx, d.targetDataTi, Math.round(d.curLeftUs), null, d.segId, trackTidOf("effect", d.targetDataTi))
             .then(() => { selectKey(null); refresh(); });
         }
       } else if (d.isGroup) {
@@ -1878,7 +1878,8 @@ function onPointerUp() {
         } else if (d.targetDataTi === d.ti) {
           call("move_segment", d.type, d.ti, d.idx, Math.round(d.curLeftUs), Store.state.rippleOn, d.segId).then(refresh, mvFail);
         } else if (crossTrack) {
-          call("relocate_segment", d.type, d.ti, d.idx, d.targetDataTi, Math.round(d.curLeftUs), null, d.segId)
+          // A3（2026-08-19）：目标轨带稳定 tid（后端 to_track_tid 优先，不受折叠漂移）；tid 缺失回退 targetDataTi
+          call("relocate_segment", d.type, d.ti, d.idx, d.targetDataTi, Math.round(d.curLeftUs), null, d.segId, trackTidOf(d.type, d.targetDataTi))
             .then(() => { selectKey(null); refresh(); }, mvFail);
         } else {
           call("move_segment", d.type, d.ti, d.idx, Math.round(d.curLeftUs), Store.state.rippleOn, d.segId).then(refresh, mvFail);

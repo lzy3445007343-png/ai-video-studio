@@ -95,16 +95,17 @@ function buildTracks() {
     counters[type] = cnt;
     const ti = (type === "video") ? cnt : (cnt - 1);   // video 覆盖轨 ti 从 1 起
     const labelBy = { text: "文本轨", sticker: "贴纸轨", effect: "特效轨", video: "叠加" };
-    out.push({ type: type, ti: ti, label: (labelBy[type] || type) + cnt, segs: tr.segs, oi: out.length });
+    // A2（2026-08-19）：轨带稳定 tid（来自草稿轨 dict，A1 后端已生成）——提交命令可用 tid 定位目标轨
+    out.push({ type: type, ti: ti, label: (labelBy[type] || type) + cnt, segs: tr.segs, oi: out.length, tid: tr.tid });
   }
   // 主场景恒在 overlay 之下（恒定，video ti=0）
   const main = (d.main && typeof d.main === "object") ? (d.main.segs || []) : [];
-  out.push({ type: "video", ti: 0, label: "主场景", segs: main, main: true });
+  out.push({ type: "video", ti: 0, label: "主场景", segs: main, main: true, tid: (d.main && d.main.tid) });
   // audio 恒在底部
   const a = Array.isArray(d.audio) ? d.audio : [];
   for (let i = 0; i < a.length; i++) {
     const segs = (a[i] && typeof a[i] === "object") ? (a[i].segs || []) : [];
-    out.push({ type: "audio", ti: i, label: "音轨" + (i + 1), segs: segs });
+    out.push({ type: "audio", ti: i, label: "音轨" + (i + 1), segs: segs, tid: (a[i] && a[i].tid) });
   }
   return out;
 }
@@ -328,6 +329,12 @@ function displayRowTopY(displayIndex) {
   if (displayIndex >= tracks.length) { const r = trackElOf(tracks[tracks.length - 1]).getBoundingClientRect(); return r.bottom + 4; }
   const r = trackElOf(tracks[displayIndex]).getBoundingClientRect();
   return r.top;
+}
+
+/* A3（2026-08-19）：(type, ti) → 轨道稳定 tid（buildTracks 轨的 tid；找不到返回 null） */
+function trackTidOf(type, ti) {
+  const tr = buildTracks().find(t => t.type === type && t.ti === ti);
+  return tr ? (tr.tid || null) : null;
 }
 
 /* 落点冲突检测：该轨在 atTimeUs 处是否已有素材覆盖（库拖入不弹末尾，改新建轨） */
