@@ -725,6 +725,7 @@
 <script src="property/audio-panel.js"></script>
 <script src="property/speed-panel.js"></script>
 <script src="property/mask-panel.js"></script>
+<script src="property/effect-panel.js"></script>
 <script>
 "use strict";
 
@@ -1243,7 +1244,7 @@ function renderPropertyPanel() {
   else if (activePanel === "maskPanel") renderMaskPanelPF();   // Phase 3：Property Framework 版（property/mask-panel.js）
   else if (activePanel === "subPanel") { renderSubtitlePanel(); renderSubPanel(); }
   else if (activePanel === "stickerPanel") renderStickerPanel();
-  else if (activePanel === "effectPanel") renderEffectPanel();
+  else if (activePanel === "effectPanel") renderEffectPanelPF();   // Phase 3：Property Framework 版（property/effect-panel.js）
   else if (activePanel === "audioPanel") renderAudioTabPF();   // Phase 2：Property Framework 版（property/audio-panel.js）
   else if (activePanel === "speedPanel") renderSpeedTabPF();   // Phase 2：Property Framework 版（property/speed-panel.js）
 }
