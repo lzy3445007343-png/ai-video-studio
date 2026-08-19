@@ -1161,62 +1161,66 @@ function showToolTab(tab) {
   renderPropertyPanel();
 }
 
-/* 2026-08-19 OpenCut PropertiesPanel 风格（vanilla JS 翻译）：
-   整个函数在 .tools-content 内渲染三态：
-   - 无选中：EmptyView（图标 + "这里空无一人" + 提示）
-   - 多选：multiPanel（N 个片段已选中）
-   - 单选：当前 active tab 的内容（用现有 panel 元素 + panel-active class 切换）
-   与 OpenCut 区别：我们的 tab 切换仍走 .tools-rail 按钮（用户已习惯），OpenCut 是内部 tooltip 按钮。
+/* 2026-08-19 OpenCut PropertiesPanel 风格（vanilla JS 翻译，Step1 外壳）：
+   三态：
+   - 无选中：EmptyView（#propEmptyView，⚙ 图标 + 文案）
+   - 多选：multiView（#propMultiView，N 个片段已选中）
+   - 单选：当前 active tab 的 panel 元素（panel-active class 切换）
+   PROP_ACTIVE_TAB：记住每个 element type 上次选的 tab（OpenCut activeTabPerType 同款）
+   关键：empty/multi 只切 div display，绝不清空 root（保护 kfPanel/maskPanel/audioPanel 等子元素）
 */
+const PROP_ACTIVE_TAB = {};
+
+function hideAllPropertyPanels() {
+  ["kfPanel", "maskPanel", "subPanel", "stickerPanel", "effectPanel", "audioPanel", "speedPanel"].forEach(id => {
+    const el = document.getElementById(id); if (el) el.classList.remove("panel-active");
+  });
+}
+
 function renderPropertyPanel() {
   const root = $("toolsContent");
   if (!root) return;
   const s = selectedSeg();
   const multiCount = (Store.state.selectedKeys || []).length;
   const type = s ? s.type : null;
+  const ev = $("propEmptyView"), mv = $("propMultiView");
 
-  // 1. 无选中：EmptyView（OpenCut 风格 ⚙ 图标 + 文案）——用 div 切换 display，绝不清空 root
+  // 一、无选中：EmptyView
   if (!type && multiCount === 0) {
-    const ev = $("propEmptyView");
     if (ev) ev.style.display = "";
-    const mv = $("propMultiView"); if (mv) mv.style.display = "none";
-    // 隐藏所有 panel（清掉 panel-active）
-    ["kfPanel","maskPanel","subPanel","stickerPanel","effectPanel","audioPanel","speedPanel","multiPanel","emptyPanel","placeholderPanel"].forEach(id => {
-      const el = document.getElementById(id); if (el) el.classList.remove("panel-active");
-    });
+    if (mv) mv.style.display = "none";
+    hideAllPropertyPanels();
     document.querySelectorAll("#toolsRail .rail-btn").forEach(b => { b.setAttribute("disabled", "true"); b.classList.remove("active"); });
     return;
   }
 
-  // 2. 多选：multiPanel
+  // 二、多选：multiView
   if (multiCount > 1) {
-    const mv = $("propMultiView");
     if (mv) {
       mv.style.display = "";
       const mc = $("propMultiCount"); if (mc) mc.textContent = multiCount + " 个片段已选中";
     }
-    const ev = $("propEmptyView"); if (ev) ev.style.display = "none";
-    ["kfPanel","maskPanel","subPanel","stickerPanel","effectPanel","audioPanel","speedPanel","multiPanel","emptyPanel","placeholderPanel"].forEach(id => {
-      const el = document.getElementById(id); if (el) el.classList.remove("panel-active");
-    });
+    if (ev) ev.style.display = "none";
+    hideAllPropertyPanels();
     document.querySelectorAll("#toolsRail .rail-btn").forEach(b => { b.setAttribute("disabled", "true"); b.classList.remove("active"); });
     return;
   }
 
-  // 3. 单选：隐藏 empty/multi view，用 panel-active 切当前 tab 的 panel
-  const ev2 = $("propEmptyView"); if (ev2) ev2.style.display = "none";
-  const mv2 = $("propMultiView"); if (mv2) mv2.style.display = "none";
-  const activeTab = (activeToolTab && enabled.has(activeToolTab)) ? activeToolTab
-                  : (PROPERTY_DEFAULT_TAB_BY_TYPE[type] || "kf");
+  // 三、单选
+  if (ev) ev.style.display = "none";
+  if (mv) mv.style.display = "none";
+
+  const enabled = new Set(PROPERTY_TABS_BY_TYPE[type] || ["kf"]);
+  // tab 记忆（OpenCut activeTabPerType）：用户点过的 tab 优先，其次默认 tab
+  let activeTab = PROP_ACTIVE_TAB[type];
+  if (activeToolTab && enabled.has(activeToolTab)) activeTab = activeToolTab;
+  if (!activeTab || !enabled.has(activeTab)) activeTab = PROPERTY_DEFAULT_TAB_BY_TYPE[type] || "kf";
+  PROP_ACTIVE_TAB[type] = activeTab;
+
   const activePanel = TAB_TO_PANEL[activeTab] || "kfPanel";
 
-  // 清 root 之前的 empty/multi view
-  if (root.querySelector(".prop-empty-view") || root.querySelector(".prop-multi-view")) {
-    root.innerHTML = "";
-  }
-
   // 切换 panel-active
-  ["kfPanel", "maskPanel", "subPanel", "stickerPanel", "effectPanel", "emptyPanel", "multiPanel", "placeholderPanel", "audioPanel", "speedPanel"].forEach(id => {
+  ["kfPanel", "maskPanel", "subPanel", "stickerPanel", "effectPanel", "audioPanel", "speedPanel"].forEach(id => {
     const el = document.getElementById(id);
     if (!el) return;
     if (id === activePanel) el.classList.add("panel-active");
