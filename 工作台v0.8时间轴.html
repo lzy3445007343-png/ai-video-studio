@@ -1057,6 +1057,21 @@ function renderTimecode(s) {
   $("timecode").textContent = usToTime(Store.state.playheadUs) + " / " + usToTime(dur);
 }
 
+/* =====================================================================
+ * Phase 5.2 播放头 UI 切片订阅者（ADR-2026-08-20 v2，GPT 审阅约束）
+ * 只更新：播放头 DOM 位置 + 时间码文本。不碰 video/audio/preview seek——
+ * 播放器是引擎不是 UI，UI slicing 不碰引擎。
+ * legacy 模式双跑（与 renderAll 输出对照，行为零变化）；slice 模式只跑本订阅者。
+ * 依赖：positionPlayhead(timeline.js) + renderTimecode(本文件)。
+ * ===================================================================== */
+function renderPlayheadUI() {
+  try {
+    if (typeof positionPlayhead === "function") positionPlayhead();
+    if (typeof renderTimecode === "function") renderTimecode();
+  } catch (e) { console.error("[playheadUI] 播放头切片渲染失败:", e); }
+}
+Store.subscribeSlice("playheadUs", renderPlayheadUI);
+
 
 // B.5 音频解锁：WebView2/CEF 对 <audio> 的自动播放策略比 <video> 更严，
 // 需要在用户手势内主动 resume AudioContext，才能解锁页面音频输出。
