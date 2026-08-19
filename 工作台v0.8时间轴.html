@@ -159,6 +159,35 @@
   .placeholder-panel { align-items: center; justify-content: center; text-align: center; color: var(--muted); font-size: 12px; padding: 32px 16px; line-height: 1.7; }
   .placeholder-panel .ph-icon { font-size: 32px; margin-bottom: 10px; opacity: .5; }
   .placeholder-panel .ph-title { font-size: 13px; font-weight: 500; color: var(--text); margin-bottom: 4px; }
+  /* OpenCut Section 风格面板（2026-08-19 audio/speed 重做） */
+  .insp-panel { background: var(--panel); border-left: 1px solid var(--border); overflow-y: auto; width: 100%; flex: none; min-width: 0; }
+  .insp-panel > .head { padding: 10px; border-bottom: 1px solid var(--border); font-weight: 600; font-size: 12px; display: flex; align-items: center; gap: 6px; }
+  .insp-section { border-bottom: 1px solid var(--border); }
+  .insp-section:last-child { border-bottom: none; }
+  .insp-section-head { height: 40px; display: flex; align-items: center; gap: 8px; padding: 0 14px; cursor: pointer; user-select: none; }
+  .insp-section-head .chev { width: 14px; height: 14px; transition: transform .15s ease; color: var(--muted); flex: none; }
+  .insp-section-head.closed .chev { transform: rotate(-90deg); }
+  .insp-section-head .t { font-size: 12px; font-weight: 500; color: var(--text); flex: 1; }
+  .insp-section-body { display: block; overflow: hidden; }
+  .insp-section-body.closed { display: none; }
+  .insp-section-body .inner { padding: 2px 14px 14px; }
+  .insp-field { margin-bottom: 14px; }
+  .insp-field:last-child { margin-bottom: 4px; }
+  .insp-field-label { display: flex; align-items: center; gap: 6px; height: 16px; margin-bottom: 6px; font-size: 11px; color: var(--muted); }
+  .insp-num { display: flex; align-items: center; gap: 6px; }
+  .insp-num .ic { width: 16px; text-align: center; font-size: 11px; color: var(--muted); flex: none; }
+  .insp-num input { flex: 1; min-width: 0; height: 26px; background: var(--panel-2); color: var(--text); border: 1px solid var(--border); border-radius: 5px; padding: 0 8px; font-size: 12px; outline: none; }
+  .insp-num input:focus { border-color: var(--primary); }
+  .insp-num .unit { font-size: 11px; color: var(--muted); flex: none; width: 14px; }
+  .insp-num .reset { width: 20px; height: 20px; border-radius: 4px; border: 1px solid var(--border); background: var(--panel); color: var(--muted); cursor: pointer; font-size: 11px; line-height: 1; flex: none; padding: 0; }
+  .insp-num .reset:hover { color: var(--text); border-color: var(--primary); }
+  .insp-switch-row { display: flex; align-items: center; justify-content: space-between; padding: 6px 0; }
+  .insp-switch-row .lab { font-size: 12px; color: var(--text); }
+  .insp-switch { position: relative; width: 34px; height: 18px; border-radius: 9px; background: var(--panel-3, #3a3f4a); border: 1px solid var(--border); cursor: pointer; flex: none; transition: background .15s; }
+  .insp-switch.on { background: var(--primary); border-color: var(--primary); }
+  .insp-switch::after { content: ""; position: absolute; top: 2px; left: 2px; width: 12px; height: 12px; border-radius: 50%; background: #fff; transition: left .15s; }
+  .insp-switch.on::after { left: 18px; }
+  .insp-batch-hint { font-size: 11px; color: var(--primary); padding: 2px 0 8px; }
   .rail-btn[disabled] { opacity: .3; pointer-events: none; }
   .rail-btn.active { background: var(--primary-dim); border-color: var(--primary); color: var(--primary); }
   .kfpanel > .head, .maskpanel > .head, .subpanel > .head, .stickerpanel > .head, .effectpanel > .head { padding: 10px; border-bottom: 1px solid var(--border); font-weight: 600; font-size: 12px; display: flex; align-items: center; gap: 6px; }
@@ -519,6 +548,18 @@
       <div class="ph-title" id="phTitle">暂未实现</div>
       <div class="empty-hint" id="phHint">该面板开发中</div>
       <div id="phContent"></div>
+    </div>
+
+    <!-- 音频面板（2026-08-19 OpenCut Section 风格重做） -->
+    <div class="insp-panel" id="audioPanel" style="display:none">
+      <div class="head">音频 <span class="seg" id="audSegName"></span><button class="head-close" id="audClose" title="取消选择（Esc）">✕</button></div>
+      <div id="audBody"></div>
+    </div>
+
+    <!-- 速度面板（2026-08-19 OpenCut Section 风格重做） -->
+    <div class="insp-panel" id="speedPanel" style="display:none">
+      <div class="head">速度 <span class="seg" id="spdSegName"></span><button class="head-close" id="spdClose" title="取消选择（Esc）">✕</button></div>
+      <div id="spdBody"></div>
     </div>
     <div class="effectpanel" id="effectPanel">
       <div class="head">特效 <span class="seg" id="effSegName"></span><button class="head-close" id="effClose" title="取消选择（Esc）">✕</button></div>
@@ -1082,9 +1123,9 @@ const PROPERTY_DEFAULT_TAB_BY_TYPE = {
 };
 const TAB_TO_PANEL = {
   kf: "kfPanel", mask: "maskPanel", sub: "subPanel", sticker: "stickerPanel",
-  audio: "placeholderPanel", speed: "placeholderPanel", effects: "effectPanel",
+  audio: "audioPanel", speed: "speedPanel", effects: "effectPanel",
 };
-const PLACEHOLDER_TITLES = { audio: "音频面板", speed: "速度面板", effects: "特效面板" };
+const PLACEHOLDER_TITLES = { effects: "特效面板" };
 
 function showToolTab(tab) {
   if (tab) activeToolTab = tab;
@@ -1111,7 +1152,7 @@ function renderPropertyPanel() {
     activePanel = TAB_TO_PANEL[activeTab] || "kfPanel";
   }
 
-  ["kfPanel", "maskPanel", "subPanel", "stickerPanel", "effectPanel", "emptyPanel", "multiPanel", "placeholderPanel"].forEach(id => {
+  ["kfPanel", "maskPanel", "subPanel", "stickerPanel", "effectPanel", "emptyPanel", "multiPanel", "placeholderPanel", "audioPanel", "speedPanel"].forEach(id => {
     const el = document.getElementById(id);
     if (!el) return;        // 防御：id 找不到跳过，不影响其他面板
     if (id === activePanel) el.classList.add("panel-active");
@@ -1135,10 +1176,7 @@ function renderPropertyPanel() {
     const h = document.getElementById("phHint");
     if (t) t.textContent = PLACEHOLDER_TITLES[activeTab] || "暂未实现";
     if (h) h.textContent = "已加入路线图，后续版本实现";
-    // audio/speed tab 实装（2026-08-16）：音量/变速控件（对齐 OpenCut AudioTab/SpeedTab）
-    if (activeTab === "audio") renderAudioTab();
-    else if (activeTab === "speed") renderSpeedTab();
-    else { const c = $("phContent"); if (c) c.innerHTML = ""; }
+    const c = $("phContent"); if (c) c.innerHTML = "";
   }
 
   if (activePanel === "kfPanel") renderKfPanel();
@@ -1146,6 +1184,8 @@ function renderPropertyPanel() {
   else if (activePanel === "subPanel") renderSubPanel();
   else if (activePanel === "stickerPanel") renderStickerPanel();
   else if (activePanel === "effectPanel") renderEffectPanel();
+  else if (activePanel === "audioPanel") renderAudioTab();
+  else if (activePanel === "speedPanel") renderSpeedTab();
 }
 
 // 特效属性面板（v0.9 P0）：选中特效段 → 由 Store.state.effects(EFFECT_META) 自动生成参数滑块 → 防抖调 update_effect。
@@ -1235,73 +1275,142 @@ function renderSubPanel() {
 }
 
 // 音频面板（2026-08-16 对齐 OpenCut AudioTab）：段级音量滑块 + 静音开关
+/* 批量/单选统一段引用列表（含稳定 segid；A 方案 2026-08-19） */
+function buildSegRefs() {
+  const out = [];
+  const keys = (Store.state.selectedKeys && Store.state.selectedKeys.length)
+    ? Store.state.selectedKeys
+    : (Store.state.selectedKey ? [Store.state.selectedKey] : []);
+  for (const k of keys) {
+    const seg = findSegByKey(k);
+    if (!seg) continue;
+    const [type, ti, idx] = k.split(":");
+    out.push({ seg, type, ti: +ti, idx: +idx, key: k, segid: seg.id || null });
+  }
+  return out;
+}
+
+// 音频面板（2026-08-19 OpenCut Section 风格重做）：音量 NumberField + 静音 Switch
+// 支持批量：多选视频/音频段时应用到全部（set_segments_props 一次提交）
 function renderAudioTab() {
-  const s = selectedSeg();
-  const c = $("phContent");
-  if (!s || !c) return;
+  const bodyEl = $("audBody"), nameEl = $("audSegName");
+  if (!bodyEl) return;
+  const refs = buildSegRefs();
+  if (!refs.length) { bodyEl.innerHTML = '<div class="empty-hint" style="padding:24px;text-align:center">未选中片段</div>'; if (nameEl) nameEl.textContent = ""; return; }
+  const isBatch = refs.length > 1;
+  const allMedia = refs.every(r => r.seg && (r.seg.type === "video" || r.seg.type === "audio"));
+  if (!allMedia) {
+    bodyEl.innerHTML = '<div class="empty-hint" style="padding:24px;text-align:center">音量仅适用于视频/音频段' + (isBatch ? "（批量需全选视频/音频）" : "") + '</div>';
+    if (nameEl) nameEl.textContent = ""; return;
+  }
+  const s = refs[0].seg;
+  if (nameEl) nameEl.textContent = isBatch ? (" " + refs.length + " 个片段") : (" " + (s.name || ""));
   const vol = (s.volume == null ? 1 : s.volume);
-  c.innerHTML =
-    '<div class="row" style="display:flex;align-items:center;gap:8px;margin:6px 0">' +
-      '<label style="width:44px;font-size:12px;color:var(--muted)">音量</label>' +
-      '<input type="range" id="segVol" min="0" max="2" step="0.05" value="' + vol + '" style="flex:1">' +
-      '<span id="segVolVal" style="width:28px;text-align:right;font-size:11px;color:var(--text)">' + Math.round(vol * 100) / 100 + '</span>' +
-    '</div>' +
-    '<div class="row" style="display:flex;align-items:center;gap:8px;margin:6px 0">' +
-      '<label style="width:44px;font-size:12px;color:var(--muted)">静音</label>' +
-      '<button id="segMuteBtn" class="gen" style="flex:1;padding:5px;background:' + (s.muted ? "#ff4d4f33" : "var(--panel-2)") + ';border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:12px;cursor:pointer">' + (s.muted ? "🔇 已静音（点击恢复）" : "🔊 正常（点击静音）") + '</button>' +
+  const muted = !!s.muted;
+  const pct = Math.round(vol * 100);
+  bodyEl.innerHTML =
+    '<div class="insp-section">' +
+      '<div class="insp-section-head open"><span class="chev">▼</span><span class="t">音量</span></div>' +
+      '<div class="insp-section-body"><div class="inner">' +
+        (isBatch ? '<div class="insp-batch-hint">批量应用于 ' + refs.length + ' 个片段</div>' : '') +
+        '<div class="insp-field">' +
+          '<div class="insp-field-label">音量</div>' +
+          '<div class="insp-num"><span class="ic">🔊</span>' +
+            '<input type="text" inputmode="decimal" id="audVol" value="' + pct + '">' +
+            '<span class="unit">%</span>' +
+            '<button class="reset" id="audVolReset" title="恢复默认 100%">↺</button>' +
+          '</div>' +
+        '</div>' +
+        '<div class="insp-field">' +
+          '<div class="insp-switch-row"><span class="lab">静音</span>' +
+          '<div class="insp-switch' + (muted ? " on" : "") + '" id="audMute" title="静音/恢复"></div></div>' +
+        '</div>' +
+      '</div></div>' +
     '</div>';
-  const volEl = $("segVol");
-  if (volEl) volEl.addEventListener("input", () => {
-    const v = parseFloat(volEl.value);
-    const vv = $("segVolVal"); if (vv) vv.textContent = Math.round(v * 100) / 100;
-    s.volume = v;   // 本地预览即时生效（Store seg 直接改 + 局部重绘）
-    const k = Store.state.selectedKey; if (!k) return;
-    const [type, ti, idx] = k.split(":");
-    renderPreview();
-    clearTimeout(volEl._t);
-    volEl._t = setTimeout(() => call("set_segment_volume", type, +ti, +idx, v).then(refresh), 250);
-  });
-  const muteEl = $("segMuteBtn");
+  const volIn = $("audVol");
+  if (volIn) {
+    const apply = (v) => {
+      v = Math.max(0, Math.min(200, v)) / 100;
+      refs.forEach(r => { if (r.seg) r.seg.volume = v; });   // 本地预览即时生效
+      renderPreview();
+      clearTimeout(volIn._t);
+      volIn._t = setTimeout(() => {
+        if (isBatch) call("set_segments_props", refs.map(r => ({ segid: r.segid, props: { volume: v } }))).then(refresh);
+        else call("set_segment_volume", refs[0].type, refs[0].ti, refs[0].idx, v, refs[0].segid).then(refresh);
+      }, 250);
+    };
+    volIn.addEventListener("input", () => { const v = parseFloat(volIn.value); if (!isNaN(v)) apply(v); });
+    volIn.addEventListener("blur", () => { volIn.value = String(Math.round((refs[0].seg.volume == null ? 1 : refs[0].seg.volume) * 100)); });
+    volIn.addEventListener("keydown", e => { if (e.key === "Enter") volIn.blur(); });
+    const rst = $("audVolReset");
+    if (rst) rst.addEventListener("click", () => { volIn.value = "100"; apply(100); });
+  }
+  const muteEl = $("audMute");
   if (muteEl) muteEl.addEventListener("click", () => {
-    const k = Store.state.selectedKey; if (!k) return;
-    const [type, ti, idx] = k.split(":");
-    call("set_segment_flag", type, +ti, +idx, "muted", !s.muted).then(refresh);
+    const next = !muted;
+    refs.forEach(r => { if (r.seg) r.seg.muted = next; });
+    muteEl.classList.toggle("on", next);
+    if (isBatch) call("set_segments_props", refs.map(r => ({ segid: r.segid, props: { muted: next } }))).then(refresh);
+    else call("set_segment_flag", refs[0].type, refs[0].ti, refs[0].idx, "muted", next).then(refresh);
   });
 }
 
-// 速度面板（2026-08-16 对齐 OpenCut SpeedTab）：变速下拉 + 保持音调开关
+// 速度面板（2026-08-19 OpenCut Section 风格重做）：速度 NumberField(x) + 变音 Switch
+// 变速走后端 set_segment_speed（重算 duration）；支持批量
 function renderSpeedTab() {
-  const s = selectedSeg();
-  const c = $("phContent");
-  if (!s || !c) return;
-  if (s.type !== "video" && s.type !== "audio") { c.innerHTML = '<div class="empty-hint" style="padding:16px;text-align:center">仅视频/音频段可变速</div>'; return; }
-  const sp = s.speed || 1;
-  const PRESETS = [0.5, 0.75, 1, 1.25, 1.5, 2, 3];
-  const inPreset = PRESETS.some(x => Math.abs(sp - x) < 0.01);
-  const opts = PRESETS.map(x =>
-    '<option value="' + x + '"' + (Math.abs(sp - x) < 0.01 ? " selected" : "") + '>' + x + 'x</option>').join("")
-    + (inPreset ? "" : '<option value="' + sp + '" selected>' + sp + 'x（自定义）</option>');
-  c.innerHTML =
-    '<div class="row" style="display:flex;align-items:center;gap:8px;margin:6px 0">' +
-      '<label style="width:44px;font-size:12px;color:var(--muted)">速度</label>' +
-      '<select id="segSpeed" style="flex:1;background:var(--panel-2);color:var(--text);border:1px solid var(--border);border-radius:5px;padding:4px;font-size:12px">' + opts + '</select>' +
-    '</div>' +
-    '<div class="row" style="display:flex;align-items:center;gap:8px;margin:6px 0">' +
-      '<label style="width:44px;font-size:12px;color:var(--muted)">音调</label>' +
-      '<button id="segPitchBtn" class="gen" style="flex:1;padding:5px;background:' + (s.change_pitch ? "#ffd24d33" : "var(--panel-2)") + ';border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:12px;cursor:pointer">' + (s.change_pitch ? "🎵 变调（原速感）" : "🎵 保持原调") + '</button>' +
-    '</div>' +
-    '<div class="empty-hint" style="margin-top:6px">变速改变时间轴时长，预览/导出均生效</div>';
-  const spEl = $("segSpeed");
-  if (spEl) spEl.addEventListener("change", () => {
-    const k = Store.state.selectedKey; if (!k) return;
-    const [type, ti, idx] = k.split(":");
-    call("set_segment_speed", type, +ti, +idx, parseFloat(spEl.value)).then(refresh);
-  });
-  const pitchEl = $("segPitchBtn");
+  const bodyEl = $("spdBody"), nameEl = $("spdSegName");
+  if (!bodyEl) return;
+  const refs = buildSegRefs();
+  if (!refs.length) { bodyEl.innerHTML = '<div class="empty-hint" style="padding:24px;text-align:center">未选中片段</div>'; if (nameEl) nameEl.textContent = ""; return; }
+  const isBatch = refs.length > 1;
+  const allMedia = refs.every(r => r.seg && (r.seg.type === "video" || r.seg.type === "audio"));
+  if (!allMedia) {
+    bodyEl.innerHTML = '<div class="empty-hint" style="padding:24px;text-align:center">仅视频/音频段可变速' + (isBatch ? "（批量需全选视频/音频）" : "") + '</div>';
+    if (nameEl) nameEl.textContent = ""; return;
+  }
+  const s = refs[0].seg;
+  if (nameEl) nameEl.textContent = isBatch ? (" " + refs.length + " 个片段") : (" " + (s.name || ""));
+  const sp = (s.speed == null ? 1 : s.speed);
+  const pitch = !!s.change_pitch;
+  const spd = Math.round(sp * 100) / 100;
+  bodyEl.innerHTML =
+    '<div class="insp-section">' +
+      '<div class="insp-section-head open"><span class="chev">▼</span><span class="t">速度</span></div>' +
+      '<div class="insp-section-body"><div class="inner">' +
+        (isBatch ? '<div class="insp-batch-hint">批量应用于 ' + refs.length + ' 个片段</div>' : '') +
+        '<div class="insp-field">' +
+          '<div class="insp-field-label">速度</div>' +
+          '<div class="insp-num"><span class="ic">⏩</span>' +
+            '<input type="text" inputmode="decimal" id="spdVal" value="' + spd + '">' +
+            '<span class="unit">x</span>' +
+            '<button class="reset" id="spdValReset" title="恢复默认 1x">↺</button>' +
+          '</div>' +
+        '</div>' +
+        '<div class="insp-field">' +
+          '<div class="insp-switch-row"><span class="lab">变音（音调随速度）</span>' +
+          '<div class="insp-switch' + (pitch ? " on" : "") + '" id="spdPitch" title="变音开=慢放声音变低沉，关=保持原调"></div></div>' +
+        '</div>' +
+        '<div class="empty-hint" style="margin-top:4px">变速改变时间轴时长，预览/导出均生效</div>' +
+      '</div></div>' +
+    '</div>';
+  const spdIn = $("spdVal");
+  if (spdIn) {
+    const apply = (v) => {
+      v = Math.max(0.01, Math.min(5, v));
+      if (isBatch) call("set_segments_props", refs.map(r => ({ segid: r.segid, props: { speed: v } }))).then(refresh);
+      else call("set_segment_speed", refs[0].type, refs[0].ti, refs[0].idx, v, null, refs[0].segid).then(refresh);
+    };
+    spdIn.addEventListener("change", () => { const v = parseFloat(spdIn.value); if (!isNaN(v)) apply(v); else spdIn.value = String(spd); });
+    spdIn.addEventListener("keydown", e => { if (e.key === "Enter") spdIn.blur(); });
+    const rst = $("spdValReset");
+    if (rst) rst.addEventListener("click", () => { spdIn.value = "1"; apply(1); });
+  }
+  const pitchEl = $("spdPitch");
   if (pitchEl) pitchEl.addEventListener("click", () => {
-    const k = Store.state.selectedKey; if (!k) return;
-    const [type, ti, idx] = k.split(":");
-    call("set_segment_speed", type, +ti, +idx, s.speed || 1, !s.change_pitch).then(refresh);
+    const next = !pitch;
+    pitchEl.classList.toggle("on", next);
+    if (isBatch) call("set_segments_props", refs.map(r => ({ segid: r.segid, props: { change_pitch: next } }))).then(refresh);
+    else call("set_segment_speed", refs[0].type, refs[0].ti, refs[0].idx, refs[0].seg.speed || 1, next, refs[0].segid).then(refresh);
   });
 }
 
@@ -2430,7 +2539,7 @@ function hideImportLoading() { const el = $("importLoading"); if (el) el.style.d
 /* ---------- 事件绑定（一次性） ---------- */
 function bindEvents() {
   // 4 面板头部 ✕ 取消选择（更直观的取消入口；Esc 兜底）
-  ["kfClose", "maskClose", "subClose", "stClose", "effClose"].forEach(id => {
+  ["kfClose", "maskClose", "subClose", "stClose", "effClose", "audClose", "spdClose"].forEach(id => {
     const b = $(id); if (!b) return;
     b.addEventListener("click", e => { e.stopPropagation(); clearSelection(); });
   });

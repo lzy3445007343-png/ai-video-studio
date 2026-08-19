@@ -2599,7 +2599,7 @@ class Api:
         save_state(self.state)
         return {"ok": True, "action": "extract", "audio_path": out_path, "audio_track_index": 0}
 
-    def set_segment_speed(self, track_type, track_index, index, speed, change_pitch=None):
+    def set_segment_speed(self, track_type, track_index, index, speed, change_pitch=None, segid=None):
         """设置片段变速倍率（对齐 OpenCut updateElementRetime）。
 
         - 仅 video / audio 段可变速；text / image 不可变速。
@@ -2607,17 +2607,22 @@ class Api:
         - 变速保持 src_start/src_end 不变，按 source_span / speed 重新计算时间轴 duration。
         - change_pitch: True=变调（如 0.5x 慢放时声音也变慢变低），False=保持原调。
           默认维持原调（False），与 OpenCut maintainPitch=true 等价。
-        返回 {"ok": True, "speed": 实际倍率, "duration": 新时长, "src_start": ..., "src_end": ...}
-        或 {"ok": False, "error": 原因}。
+        - A 方案（2026-08-19）：传 segid 时按稳定段 id 定位，不传回退 (track_type, track_index, index)。
+        返回 {"ok": True, "speed": 实际倍率, "duration": 新时长, ...} 或 {"ok": False, "error": 原因}。
         """
         self._reload()
         self._push_undo()
-        segs = _track_segs(self.draft, track_type, track_index)
-        if segs is None:
-            return {"ok": False, "error": f"{track_type} 没有第 {track_index} 条轨道"}
-        if not isinstance(index, int) or index < 0 or index >= len(segs):
-            return {"ok": False, "error": f"{track_type}[{track_index}] 没有第 {index} 段（共 {len(segs)} 段）"}
-        seg = segs[index]
+        if segid:
+            seg = _seg_by_id(self.draft, segid)
+            if seg is None:
+                return {"ok": False, "error": f"未找到段 id={segid}"}
+        else:
+            segs = _track_segs(self.draft, track_type, track_index)
+            if segs is None:
+                return {"ok": False, "error": f"{track_type} 没有第 {track_index} 条轨道"}
+            if not isinstance(index, int) or index < 0 or index >= len(segs):
+                return {"ok": False, "error": f"{track_type}[{track_index}] 没有第 {index} 段（共 {len(segs)} 段）"}
+            seg = segs[index]
         if seg.get("type") not in ("video", "audio"):
             return {"ok": False, "error": "只有视频和音频片段可以变速"}
         try:
@@ -2651,21 +2656,86 @@ class Api:
             "src_end": seg["src_end"],
         }
 
-    def set_segment_volume(self, track_type, track_index, index, volume):
+    def set_segment_volume(self, track_type, track_index, index, volume, segid=None):
         """段级音量（OpenCut: AudioElement volume 参数）。0~2，默认 1。
         预览时 video 内嵌音频/audio 段的 volume 应用；导出剪映映射 volume。
+        A 方案（2026-08-19）：传 segid 时按稳定段 id 定位（不受 ti 漂移影响），
+        不传则回退 (track_type, track_index, index)。
         """
         self._reload()
         self._push_undo()
-        segs = _track_segs(self.draft, track_type, track_index)
-        if segs is None:
-            return {"ok": False, "error": f"{track_type} 没有第 {track_index} 条轨道"}
-        if not isinstance(index, int) or index < 0 or index >= len(segs):
-            return {"ok": False, "error": f"{track_type}[{track_index}] 没有第 {index} 段（共 {len(segs)} 段）"}
+        seg = _seg_by_id(self.draft, segid) if segid else None
+        if seg is None:
+            segs = _track_segs(self.draft, track_type, track_index)
+            if segs is None:
+                return {"ok": False, "error": f"{track_type} 没有第 {track_index} 条轨道"}
+            if not isinstance(index, int) or index < 0 or index >= len(segs):
+                return {"ok": False, "error": f"{track_type}[{track_index}] 没有第 {index} 段（共 {len(segs)} 段）"}
+            seg = segs[index]
         v = max(0.0, min(2.0, float(volume)))
-        segs[index]["volume"] = round(v, 2)
+        seg["volume"] = round(v, 2)
         save_state(self.state)
-        return {"ok": True, "track_type": track_type, "track_index": track_index, "index": index, "volume": segs[index]["volume"]}
+        return {"ok": True, "volume": seg["volume"]}
+
+    def set_segments_props(self, updates):
+        """批量设置多个段属性（OpenCut updateElements 语义，一次 undo）。
+
+        updates: [{ "track_type": "video", "track_index": 1, "index": 0, "segid": "...",
+                    "props": { "volume": 0.8 | "speed": 1.5 | "change_pitch": true | "muted": false } }]
+        - 每项定位：segid 优先（稳定 id，不受 ti 漂移）；缺省回退 (track_type, track_index, index)。
+        - speed/change_pitch 走变速逻辑（duration 重算）；volume/muted 直接写。
+        - 部分项失败不影响其他项（跳过并记 skipped）。
+        返回 {"ok": True, "count": 成功数, "skipped": 失败原因列表}。
+        """
+        self._reload()
+        self._push_undo()
+        if not isinstance(updates, list) or not updates:
+            return {"ok": False, "error": "updates 必须是非空列表"}
+        ok_count = 0
+        skipped = []
+        for u in updates:
+            if not isinstance(u, dict):
+                skipped.append("非法项")
+                continue
+            seg = None
+            if u.get("segid"):
+                seg = _seg_by_id(self.draft, u["segid"])
+                if seg is None:
+                    skipped.append(f"未找到段 id={u['segid']}")
+                    continue
+            else:
+                segs = _track_segs(self.draft, u.get("track_type"), u.get("track_index"))
+                if segs is None or not isinstance(u.get("index"), int) or u["index"] < 0 or u["index"] >= len(segs):
+                    skipped.append(f"{u.get('track_type')}[{u.get('track_index')}] 无第 {u.get('index')} 段")
+                    continue
+                seg = segs[u["index"]]
+            props = u.get("props") or {}
+            try:
+                if "volume" in props:
+                    seg["volume"] = round(max(0.0, min(2.0, float(props["volume"]))), 2)
+                if "muted" in props:
+                    seg["muted"] = bool(props["muted"])
+                if "speed" in props or "change_pitch" in props:
+                    if seg.get("type") not in ("video", "audio"):
+                        skipped.append("只有视频/音频段可变速")
+                        continue
+                    if "src_start" not in seg:
+                        seg["src_start"] = 0
+                    ss = seg["src_start"]
+                    old_speed = _seg_speed(seg)
+                    source_span = max(1, int(round(seg.get("duration", 0) * old_speed)))
+                    rate = max(MIN_SPEED, min(MAX_SPEED, float(props.get("speed", old_speed))))
+                    new_duration = int(round(source_span / rate))
+                    seg["speed"] = rate
+                    if "change_pitch" in props:
+                        seg["change_pitch"] = bool(props["change_pitch"])
+                    seg["duration"] = new_duration
+                    seg["src_end"] = ss + int(round(new_duration * rate))
+                ok_count += 1
+            except Exception as e:
+                skipped.append(f"{seg.get('name', '?')}: {e}")
+        save_state(self.state)
+        return {"ok": True, "count": ok_count, "skipped": skipped}
 
     # ---------- 关键帧 / 动画 CRUD（对齐 OpenCut upsertKeyframe / removeKeyframe / retimeKeyframe） ----------
     def _kf_resolve_seg(self, track_type, track_index, index):
