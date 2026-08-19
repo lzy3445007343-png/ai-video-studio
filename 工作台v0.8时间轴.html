@@ -559,26 +559,10 @@
             <label class="chk"><input type="checkbox" id="stFlipV"> 垂直翻转</label>
           </div>
         </div>
-    <div class="empty-panel panel-active" id="emptyPanel">
-      <div class="empty-icon">▢</div>
-      <div class="empty-title">这里空无一人</div>
-      <div class="empty-hint">点击时间轴上的片段以编辑其属性</div>
+      </div>
     </div>
 
-    <div class="multi-panel" id="multiPanel" style="display:none">
-      <div style="font-size:36px;margin-bottom:12px;opacity:.6">◫</div>
-      <div class="muti-count" id="multiCount">多选</div>
-      <div class="empty-hint" style="margin-top:6px">暂不支持多选编辑</div>
-    </div>
-
-    <div class="placeholder-panel" id="placeholderPanel" style="display:none">
-      <div class="ph-icon" id="phIcon">🔧</div>
-      <div class="ph-title" id="phTitle">暂未实现</div>
-      <div class="empty-hint" id="phHint">该面板开发中</div>
-      <div id="phContent"></div>
-    </div>
-
-    <!-- 音频面板（2026-08-19）：inline style min-height:200px 强制可见（绕开 CSS specificity 冲突） -->
+    <!-- 音频面板（2026-08-19）：直接挂在 #toolsContent 下，不再嵌套在 #stickerPanel 内（修复祖先 display:none 导致不可见） -->
     <div class="insp-panel" id="audioPanel" style="min-height: 200px;">
       <div class="head">音频 <span class="seg" id="audSegName"></span><button class="head-close" id="audClose" title="取消选择（Esc）">✕</button></div>
       <div id="audBody" style="min-height: 100px;"></div>
@@ -589,13 +573,12 @@
       <div class="head">速度 <span class="seg" id="spdSegName"></span><button class="head-close" id="spdClose" title="取消选择（Esc）">✕</button></div>
       <div id="spdBody" style="min-height: 100px;"></div>
     </div>
+
     <div class="effectpanel" id="effectPanel">
       <div class="head">特效 <span class="seg" id="effSegName"></span><button class="head-close" id="effClose" title="取消选择（Esc）">✕</button></div>
       <div class="insp-body" id="effBody">
         <div class="empty" id="effEmpty">选中特效段可调整参数</div>
         <div id="effCtrls" style="display:none"></div>
-      </div>
-    </div>
       </div>
     </div>
       </div>
