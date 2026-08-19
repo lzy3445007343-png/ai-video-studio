@@ -224,7 +224,7 @@ function resolveNewDrop(direction, preferredDisplay, tracks, dragType) {
    所有轨之上/之下：固定 above/below（与拖动方向无关）
    reorder 已撤（2026-08-18 用户拍板）：拖已有段命中不兼容已有轨 = 新建同类型轨预览（夹到
    两条轨中间），不再做 z 序重排——预览/落位/后端插入严格同源。 */
-function computeDrop(e, dragType, verticalDragDirection, atTimeUs, isLibrary) {
+function computeDrop(e, dragType, verticalDragDirection, atTimeUs, isLibrary, excludeSegId) {
   verticalDragDirection = verticalDragDirection || null;
   isLibrary = !!isLibrary;
   const tracks = buildTracks();
@@ -240,13 +240,8 @@ function computeDrop(e, dragType, verticalDragDirection, atTimeUs, isLibrary) {
   }
   if (insideIdx >= 0) {
     const t = tracks[insideIdx];
-    // 已有段拖到主场景（video ti=0）→ 不允许并入（主场景恒定），改在主场景上方新建叠加轨
-    if (!isLibrary && t.type === "video" && t.ti === 0) {
-      const el = trackElOf(t);
-      const r = el.getBoundingClientRect();
-      const topHalf = (y < r.top + r.height / 2);
-      return resolveNewDrop(topHalf ? "above" : "below", insideIdx, tracks, dragType);
-    }
+    // D1（2026-08-19）：主场景（video ti=0）= 普通视频轨，素材可自由拖入/拖出（OpenCut 同款）。
+    // 不再禁止并入——之前"主场景恒定=禁入"是需求理解偏差，用户要的是"永远存在但不拦素材"。
     if (block.includes(t.type)) {
       // 库拖入 + 目标轨隐藏（hidden）→ 不落隐藏轨（否则段不可见，用户以为"松手后没了"），改新建同类型轨
       if (isLibrary && trackMeta(t.type, t.ti).hidden) {
@@ -255,8 +250,10 @@ function computeDrop(e, dragType, verticalDragDirection, atTimeUs, isLibrary) {
         const topHalf = (y < r.top + r.height / 2);
         return resolveNewDrop(topHalf ? "above" : "below", insideIdx, tracks, dragType);
       }
-      // 库拖入 + 落点已被该轨素材占用 → 不弹末尾，改新建同类型轨（松手后新轨夹在目标位）
-      if (isLibrary && atTimeUs != null && trackBusyAt(t, atTimeUs)) {
+      // D2（2026-08-19）：落点被占用 → 新建同类型轨（OpenCut canPlaceTimeSpansOnTrack 语义）。
+      // 库拖入 & 已有段拖动都检测（之前只有库拖入检测；已有段直接 existing 导致重叠落位观感乱）。
+      // excludeSegId = 被拖段自身（同轨移动时不算占用）。
+      if (atTimeUs != null && trackBusyAt(t, atTimeUs, excludeSegId)) {
         const el = trackElOf(t);
         const r = el.getBoundingClientRect();
         const topHalf = (y < r.top + r.height / 2);
@@ -322,10 +319,22 @@ function displayRowCenterY(displayIndex) {
   return r.top + r.height / 2;
 }
 
+/* D4（2026-08-19）：目标轨顶部 Y（OpenCut getDropLineY 同款——蓝线画在目标轨顶部，不画中心）。
+   displayIndex 为 buildTracks 输出下标；越界时取首/末轨边界。 */
+function displayRowTopY(displayIndex) {
+  const tracks = buildTracks();
+  if (tracks.length === 0) return 40;
+  if (displayIndex <= 0) { const r = trackElOf(tracks[0]).getBoundingClientRect(); return r.top; }
+  if (displayIndex >= tracks.length) { const r = trackElOf(tracks[tracks.length - 1]).getBoundingClientRect(); return r.bottom + 4; }
+  const r = trackElOf(tracks[displayIndex]).getBoundingClientRect();
+  return r.top;
+}
+
 /* 落点冲突检测：该轨在 atTimeUs 处是否已有素材覆盖（库拖入不弹末尾，改新建轨） */
-function trackBusyAt(track, atTimeUs) {
+function trackBusyAt(track, atTimeUs, excludeSegId) {
   const segs = track.segs || [];
   for (const s of segs) {
+    if (excludeSegId && s.id === excludeSegId) continue;  // 被拖段自身不算占用（同轨移动）
     if (atTimeUs >= s.start && atTimeUs < s.start + s.duration) return true;
   }
   return false;
@@ -469,14 +478,8 @@ function renderTimeline(s) {
   const targetTi = isMove ? ((drag.targetKind === "existing") ? drag.targetDataTi : null) : null;
   // 构建待渲染轨道列表（overlay 直映：叠加→主轨→音频）
   const tracks = buildTracks();
-  // new（拖到间隙/空白/不兼容轨）= 在目标显示位插入「临时新轨」，被拖段实时显示其上（跟手 X）
-  // —— OpenCut resolveNewTrackMove 语义：预览即新建轨 + 元素，松手才提交真实数据
-  if (isMove && drag.targetKind === "new" && typeof drag.targetDisplayIndex === "number") {
-    const labelBy = { video: "叠加", audio: "音轨", text: "文本轨", effect: "特效轨", sticker: "贴纸轨" };
-    const previewTrack = { type: drag.type, ti: -1, label: (labelBy[drag.type] || "轨") + "（新）", segs: [], preview: true };
-    const di = Math.max(0, Math.min(drag.targetDisplayIndex, tracks.length));
-    tracks.splice(di, 0, previewTrack);
-  }
+  // D3（2026-08-19）：无「预览轨道」弹动（OpenCut 同款）——段跟手 + 落点线即可。
+  // new（拖到间隙/空白）= 被拖段留在源轨跟手 X，DragLine 横线指示新轨 Y；松手才新建轨。
   tracks.forEach(tr => {
     const label = document.createElement("div");
     label.className = "track-label";
@@ -502,21 +505,17 @@ function renderTimeline(s) {
     track.dataset.type = tr.type; track.dataset.ti = tr.ti;
     if (m.hidden) track.classList.add("track-hidden");
     if (m.muted && (tr.type === "audio" || tr.type === "video")) track.classList.add("track-muted");
-    if (tr.preview) track.classList.add("drop-preview");
-    else if (isMove && targetType && targetTi != null && tr.type === targetType && tr.ti === targetTi) track.classList.add("drop-target");
+    if (isMove && targetType && targetTi != null && tr.type === targetType && tr.ti === targetTi) track.classList.add("drop-target");
     let childCount = 0;
-    // 被拖段显示位置（OpenCut previewElements）：existing → 目标轨；new → 预览轨（临时新轨）
+    // 被拖段显示位置（OpenCut previewElements）：existing → 目标轨；new → 留在源轨跟手 X（落点线指示新轨 Y）
     // A 方案：用稳定段 id 定位被拖段（drag.segId），不依赖 key 的 ti
-    if (isMove && targetType) {
-      const showHere = (tr.preview) || (targetTi != null && tr.type === targetType && tr.ti === targetTi);
-      if (showHere) {
-        const ds = segById(drag.segId);
-        if (ds) { track.appendChild(makeSeg(ds, drag.type, drag.ti, drag.idx, drag.curLeftUs, true)); childCount++; }
-      }
+    if (isMove && targetType && targetTi != null && tr.type === targetType && tr.ti === targetTi) {
+      const ds = segById(drag.segId);
+      if (ds) { track.appendChild(makeSeg(ds, drag.type, drag.ti, drag.idx, drag.curLeftUs, true)); childCount++; }
     }
     tr.segs.forEach((seg, idx) => {
-      // 源轨跳过被拖段（拖动中段已实时显示在目标轨/预览轨）——按段 id 匹配
-      if (isMove && drag.segId && seg.id && drag.segId === seg.id) return;
+      // 源轨跳过被拖段：仅 existing（段已实时显示在目标轨）；new（新建轨）段留在源轨跟手 X
+      if (isMove && drag.segId && seg.id && drag.segId === seg.id && drag.targetKind === "existing") return;
       track.appendChild(makeSeg(seg, tr.type, tr.ti, idx));
       childCount++;
     });
@@ -529,7 +528,7 @@ function renderTimeline(s) {
     line.style.display = "";
     line.style.left = (drag.curLeftUs / 1e6 * pps()) + "px";
     if (drag.targetKind === "new" && typeof drag.targetDisplayIndex === "number") {
-      showDragLine(displayRowCenterY(drag.targetDisplayIndex));
+      showDragLine(displayRowTopY(drag.targetDisplayIndex));   // D4：落点线在目标轨顶部（OpenCut getDropLineY）
     } else {
       hideDragLine();
     }
@@ -537,7 +536,7 @@ function renderTimeline(s) {
     hideDragLine();
     const line = $("dropLine");
     if (line) line.style.display = "none";
-    hideGhostTrack();
+   
   }
   positionPlayhead();
   drawAllWaves();
