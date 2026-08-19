@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>AI剪辑工作台 v0.9</title>
+<title>AI剪辑工作台 v0.9 (v0819-2214)</title>
 <style>
   :root {
     --bg: #1a1a1e;
@@ -186,7 +186,9 @@
   .insp-field-label .tog.on { background: var(--primary); color: #fff; border-color: var(--primary); }
   .insp-num { display: flex; align-items: center; gap: 6px; }
   .insp-num .ic { width: 16px; text-align: center; font-size: 11px; color: var(--muted); flex: none; }
-  .insp-num input { flex: 1; min-width: 0; height: 26px; background: var(--panel-2); color: var(--text); border: 1px solid var(--border); border-radius: 5px; padding: 0 8px; font-size: 12px; outline: none; }
+  .insp-num input { flex: 1; min-width: 0; height: 26px; background: var(--panel-2); color: var(--text); border: 1px solid var(--border); border-radius: 5px; padding: 0 8px; font-size: 12px; outline: none; cursor: text; }
+  /* 2026-08-19：参数面板内的文本类输入控件强制 I-beam 光标（防任何祖先 cursor 继承导致"像抓手工canvas"无法输入） */
+  .insp-panel input[type="text"], .insp-panel input[type="number"], .insp-panel textarea, .insp-panel select { cursor: text; }
   .insp-num input:focus { border-color: var(--primary); }
   .insp-num .unit { font-size: 11px; color: var(--muted); flex: none; width: 14px; }
   .insp-num .reset { width: 20px; height: 20px; border-radius: 4px; border: 1px solid var(--border); background: var(--panel); color: var(--muted); cursor: pointer; font-size: 11px; line-height: 1; flex: none; padding: 0; }
@@ -374,7 +376,7 @@
 </div>
 <div class="app">
   <div class="topbar">
-    <span class="title">AI剪辑工作台 v0.9</span>
+    <span class="title">AI剪辑工作台 v0.9 <span id="buildTag" style="font-weight:400;font-size:11px;color:var(--muted)"></span></span>
     <span class="spacer"></span>
     <span class="mcp-pill"><span class="mcp-dot" id="mcpDot"></span><span id="mcpName">未连接</span></span>
     <button class="btn" id="skillBtn">Skill</button>
@@ -1107,12 +1109,21 @@ function renderAll(s) {
   renderTimecode(s);
   renderSkill(s);
   renderMcp(s);
-  renderMaskPanel();
-  renderSubtitlePanel();
-  renderStickerPanel();
-  showToolTab(activeToolTab);
+  // 2026-08-19 根因修复：仅后台轮询/非用户动作时冻结属性面板重建。
+  // 否则每 0.5s refresh()→Store.set→这里会无条件推倒重建所有面板 innerHTML，
+  // 按钮在 mousedown→mouseup 之间被替换，click 永不触发 → “点不动”。用户动作(_suppressPanelRender=false)仍正常重渲。
+  if (!_suppressPanelRender) {
+    renderMaskPanel();
+    renderSubtitlePanel();
+    renderStickerPanel();
+    showToolTab(activeToolTab);
+  }
 }
 Store.subscribe(renderAll);
+
+// 2026-08-19：属性面板重建冻结开关。true=后台轮询期间冻结（保住按钮/输入框交互），false=用户动作正常重渲。
+// 对齐 OpenCut 面板“组件复用=不重建 DOM”原则。唯一置 true 处在 500ms 轮询处。
+let _suppressPanelRender = false;
 
 let activeToolTab = "kf";
 // PropertiesPanel（2026-08-15 重构）：按 selectedSegment.type 路由 tab + 空/多选状态 + rail 启用/禁用
@@ -1327,9 +1338,34 @@ function buildSegRefs() {
 // 音频面板（2026-08-19 Step2 OpenCut AudioTab 风格重写）：
 // 音量 NumberField(0~200%) + 静音 Switch，OpenCut Section 折叠样式
 // 支持批量：多选视频/音频段时应用到全部（set_segments_props 一次提交）
-// 结构缓存：与 OpenCut 组件复用同源——结构(段身份/单批量/是否有音量关键帧)不变时
-// 只更新值、不重建 DOM，避免每次 Store.set 都把输入框/按钮 innerHTML 推倒重建导致"点不动"（根因 A）。
-let _audioPanelKey = null;
+/* =====================================================================
+ * 持久化属性面板框架（OpenCut 第 1 层 vanilla JS 翻译，2026-08-19）
+ * =====================================================================
+ * 对齐 OpenCut：React 持久组件 = build(挂载一次) + update(props 变化只更值) + bind(事件一次)。
+ * 我们 = PanelRegistry 注册表驱动：renderPanel(tabId, ctx) 里
+ *   - key(ctx) 相同 → 只调 update(host, ctx)，绝不 innerHTML → 输入框光标/按钮 handler 永活（根因 A 根治）
+ *   - key(ctx) 变化(切换段/单批量/关键帧开关等结构性变化) → 才重建：清空 host + build + bind
+ * 500ms 轮询/播放头移动不改变 key → 面板永不被推倒。
+ * 空态/类型不符等极低频状态走 renderPanel 外部的 innerHTML（一次性，不构成重建）。
+ */
+const PanelRegistry = {};
+const BUILD_TAG = "v0819-2214";
+function registerPanel(tabId, entry) { PanelRegistry[tabId] = entry; }
+function renderPanel(tabId, ctx) {
+  const entry = PanelRegistry[tabId];
+  if (!entry) return;
+  const host = entry.host(ctx);
+  if (!host) return;
+  const newKey = entry.key(ctx);
+  if (host.__panelKey === newKey) { entry.update(host, ctx); return; }
+  host.__panelKey = newKey;
+  host.innerHTML = "";
+  const dom = entry.build(ctx);
+  if (dom) host.appendChild(dom);
+  if (entry.bind) entry.bind(host, ctx);
+}
+// 每次交互都取最新段引用：Store 刷新会替换 draft/段对象，build 时闭包捕获的旧引用会过期
+function freshRefs() { return buildSegRefs(); }
 function renderAudioTab() {
   const bodyEl = $("audBody"), nameEl = $("audSegName");
   if (!bodyEl) return;
@@ -1339,7 +1375,7 @@ function renderAudioTab() {
 
   const refs = buildSegRefs();
   if (!refs.length) {
-    _audioPanelKey = null;
+    bodyEl.__panelKey = null;
     bodyEl.innerHTML = '<div class="insp-empty" style="padding:24px;text-align:center;color:var(--muted)">未选中片段</div>';
     if (nameEl) nameEl.textContent = "";
     return;
@@ -1347,7 +1383,7 @@ function renderAudioTab() {
   const isBatch = refs.length > 1;
   const allMedia = refs.every(r => r.seg && (r.seg.type === "video" || r.seg.type === "audio"));
   if (!allMedia) {
-    _audioPanelKey = null;
+    bodyEl.__panelKey = null;
     bodyEl.innerHTML = '<div class="insp-empty" style="padding:24px;text-align:center;color:var(--muted)">音量仅适用于视频/音频段' + (isBatch ? "（批量需全选视频/音频）" : "") + '</div>';
     if (nameEl) nameEl.textContent = "";
     return;
@@ -1356,91 +1392,106 @@ function renderAudioTab() {
   const selId = refs[0].segid || (refs[0].type + ":" + refs[0].ti + ":" + refs[0].idx);
   const anims = s.animations || {};
   const hasVolKf = !!(anims.volume && anims.volume.keys && anims.volume.keys.length);
-  // 结构指纹：段身份 + 单/批量 + 是否带音量关键帧。任一变化才需重建 DOM
-  const structKey = selId + "|" + (isBatch ? "B" : "S") + "|" + (hasVolKf ? "K" : "N");
-
-  // 结构未变 → 仅更新值，绝不重建 DOM（核心修复：保住输入框/按钮交互）
-  if (_audioPanelKey === structKey) {
-    _updateAudioTabValues(refs, s, hasVolKf, isBatch, nameEl);
-    return;
-  }
-  _audioPanelKey = structKey;
-
-  if (nameEl) nameEl.textContent = isBatch ? (" " + refs.length + " 个片段") : (" " + (s.name || ""));
-  const baseVol = (s.volume == null ? 1 : s.volume);
-  const muted = !!s.muted;
-  const local = Math.max(0, Math.min(Store.state.playheadUs - s.start, s.duration));
-  const curVol = hasVolKf ? (kfVal(anims, "volume", local) != null ? kfVal(anims, "volume", local) : baseVol) : baseVol;
-  const db = volToDb(curVol);
-  // OpenCut AudioTab：Section("音量") + 关键帧◆按钮 + 分贝 NumberField + 静音 Switch
-  bodyEl.innerHTML =
-    '<div class="insp-section">' +
-      '<div class="insp-section-head open"><span class="chev">▼</span><span class="t">音量</span></div>' +
-      '<div class="insp-section-body"><div class="inner">' +
-        (isBatch ? '<div class="insp-batch-hint">批量应用于 ' + refs.length + ' 个片段（关键帧仅单段支持）</div>' : '') +
-        '<div class="insp-field">' +
-          '<div class="insp-field-label">音量' +
-            (isBatch ? '' : '<button class="tog' + (hasVolKf ? " on" : "") + '" id="audVolKf" title="开/关音量关键帧（在播放头处打点）">◆</button>') +
-          '</div>' +
-          '<div class="insp-num"><span class="ic">🔊</span>' +
-            '<input type="text" inputmode="decimal" id="audVol" value="' + db.toFixed(1) + '">' +
-            '<span class="unit">分贝</span>' +
-            '<button class="reset" id="audVolReset" title="恢复默认 0.0 分贝">↺</button>' +
-          '</div>' +
-          (hasVolKf ? '<div id="audVolKfHint" style="font-size:11px;color:var(--muted);margin-top:4px">已开启音量关键帧 · 当前值随播放头打点</div>' : '') +
-        '</div>' +
-        '<div class="insp-field">' +
-          '<div class="insp-switch-row"><span class="lab">静音</span>' +
-          '<div class="insp-switch' + (muted ? " on" : "") + '" id="audMute" title="静音/恢复"></div></div>' +
-        '</div>' +
-      '</div></div>' +
-    '</div>';
-
-  const volIn = $("audVol");
-  if (volIn) {
-    const toFactor = () => {
-      const d = parseFloat(volIn.value);
-      if (isNaN(d)) return null;
-      return Math.max(0, Math.min(2, dbToVol(d)));
-    };
-    const getLocal = () => Math.max(0, Math.min(Store.state.playheadUs - s.start, s.duration)); // 播放头局部时间(编辑时实时取)
-    // 预览：仅改内存+实时预览,不提交后端(对齐 OpenCut onPreview)
-    const preview = () => {
-      try {
-        const v = toFactor(); if (v == null) return;
-        if (hasVolKf) setVolKfLocal(s, getLocal(), v);                  // 改当前播放头处的音量关键帧
-        else refs.forEach(r => { if (r.seg) r.seg.volume = v; });
-        renderPreview();
-        if (typeof AudioEngine !== "undefined" && AudioEngine.updateLiveGains) AudioEngine.updateLiveGains(Store.state.playheadUs);
-      } catch (e) { console.error("[audio] preview 失败:", e); }
-    };
-    // 提交：失焦/回车才落库(对齐 OpenCut onCommit)
-    const commit = () => {
-      try {
-        const v = toFactor(); if (v == null) return;
-        if (hasVolKf) callKVF(refs, "volume", getLocal(), v, "linear").then(refresh).catch(e => console.error("[audio] add_keyframe 失败:", e));
-        else if (isBatch) call("set_segments_props", refs.map(r => ({ segid: r.segid, props: { volume: v } }))).then(refresh).catch(e => console.error("[audio] 批量音量失败:", e));
-        else call("set_segment_volume", refs[0].type, refs[0].ti, refs[0].idx, v, refs[0].segid).then(refresh).catch(e => console.error("[audio] set_segment_volume 失败:", e));
-      } catch (e) { console.error("[audio] commit 失败:", e); }
-    };
-    volIn.addEventListener("input", preview);
-    volIn.addEventListener("blur", commit);
-    volIn.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); volIn.blur(); } });
-    const rst = $("audVolReset");
-    if (rst) rst.addEventListener("click", () => { volIn.value = "0.0"; preview(); commit(); });
-  }
-  const kfBtn = $("audVolKf");
-  if (kfBtn) kfBtn.addEventListener("click", () => toggleVolKf(refs));
-  const muteEl = $("audMute");
-  if (muteEl) muteEl.addEventListener("click", () => {
-    const next = !muted;
-    refs.forEach(r => { if (r.seg) r.seg.muted = next; });
-    muteEl.classList.toggle("on", next);            // 即时反馈(对齐 OpenCut 本地态先变)
-    const done = () => refresh().catch(e => console.error("[audio] mute 刷新失败:", e));
-    if (isBatch) call("set_segments_props", refs.map(r => ({ segid: r.segid, props: { muted: next } }))).then(done);
-    else call("set_segment_flag", refs[0].type, refs[0].ti, refs[0].idx, "muted", next).then(done);
-  });
+  // 结构指纹：段身份 + 单/批量 + 是否带音量关键帧。任一变化才需重建 DOM（PanelRegistry 内部判定）
+  renderPanel("audio", { refs, s, selId, isBatch, hasVolKf, nameEl });
 }
+
+// audio 面板注册到持久化框架（OpenCut 第 1 层）：key 相同只 update 值，key 变化才 build+bind
+registerPanel("audio", {
+  host: () => $("audBody"),
+  key: (c) => c.selId + "|" + (c.isBatch ? "B" : "S") + "|" + (c.hasVolKf ? "K" : "N"),
+  build: (c) => {
+    const { s, isBatch, hasVolKf } = c;
+    const baseVol = (s.volume == null ? 1 : s.volume);
+    const muted = !!s.muted;
+    const local = Math.max(0, Math.min(Store.state.playheadUs - s.start, s.duration));
+    const anims = s.animations || {};
+    const curVol = hasVolKf ? (kfVal(anims, "volume", local) != null ? kfVal(anims, "volume", local) : baseVol) : baseVol;
+    const db = volToDb(curVol);
+    // OpenCut AudioTab：Section("音量") + 关键帧◆按钮 + 分贝 NumberField + 静音 Switch
+    const wrap = document.createElement("div");
+    wrap.innerHTML =
+      '<div class="insp-section">' +
+        '<div class="insp-section-head open"><span class="chev">▼</span><span class="t">音量</span></div>' +
+        '<div class="insp-section-body"><div class="inner">' +
+          (isBatch ? '<div class="insp-batch-hint">批量应用于 ' + c.refs.length + ' 个片段（关键帧仅单段支持）</div>' : '') +
+          '<div class="insp-field">' +
+            '<div class="insp-field-label">音量' +
+              (isBatch ? '' : '<button class="tog' + (hasVolKf ? " on" : "") + '" id="audVolKf" title="开/关音量关键帧（在播放头处打点）">◆</button>') +
+            '</div>' +
+            '<div class="insp-num"><span class="ic">🔊</span>' +
+              '<input type="text" inputmode="decimal" id="audVol" value="' + db.toFixed(1) + '">' +
+              '<span class="unit">分贝</span>' +
+              '<button class="reset" id="audVolReset" title="恢复默认 0.0 分贝">↺</button>' +
+            '</div>' +
+            (hasVolKf ? '<div id="audVolKfHint" style="font-size:11px;color:var(--muted);margin-top:4px">已开启音量关键帧 · 当前值随播放头打点</div>' : '') +
+          '</div>' +
+          '<div class="insp-field">' +
+            '<div class="insp-switch-row"><span class="lab">静音</span>' +
+            '<div class="insp-switch' + (muted ? " on" : "") + '" id="audMute" title="静音/恢复"></div></div>' +
+          '</div>' +
+        '</div></div>' +
+      '</div>';
+    return wrap.firstElementChild;
+  },
+  update: (host, c) => _updateAudioTabValues(c.refs, c.s, c.hasVolKf, c.isBatch, c.nameEl),
+  bind: (host, c) => {
+    const volIn = $("audVol");
+    if (volIn) {
+      const toFactor = () => {
+        const d = parseFloat(volIn.value);
+        if (isNaN(d)) return null;
+        return Math.max(0, Math.min(2, dbToVol(d)));
+      };
+      // 每次交互取最新段引用：Store 刷新会替换 draft/段对象，build 时闭包捕获的引用会过期
+      const live = () => { const r = buildSegRefs(); return r.length ? r : null; };
+      const getLocal = (s) => Math.max(0, Math.min(Store.state.playheadUs - s.start, s.duration)); // 播放头局部时间(编辑时实时取)
+      // 预览：仅改内存+实时预览,不提交后端(对齐 OpenCut onPreview)
+      const preview = () => {
+        try {
+          const v = toFactor(); if (v == null) return;
+          const refs = live(); if (!refs) return;
+          const s = refs[0].seg;
+          const hasKf = !!(s.animations && s.animations.volume && s.animations.volume.keys && s.animations.volume.keys.length);
+          if (hasKf) setVolKfLocal(s, getLocal(s), v);   // 改当前播放头处的音量关键帧
+          else refs.forEach(r => { if (r.seg) r.seg.volume = v; });
+          renderPreview();
+          if (typeof AudioEngine !== "undefined" && AudioEngine.updateLiveGains) AudioEngine.updateLiveGains(Store.state.playheadUs);
+        } catch (e) { console.error("[audio] preview 失败:", e); }
+      };
+      // 提交：失焦/回车才落库(对齐 OpenCut onCommit)
+      const commit = () => {
+        try {
+          const v = toFactor(); if (v == null) return;
+          const refs = live(); if (!refs) return;
+          const s = refs[0].seg;
+          const hasKf = !!(s.animations && s.animations.volume && s.animations.volume.keys && s.animations.volume.keys.length);
+          const isBatch = refs.length > 1;
+          if (hasKf) callKVF(refs, "volume", getLocal(s), v, "linear").then(refresh).catch(e => console.error("[audio] add_keyframe 失败:", e));
+          else if (isBatch) call("set_segments_props", refs.map(r => ({ segid: r.segid, props: { volume: v } }))).then(refresh).catch(e => console.error("[audio] 批量音量失败:", e));
+          else call("set_segment_volume", refs[0].type, refs[0].ti, refs[0].idx, v, refs[0].segid).then(refresh).catch(e => console.error("[audio] set_segment_volume 失败:", e));
+        } catch (e) { console.error("[audio] commit 失败:", e); }
+      };
+      volIn.addEventListener("input", preview);
+      volIn.addEventListener("blur", commit);
+      volIn.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); volIn.blur(); } });
+      const rst = $("audVolReset");
+      if (rst) rst.addEventListener("click", () => { volIn.value = "0.0"; preview(); commit(); });
+    }
+    const kfBtn = $("audVolKf");
+    if (kfBtn) kfBtn.addEventListener("click", () => { const r = buildSegRefs(); if (r.length) toggleVolKf(r); });
+    const muteEl = $("audMute");
+    if (muteEl) muteEl.addEventListener("click", () => {
+      const refs = buildSegRefs(); if (!refs.length) return;
+      const next = !refs[0].seg.muted;
+      refs.forEach(r => { if (r.seg) r.seg.muted = next; });
+      muteEl.classList.toggle("on", next);            // 即时反馈(对齐 OpenCut 本地态先变)
+      const done = () => refresh().catch(e => console.error("[audio] mute 刷新失败:", e));
+      if (refs.length > 1) call("set_segments_props", refs.map(r => ({ segid: r.segid, props: { muted: next } }))).then(done);
+      else call("set_segment_flag", refs[0].type, refs[0].ti, refs[0].idx, "muted", next).then(done);
+    });
+  },
+});
 
 // 结构不变时只更新值(不重建 DOM)——对齐 OpenCut 组件复用：输入框光标/按钮 handler 永不丢失
 function _updateAudioTabValues(refs, s, hasVolKf, isBatch, nameEl) {
@@ -1507,6 +1558,8 @@ function toggleVolKf(refs) {
 // 速度面板（2026-08-19 Step2 OpenCut SpeedTab 风格重写）：
 // 速度 NumberField(0.01~5x) + 变音 Switch，OpenCut Section 折叠样式
 // 变速走后端 set_segment_speed（重算 duration）；支持批量
+// 速度面板结构指纹守卫（2026-08-19 对齐音频 _audioPanelKey）：结构(段身份/单批量)不变时只更值、不重建 DOM，
+// 彻底杜绝每 0.5s 轮询把输入框/按钮 innerHTML 推倒重建 → 吞掉 click/输入（根因 A 在速度面板的具象）。
 function renderSpeedTab() {
   const bodyEl = $("spdBody"), nameEl = $("spdSegName");
   if (!bodyEl) return;
@@ -1514,6 +1567,7 @@ function renderSpeedTab() {
   if (document.activeElement && bodyEl.contains(document.activeElement)) return;
   const refs = buildSegRefs();
   if (!refs.length) {
+    bodyEl.__panelKey = null;
     bodyEl.innerHTML = '<div class="insp-empty" style="padding:24px;text-align:center;color:var(--muted)">未选中片段</div>';
     if (nameEl) nameEl.textContent = "";
     return;
@@ -1521,62 +1575,100 @@ function renderSpeedTab() {
   const isBatch = refs.length > 1;
   const allMedia = refs.every(r => r.seg && (r.seg.type === "video" || r.seg.type === "audio"));
   if (!allMedia) {
+    bodyEl.__panelKey = null;
     bodyEl.innerHTML = '<div class="insp-empty" style="padding:24px;text-align:center;color:var(--muted)">仅视频/音频段可变速' + (isBatch ? "（批量需全选视频/音频）" : "") + '</div>';
     if (nameEl) nameEl.textContent = "";
     return;
   }
   const s = refs[0].seg;
-  if (nameEl) nameEl.textContent = isBatch ? (" " + refs.length + " 个片段") : (" " + (s.name || ""));
-  const sp = (s.speed == null ? 1 : s.speed);
-  const pitch = !!s.change_pitch;
-  const spd = Math.round(sp * 100) / 100;
-  // OpenCut SpeedTab 结构：折叠 Section("Speed") + 速度 NumberField(x) + Change pitch Switch
-  bodyEl.innerHTML =
-    '<div class="insp-section">' +
-      '<div class="insp-section-head open"><span class="chev">▼</span><span class="t">速度</span></div>' +
-      '<div class="insp-section-body"><div class="inner">' +
-        (isBatch ? '<div class="insp-batch-hint">批量应用于 ' + refs.length + ' 个片段</div>' : '') +
-        '<div class="insp-field">' +
-          '<div class="insp-field-label">速度</div>' +
-          '<div class="insp-num"><span class="ic">⏩</span>' +
-            '<input type="text" inputmode="decimal" id="spdVal" value="' + spd + '">' +
-            '<span class="unit">x</span>' +
-            '<button class="reset" id="spdValReset" title="恢复默认 1x">↺</button>' +
+  const selId = refs[0].segid || (refs[0].type + ":" + refs[0].ti + ":" + refs[0].idx);
+  // 结构指纹：段身份 + 单/批量。任一变化才需重建 DOM（PanelRegistry 内部判定）
+  renderPanel("speed", { refs, s, selId, isBatch, nameEl });
+}
+
+// speed 面板注册到持久化框架（OpenCut 第 1 层）：key 相同只 update 值，key 变化才 build+bind
+registerPanel("speed", {
+  host: () => $("spdBody"),
+  key: (c) => c.selId + "|" + (c.isBatch ? "B" : "S"),
+  build: (c) => {
+    const { s, isBatch } = c;
+    const sp = (s.speed == null ? 1 : s.speed);
+    const pitch = !!s.change_pitch;
+    const spd = Math.round(sp * 100) / 100;
+    // OpenCut SpeedTab 结构：折叠 Section("Speed") + 速度 NumberField(x) + Change pitch Switch
+    const wrap = document.createElement("div");
+    wrap.innerHTML =
+      '<div class="insp-section">' +
+        '<div class="insp-section-head open"><span class="chev">▼</span><span class="t">速度</span></div>' +
+        '<div class="insp-section-body"><div class="inner">' +
+          (isBatch ? '<div class="insp-batch-hint">批量应用于 ' + c.refs.length + ' 个片段</div>' : '') +
+          '<div class="insp-field">' +
+            '<div class="insp-field-label">速度</div>' +
+            '<div class="insp-num"><span class="ic">⏩</span>' +
+              '<input type="text" inputmode="decimal" id="spdVal" value="' + spd + '">' +
+              '<span class="unit">x</span>' +
+              '<button class="reset" id="spdValReset" title="恢复默认 1x">↺</button>' +
+            '</div>' +
           '</div>' +
-        '</div>' +
-        '<div class="insp-field">' +
-          '<div class="insp-switch-row"><span class="lab">变音（音调随速度）</span>' +
-          '<div class="insp-switch' + (pitch ? " on" : "") + '" id="spdPitch" title="变音开=慢放声音变低沉，关=保持原调"></div></div>' +
-        '</div>' +
-        '<div class="empty-hint" style="margin-top:4px">变速改变时间轴时长，预览/导出均生效</div>' +
-      '</div></div>' +
-    '</div>';
+          '<div class="insp-field">' +
+            '<div class="insp-switch-row"><span class="lab">变音（音调随速度）</span>' +
+            '<div class="insp-switch' + (pitch ? " on" : "") + '" id="spdPitch" title="变音开=慢放声音变低沉，关=保持原调"></div></div>' +
+          '</div>' +
+          '<div class="empty-hint" style="margin-top:4px">变速改变时间轴时长，预览/导出均生效</div>' +
+        '</div></div>' +
+      '</div>';
+    return wrap.firstElementChild;
+  },
+  update: (host, c) => _updateSpeedTabValues(c.refs, c.s, c.isBatch, c.nameEl),
+  bind: (host, c) => {
+    const spdIn = $("spdVal");
+    const live = () => { const r = buildSegRefs(); return r.length ? r : null; };
+    if (spdIn) {
+      // 两阶段(对齐 OpenCut usePropertyDraft):编辑中只改内存+实时预览,失焦/回车才提交后端
+      const preview = (v) => {
+        v = Math.max(0.01, Math.min(5, v));
+        const refs = live(); if (!refs) return;
+        refs.forEach(r => { if (r.seg) r.seg.speed = v; });
+        renderPreview();
+      };
+      const commit = (v) => {
+        v = Math.max(0.01, Math.min(5, v));
+        const refs = live(); if (!refs) return;
+        if (refs.length > 1) call("set_segments_props", refs.map(r => ({ segid: r.segid, props: { speed: v } }))).then(refresh);
+        else call("set_segment_speed", refs[0].type, refs[0].ti, refs[0].idx, v, null, refs[0].segid).then(refresh);
+      };
+      spdIn.addEventListener("input", () => { const v = parseFloat(spdIn.value); if (!isNaN(v)) preview(v); });
+      spdIn.addEventListener("blur", () => {
+        const v = parseFloat(spdIn.value);
+        const refs = live();
+        const fallback = refs ? (refs[0].seg.speed == null ? 1 : refs[0].seg.speed) : 1;
+        commit(isNaN(v) ? fallback : v);
+      });
+      spdIn.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); spdIn.blur(); } });
+      const rst = $("spdValReset");
+      if (rst) rst.addEventListener("click", () => { spdIn.value = "1"; preview(1); commit(1); });
+    }
+    const pitchEl = $("spdPitch");
+    if (pitchEl) pitchEl.addEventListener("click", () => {
+      const refs = live(); if (!refs) return;
+      const next = !refs[0].seg.change_pitch;
+      pitchEl.classList.toggle("on", next);
+      if (refs.length > 1) call("set_segments_props", refs.map(r => ({ segid: r.segid, props: { change_pitch: next } }))).then(refresh);
+      else call("set_segment_speed", refs[0].type, refs[0].ti, refs[0].idx, refs[0].seg.speed || 1, next, refs[0].segid).then(refresh);
+    });
+  },
+});
+
+// 结构不变时只更新值(不重建 DOM)——对齐音频 _updateAudioTabValues：输入框光标/按钮 handler 永不丢失
+function _updateSpeedTabValues(refs, s, isBatch, nameEl) {
   const spdIn = $("spdVal");
-  if (spdIn) {
-    // 两阶段(对齐 OpenCut usePropertyDraft):编辑中只改内存+实时预览,失焦/回车才提交后端
-    const preview = (v) => {
-      v = Math.max(0.01, Math.min(5, v));
-      refs.forEach(r => { if (r.seg) r.seg.speed = v; });
-      renderPreview();
-    };
-    const commit = (v) => {
-      v = Math.max(0.01, Math.min(5, v));
-      if (isBatch) call("set_segments_props", refs.map(r => ({ segid: r.segid, props: { speed: v } }))).then(refresh);
-      else call("set_segment_speed", refs[0].type, refs[0].ti, refs[0].idx, v, null, refs[0].segid).then(refresh);
-    };
-    spdIn.addEventListener("input", () => { const v = parseFloat(spdIn.value); if (!isNaN(v)) preview(v); });
-    spdIn.addEventListener("blur", () => { const v = parseFloat(spdIn.value); commit(isNaN(v) ? spd : v); });
-    spdIn.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); spdIn.blur(); } });
-    const rst = $("spdValReset");
-    if (rst) rst.addEventListener("click", () => { spdIn.value = "1"; preview(1); commit(1); });
+  if (spdIn && document.activeElement !== spdIn) {   // 不打断正在输入
+    const sp = (s.speed == null ? 1 : s.speed);
+    spdIn.value = Math.round(sp * 100) / 100;
   }
   const pitchEl = $("spdPitch");
-  if (pitchEl) pitchEl.addEventListener("click", () => {
-    const next = !pitch;
-    pitchEl.classList.toggle("on", next);
-    if (isBatch) call("set_segments_props", refs.map(r => ({ segid: r.segid, props: { change_pitch: next } }))).then(refresh);
-    else call("set_segment_speed", refs[0].type, refs[0].ti, refs[0].idx, refs[0].seg.speed || 1, next, refs[0].segid).then(refresh);
-  });
+  if (pitchEl) pitchEl.classList.toggle("on", !!s.change_pitch);
+  if (nameEl) nameEl.textContent = isBatch ? (" " + refs.length + " 个片段") : (" " + (s.name || ""));
 }
 
 /* =====================================================================
@@ -3194,7 +3286,7 @@ function refresh() {
       bookmarks: st.bookmarks || [],
     });
     updateToolbarState();
-    renderKfPanel();   // 选中态/状态刷新后同步关键帧面板
+    if (!_suppressPanelRender) renderKfPanel();   // 选中态/状态刷新后同步关键帧面板（后台轮询冻结时跳过，避免吞 click）
     applyCanvasRatio();   // 画幅同步（人工切换 / 素材自动匹配 / 外部 Agent 修改后刷新）
   });
 }
@@ -3205,6 +3297,12 @@ function boot() {
   if (booted) return;
   if (!api()) return;            // pywebview 未注入就等，绝不缓存 null
   booted = true;
+  // 构建版本戳：每次改版必须改 BUILD_TAG，用户重启一眼确认跑的是不是当前构建（终结"重启还旧"猜疑）
+  try {
+    document.title = "AI剪辑工作台 v0.9 (" + BUILD_TAG + ")";
+    const _bt = document.getElementById("buildTag");
+    if (_bt) _bt.textContent = BUILD_TAG;
+  } catch (e) { console.error("[boot] buildTag 写入失败:", e); }
   // 先拿本地 HTTP 服务器地址，素材才能走 http（WebView2 下 video/audio 不能读 file://）
   call("get_server_url").then(url => {
     if (url) window.MEDIA_BASE = url;
@@ -3220,8 +3318,15 @@ else document.addEventListener("DOMContentLoaded", boot);
 if (window.pywebview && window.pywebview.api) boot();
 window.addEventListener("pywebviewready", boot);
 let _w = setInterval(() => { if (api()) { clearInterval(_w); boot(); } }, 120);
-// 人和 AI 实时互看：每 0.5s 拉取后端状态
-setInterval(() => { if (booted && !Store.state.drag && !isLibraryDragging) refresh(); }, 500);
+// 人和 AI 实时互看：每 0.5s 拉取后端状态。
+// 关键：拉取期间冻结属性面板重建(_suppressPanelRender)，仅同步 Store 状态与播放头/时间轴；
+// 否则面板每 0.5s 被推倒重建，按钮 click 被吞 → “点不动”。用户动作(选中/tab/提交)走 refresh() 不冻结，正常重渲。
+setInterval(() => {
+  if (booted && !Store.state.drag && !isLibraryDragging) {
+    _suppressPanelRender = true;
+    refresh().finally(() => { _suppressPanelRender = false; });
+  }
+}, 500);
 </script>
 </body>
 </html>
