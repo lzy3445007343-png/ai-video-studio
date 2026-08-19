@@ -1146,12 +1146,14 @@ let activeToolTab = "kf";
 // PropertiesPanel（2026-08-15 重构）：按 selectedSegment.type 路由 tab + 空/多选状态 + rail 启用/禁用
 // 对齐 OpenCut panels/properties/index.tsx + registry.tsx（按 type → visibleTabs → activeTab.content）
 const PROPERTY_TABS_BY_TYPE = {
-  video:   ["kf", "audio", "speed", "mask", "effects"],
-  image:   ["kf", "mask", "effects"],
-  audio:   ["audio", "speed", "kf"],
-  text:    ["sub"],
-  sticker: ["sticker", "kf", "effects"],
-  effect:  ["effects"],
+  // 2026-08-19 23:55 根因B 解耦：sub/sticker 是所有类型的常驻入口（创建型面板不该锁在"先选中对应段"）。
+  // 字幕=ASR 生成入口、贴纸=添加入口，getAsrSource/hasStickerTrack 本就不依赖选中段；白名单只决定"选中时 rail 高亮"。
+  video:   ["kf", "audio", "speed", "mask", "effects", "sub", "sticker"],
+  image:   ["kf", "mask", "effects", "sub", "sticker"],
+  audio:   ["audio", "speed", "kf", "sub", "sticker"],
+  text:    ["sub", "sticker"],
+  sticker: ["sticker", "kf", "effects", "sub"],
+  effect:  ["effects", "sub", "sticker"],
 };
 const PROPERTY_DEFAULT_TAB_BY_TYPE = {
   video: "kf", image: "kf", audio: "audio", text: "sub", sticker: "sticker", effect: "effects",
@@ -1724,7 +1726,7 @@ function selectKey(key) {
   if (key == null) Store.set({ selectedKey: null, selectedKeys: [], selectedMaterialUid: null, selectedSegId: null });
   else Store.set({ selectedKey: key, selectedKeys: [key], selectedMaterialUid: null, selectedSegId: segId });
   updateToolbarState();
-  renderKfPanel();
+  renderKfPanelPF();
 }
 function selectMaterial(uid) { Store.set({ selectedMaterialUid: uid, selectedKey: null, selectedKeys: [] }); }
 
@@ -1949,7 +1951,7 @@ function renderKfSel(s) {
 function onKfDiamondDown(e, path, id, dur) {
   e.preventDefault(); e.stopPropagation();
   selectedKf = { path, id };
-  renderKfPanel();
+  renderKfPanelPF();
   const graphEl = $("kfGraph");
   const diamond = graphEl.querySelector('.kf-diamond[data-id="' + id + '"]');
   const move = ev => {
@@ -3347,7 +3349,7 @@ function refresh() {
       bookmarks: st.bookmarks || [],
     });
     updateToolbarState();
-    if (!_suppressPanelRender) renderKfPanel();   // 选中态/状态刷新后同步关键帧面板（后台轮询冻结时跳过，避免吞 click）
+    if (!_suppressPanelRender) renderKfPanelPF();   // 选中态/状态刷新后同步关键帧面板（后台轮询冻结时跳过，避免吞 click）
     applyCanvasRatio();   // 画幅同步（人工切换 / 素材自动匹配 / 外部 Agent 修改后刷新）
   });
 }
