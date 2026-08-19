@@ -148,7 +148,7 @@
   .tools-content .effectpanel,
   .tools-content .empty-panel, .tools-content .multi-panel, .tools-content .placeholder-panel,
   .tools-content .insp-panel {
-    display: none; border-top: none; width: 100%; flex: 1; min-width: 0; min-height: 200px;
+    display: none; border-top: none; width: 100%; flex: none; min-width: 0; min-height: 0;
     background: var(--panel); border-left: 1px solid var(--border); overflow: hidden;
     flex-direction: column;
   }
@@ -578,16 +578,16 @@
       <div id="phContent"></div>
     </div>
 
-    <!-- 音频面板（2026-08-19）：脱离父级塌陷→移到 body + fixed 右侧栏宽度 -->
-    <div class="insp-panel" id="audioPanel">
+    <!-- 音频面板（2026-08-19）：inline style min-height:200px 强制可见（绕开 CSS specificity 冲突） -->
+    <div class="insp-panel" id="audioPanel" style="min-height: 200px;">
       <div class="head">音频 <span class="seg" id="audSegName"></span><button class="head-close" id="audClose" title="取消选择（Esc）">✕</button></div>
-      <div id="audBody"></div>
+      <div id="audBody" style="min-height: 100px;"></div>
     </div>
 
     <!-- 速度面板（2026-08-19）：同上 -->
-    <div class="insp-panel" id="speedPanel">
+    <div class="insp-panel" id="speedPanel" style="min-height: 200px;">
       <div class="head">速度 <span class="seg" id="spdSegName"></span><button class="head-close" id="spdClose" title="取消选择（Esc）">✕</button></div>
-      <div id="spdBody"></div>
+      <div id="spdBody" style="min-height: 100px;"></div>
     </div>
     <div class="effectpanel" id="effectPanel">
       <div class="head">特效 <span class="seg" id="effSegName"></span><button class="head-close" id="effClose" title="取消选择（Esc）">✕</button></div>
