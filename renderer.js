@@ -481,57 +481,6 @@ function applySegMask(seg, key, recEl) {
 }
 
 // 遮罩属性面板（选中单段时显示）
-function renderMaskPanel() {
-  const nameEl = $("maskSegName"), shapesEl = $("maskShapes"), ctrlsEl = $("maskCtrls"),
-        emptyEl = $("maskEmpty");
-  const s = selectedSeg();
-  const ok = s && (s.type === "video" || s.type === "image");
-  if (!ok) { emptyEl.style.display = ""; shapesEl.style.display = "none"; ctrlsEl.style.display = "none"; nameEl.textContent = ""; return; }
-  emptyEl.style.display = "none"; shapesEl.style.display = "flex"; nameEl.textContent = s.name || "";
-  const cur = (s.masks && s.masks[0]) || null;
-  const shape = cur ? cur.type : "";
-  const selId = s.id || (Store.state.selectedKey || "");
-  // 2026-08-19 23:00 持久化修复（对齐 OpenCut 组件复用）：结构(段身份+形状类型)不变时绝不 innerHTML 重建，
-  // 滑块/按钮 DOM 永活 → 拖动/点击不再被 500ms 轮询吞掉。事件已委托到容器(maskShapes/maskCtrls)，无需重绑。
-  if (shapesEl.__key !== selId + "|" + shape) {
-    shapesEl.__key = selId + "|" + shape;
-    shapesEl.innerHTML = MASK_SHAPES.map(sh =>
-      `<button data-type="${sh.type}" class="${cur && cur.type === sh.type ? "on" : ""}">${sh.name}</button>`).join("");
-  } else {
-    shapesEl.querySelectorAll("button[data-type]").forEach(b => b.classList.toggle("on", b.dataset.type === shape));
-  }
-  if (!cur) { ctrlsEl.style.display = "none"; ctrlsEl.__key = null; ctrlsEl.innerHTML = ""; return; }
-  ctrlsEl.style.display = "";
-  const cKey = selId + "|" + cur.id;
-  if (ctrlsEl.__key !== cKey) {
-    ctrlsEl.__key = cKey;
-    const p = cur.params; const feats = MASK_SHAPES.find(x => x.type === cur.type).feats;
-    const slider = (key, lab, min, max, step) =>
-      `<div class="row"><label>${lab}</label><input type="range" data-k="${key}" min="${min}" max="${max}" step="${step}" value="${p[key] || 0}"><span class="val">${Math.round((p[key] || 0) * 100) / 100}</span></div>`;
-    let html = "";
-    if (feats.pos) { html += slider("centerX", "X", -2, 2, 0.01) + slider("centerY", "Y", -2, 2, 0.01); }
-    if (feats.edges) { html += slider("width", "宽", 0.01, 2, 0.01) + slider("height", "高", 0.01, 2, 0.01); }
-    if (feats.scale) { html += slider("scale", "缩放", 0.05, 5, 0.01); }
-    html += slider("rotation", "旋转", 0, 360, 1) + slider("feather", "羽化", 0, 100, 1);
-    html += `<div class="chk"><input type="checkbox" id="maskInv" ${p.inverted ? "checked" : ""}><label for="maskInv">反转遮罩（保留外部）</label></div>`;
-    const exp = MASK_EXPORTABLE[cur.type]
-      ? "导出剪映：支持（矩形/椭圆/星形/爱心/线性）。"
-      : "导出剪映：该形状剪映基础遮罩无对应，仅本软件预览。";
-    html += `<div class="expnote">${exp}</div>`;
-    html += `<button class="rm" data-act="remove">删除遮罩</button>`;
-    ctrlsEl.innerHTML = html;
-  } else {
-    // 结构不变 → 只更新滑块值/反转勾选（跳过正在拖动的滑块，不打断用户）
-    ctrlsEl.querySelectorAll("input[type=range][data-k]").forEach(inp => {
-      if (document.activeElement === inp) return;
-      const v = cur.params[inp.dataset.k] || 0;
-      inp.value = v;
-      const vEl = inp.parentElement.querySelector(".val"); if (vEl) vEl.textContent = Math.round(v * 100) / 100;
-    });
-    const inv = ctrlsEl.querySelector("#maskInv");
-    if (inv) inv.checked = !!cur.params.inverted;
-  }
-}
 
 // 字幕来源：优先选中段（视频/音频），否则项目主视频轨/音频轨第一段
 function getAsrSource() {
