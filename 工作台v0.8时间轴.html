@@ -209,7 +209,7 @@
   .rail-btn[disabled] { opacity: .3; pointer-events: none; }
   .rail-btn.active { background: var(--primary-dim); border-color: var(--primary); color: var(--primary); }
   .kfpanel > .head, .maskpanel > .head, .subpanel > .head, .stickerpanel > .head, .effectpanel > .head { padding: 10px; border-bottom: 1px solid var(--border); font-weight: 600; font-size: 12px; display: flex; align-items: center; gap: 6px; }
-  .tools-content .head .seg { color: var(--muted); font-weight: 400; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+  .tools-content .head .property-seg-name { color: var(--muted); font-weight: 400; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
   .tools-content .head .head-close { width: 22px; height: 22px; border-radius: 4px; border: 1px solid var(--border); background: var(--panel); color: var(--muted); cursor: pointer; flex: none; font-size: 13px; line-height: 1; padding: 0; }
   .tools-content .head .head-close:hover { background: var(--panel-2); color: var(--text); }
   .kfpanel .body { flex: 1; overflow: auto; padding: 10px; min-width: 0; }
@@ -318,7 +318,7 @@
   .track.track-muted.audio .seg { opacity: .55; }
   .track .empty-hint { position: absolute; inset: 0; border: 1px dashed var(--border); border-radius: 4px; margin: 4px; }
 
-  .seg { position: absolute; top: 4px; bottom: 4px; border-radius: 4px; overflow: hidden;
+  .tl-content .seg { position: absolute; top: 4px; bottom: 4px; border-radius: 4px; overflow: hidden;
     box-shadow: 0 0 0 1.5px transparent; cursor: grab; }
   .seg.sel { box-shadow: 0 0 0 2.5px var(--primary); }
   .seg.dragging { opacity: .85; cursor: grabbing; pointer-events: none; }
@@ -473,7 +473,7 @@
       <div class="prop-multi-hint">批量音量/速度：选中全为视频/音频段时可同时修改</div>
     </div>
     <div class="kfpanel" id="kfPanel">
-      <div class="head">关键帧 <span class="seg" id="kfSegName"></span><button class="head-close" id="kfClose" title="取消选择（Esc）">✕</button></div>
+      <div class="head">关键帧 <span class="property-seg-name" id="kfSegName"></span><button class="head-close" id="kfClose" title="取消选择（Esc）">✕</button></div>
       <div class="body" id="kfBody">
         <div class="empty" id="kfEmpty">选中视频/音频段后，可在此打关键帧做动画</div>
         <div id="kfRows" style="display:none"></div>
@@ -484,7 +484,7 @@
     </div>
 
     <div class="maskpanel" id="maskPanel">
-      <div class="head">遮罩 <span class="seg" id="maskSegName"></span><button class="head-close" id="maskClose" title="取消选择（Esc）">✕</button></div>
+      <div class="head">遮罩 <span class="property-seg-name" id="maskSegName"></span><button class="head-close" id="maskClose" title="取消选择（Esc）">✕</button></div>
       <div class="body" id="maskBody">
         <div class="empty" id="maskEmpty">选中视频/图片段可加遮罩（矩形/椭圆/星形/爱心/菱形/线性/电影黑边）</div>
         <div id="maskShapes" style="display:none" class="mask-shapes"></div>
@@ -493,7 +493,7 @@
     </div>
 
     <div class="subpanel" id="subPanel">
-      <div class="head">字幕生成 <span class="seg" id="subSegName"></span><button class="head-close" id="subClose" title="取消选择（Esc）">✕</button></div>
+      <div class="head">字幕生成 <span class="property-seg-name" id="subSegName"></span><button class="head-close" id="subClose" title="取消选择（Esc）">✕</button></div>
       <div class="body" id="subBody">
         <div class="empty" id="subEmpty">自动从「选中的视频/音频」或「主视频轨」识别语音生成字幕（本地 Whisper，离线可用）</div>
         <div id="subCtrls" style="display:none">
@@ -530,7 +530,7 @@
     </div>
 
     <div class="stickerpanel" id="stickerPanel">
-      <div class="head">贴纸 <span class="seg" id="stSegName"></span><button class="head-close" id="stClose" title="取消选择（Esc）">✕</button></div>
+      <div class="head">贴纸 <span class="property-seg-name" id="stSegName"></span><button class="head-close" id="stClose" title="取消选择（Esc）">✕</button></div>
       <div class="body" id="stickerBody">
         <div class="empty" id="stickerEmpty">贴纸 = 本地透明图片叠加（PNG/WebP），离线可用。点「选择图片」→「添加到播放头」。</div>
         <div id="stickerCtrls" style="display:none">
@@ -565,18 +565,18 @@
 
     <!-- 音频面板（2026-08-19）：直接挂在 #toolsContent 下，不再嵌套在 #stickerPanel 内（修复祖先 display:none 导致不可见） -->
     <div class="insp-panel" id="audioPanel" style="min-height: 200px;">
-      <div class="head">音频 <span class="seg" id="audSegName"></span><button class="head-close" id="audClose" title="取消选择（Esc）">✕</button></div>
+      <div class="head">音频 <span class="property-seg-name" id="audSegName"></span><button class="head-close" id="audClose" title="取消选择（Esc）">✕</button></div>
       <div id="audBody" style="min-height: 100px;"></div>
     </div>
 
     <!-- 速度面板（2026-08-19）：同上 -->
     <div class="insp-panel" id="speedPanel" style="min-height: 200px;">
-      <div class="head">速度 <span class="seg" id="spdSegName"></span><button class="head-close" id="spdClose" title="取消选择（Esc）">✕</button></div>
+      <div class="head">速度 <span class="property-seg-name" id="spdSegName"></span><button class="head-close" id="spdClose" title="取消选择（Esc）">✕</button></div>
       <div id="spdBody" style="min-height: 100px;"></div>
     </div>
 
     <div class="effectpanel" id="effectPanel">
-      <div class="head">特效 <span class="seg" id="effSegName"></span><button class="head-close" id="effClose" title="取消选择（Esc）">✕</button></div>
+      <div class="head">特效 <span class="property-seg-name" id="effSegName"></span><button class="head-close" id="effClose" title="取消选择（Esc）">✕</button></div>
       <div class="insp-body" id="effBody">
         <div class="empty" id="effEmpty">选中特效段可调整参数</div>
         <div id="effCtrls" style="display:none"></div>
