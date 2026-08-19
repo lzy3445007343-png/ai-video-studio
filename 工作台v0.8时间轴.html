@@ -182,6 +182,8 @@
   .insp-field { margin-bottom: 14px; }
   .insp-field:last-child { margin-bottom: 4px; }
   .insp-field-label { display: flex; align-items: center; gap: 6px; height: 16px; margin-bottom: 6px; font-size: 11px; color: var(--muted); }
+  .insp-field-label .tog { width: 18px; height: 18px; border-radius: 4px; border: 1px solid var(--border); background: var(--panel); color: var(--muted); cursor: pointer; font-size: 10px; line-height: 1; flex: none; padding: 0; margin-left: auto; }
+  .insp-field-label .tog.on { background: var(--primary); color: #fff; border-color: var(--primary); }
   .insp-num { display: flex; align-items: center; gap: 6px; }
   .insp-num .ic { width: 16px; text-align: center; font-size: 11px; color: var(--muted); flex: none; }
   .insp-num input { flex: 1; min-width: 0; height: 26px; background: var(--panel-2); color: var(--text); border: 1px solid var(--border); border-radius: 5px; padding: 0 8px; font-size: 12px; outline: none; }
@@ -1328,8 +1330,11 @@ function buildSegRefs() {
 function renderAudioTab() {
   const bodyEl = $("audBody"), nameEl = $("audSegName");
   if (!bodyEl) return;
-  // 编辑中(音量输入框正聚焦)跳过重建,保住焦点 —— 对齐 OpenCut usePropertyDraft 两阶段
-  if (document.activeElement && bodyEl.contains(document.activeElement)) return;
+  // 焦点守卫：仅当「输入框」正聚焦时跳过重建(保护已输入内容与光标);
+  // 按钮(关键帧◆/静音/重置)仍走重建,以便点击后立刻刷新状态(对齐 OpenCut 组件本地态)
+  // 编辑模型对齐 OpenCut usePropertyDraft 两阶段：编辑只改内存+预览,失焦/回车才提交后端
+  const ae = document.activeElement;
+  if (ae && bodyEl.contains(ae) && (ae.tagName === "INPUT" || ae.tagName === "TEXTAREA" || ae.tagName === "SELECT")) return;
   const refs = buildSegRefs();
   if (!refs.length) {
     bodyEl.innerHTML = '<div class="insp-empty" style="padding:24px;text-align:center;color:var(--muted)">未选中片段</div>';
@@ -1345,22 +1350,30 @@ function renderAudioTab() {
   }
   const s = refs[0].seg;
   if (nameEl) nameEl.textContent = isBatch ? (" " + refs.length + " 个片段") : (" " + (s.name || ""));
-  const vol = (s.volume == null ? 1 : s.volume);
+  const baseVol = (s.volume == null ? 1 : s.volume);
   const muted = !!s.muted;
-  const pct = Math.round(vol * 100);
-  // OpenCut AudioTab 结构：折叠 Section("Volume") + 音量 NumberField + 静音 Switch
+  const anims = s.animations || {};
+  const hasVolKf = !!(anims.volume && anims.volume.keys && anims.volume.keys.length);
+  // 当前显示值：有音量关键帧通道则取播放头处插值,否则取基础音量(OpenCut: 动画通道覆盖 base)
+  const local = Math.max(0, Math.min(Store.state.playheadUs - s.start, s.duration));
+  const curVol = hasVolKf ? (kfVal(anims, "volume", local) != null ? kfVal(anims, "volume", local) : baseVol) : baseVol;
+  const db = volToDb(curVol);
+  // OpenCut AudioTab：Section("音量") + 关键帧◆按钮 + 分贝 NumberField + 静音 Switch
   bodyEl.innerHTML =
     '<div class="insp-section">' +
       '<div class="insp-section-head open"><span class="chev">▼</span><span class="t">音量</span></div>' +
       '<div class="insp-section-body"><div class="inner">' +
-        (isBatch ? '<div class="insp-batch-hint">批量应用于 ' + refs.length + ' 个片段</div>' : '') +
+        (isBatch ? '<div class="insp-batch-hint">批量应用于 ' + refs.length + ' 个片段（关键帧仅单段支持）</div>' : '') +
         '<div class="insp-field">' +
-          '<div class="insp-field-label">音量</div>' +
-          '<div class="insp-num"><span class="ic">🔊</span>' +
-            '<input type="text" inputmode="decimal" id="audVol" value="' + pct + '">' +
-            '<span class="unit">%</span>' +
-            '<button class="reset" id="audVolReset" title="恢复默认 100%">↺</button>' +
+          '<div class="insp-field-label">音量' +
+            (isBatch ? '' : '<button class="tog' + (hasVolKf ? " on" : "") + '" id="audVolKf" title="开/关音量关键帧（在播放头处打点）">◆</button>') +
           '</div>' +
+          '<div class="insp-num"><span class="ic">🔊</span>' +
+            '<input type="text" inputmode="decimal" id="audVol" value="' + db.toFixed(1) + '">' +
+            '<span class="unit">分贝</span>' +
+            '<button class="reset" id="audVolReset" title="恢复默认 0.0 分贝">↺</button>' +
+          '</div>' +
+          (hasVolKf ? '<div style="font-size:11px;color:var(--muted);margin-top:4px">已开启音量关键帧 · 当前值随播放头打点</div>' : '') +
         '</div>' +
         '<div class="insp-field">' +
           '<div class="insp-switch-row"><span class="lab">静音</span>' +
@@ -1368,25 +1381,38 @@ function renderAudioTab() {
         '</div>' +
       '</div></div>' +
     '</div>';
+
   const volIn = $("audVol");
   if (volIn) {
-    // 两阶段(对齐 OpenCut usePropertyDraft):编辑中只改内存+实时预览,失焦/回车才提交后端
-    const preview = (v) => {
-      v = Math.max(0, Math.min(200, v)) / 100;
-      refs.forEach(r => { if (r.seg) r.seg.volume = v; });
-      renderPreview();
+    const toFactor = () => {
+      const d = parseFloat(volIn.value);
+      if (isNaN(d)) return null;
+      return Math.max(0, Math.min(2, dbToVol(d)));
     };
-    const commit = (v) => {
-      v = Math.max(0, Math.min(200, v)) / 100;
-      if (isBatch) call("set_segments_props", refs.map(r => ({ segid: r.segid, props: { volume: v } }))).then(refresh);
+    const getLocal = () => Math.max(0, Math.min(Store.state.playheadUs - s.start, s.duration)); // 播放头局部时间(编辑时实时取)
+    // 预览：仅改内存+实时预览,不提交后端(对齐 OpenCut onPreview)
+    const preview = () => {
+      const v = toFactor(); if (v == null) return;
+      if (hasVolKf) setVolKfLocal(s, getLocal(), v);                  // 改当前播放头处的音量关键帧
+      else refs.forEach(r => { if (r.seg) r.seg.volume = v; });
+      renderPreview();
+      if (typeof AudioEngine !== "undefined" && AudioEngine.updateLiveGains) AudioEngine.updateLiveGains(Store.state.playheadUs);
+    };
+    // 提交：失焦/回车才落库(对齐 OpenCut onCommit)
+    const commit = () => {
+      const v = toFactor(); if (v == null) return;
+      if (hasVolKf) call("add_keyframe", ...kfSegArgs(), "volume", getLocal(), v, "linear").then(refresh);
+      else if (isBatch) call("set_segments_props", refs.map(r => ({ segid: r.segid, props: { volume: v } }))).then(refresh);
       else call("set_segment_volume", refs[0].type, refs[0].ti, refs[0].idx, v, refs[0].segid).then(refresh);
     };
-    volIn.addEventListener("input", () => { const v = parseFloat(volIn.value); if (!isNaN(v)) preview(v); });
-    volIn.addEventListener("blur", () => { const v = parseFloat(volIn.value); commit(isNaN(v) ? pct : v); });
+    volIn.addEventListener("input", preview);
+    volIn.addEventListener("blur", commit);
     volIn.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); volIn.blur(); } });
     const rst = $("audVolReset");
-    if (rst) rst.addEventListener("click", () => { volIn.value = "100"; preview(100); commit(100); });
+    if (rst) rst.addEventListener("click", () => { volIn.value = "0.0"; preview(); commit(); });
   }
+  const kfBtn = $("audVolKf");
+  if (kfBtn) kfBtn.addEventListener("click", () => toggleVolKf(refs));
   const muteEl = $("audMute");
   if (muteEl) muteEl.addEventListener("click", () => {
     const next = !muted;
@@ -1395,6 +1421,37 @@ function renderAudioTab() {
     if (isBatch) call("set_segments_props", refs.map(r => ({ segid: r.segid, props: { muted: next } }))).then(refresh);
     else call("set_segment_flag", refs[0].type, refs[0].ti, refs[0].idx, "muted", next).then(refresh);
   });
+}
+
+// 分贝 ↔ 音量倍率（volume 0~2 = -∞~+6dB；0.0dB = 100% = volume 1.0，对齐 OpenCut AudioTab）
+function volToDb(v) { if (!(v > 0)) return -60; return 20 * Math.log10(v); }
+function dbToVol(db) { if (db <= -60) return 0; return Math.pow(10, db / 20); }
+
+// 在段内存里 upsert 一个音量关键帧(播放头局部时间),供实时预览(不落库,落库交给 add_keyframe)
+function setVolKfLocal(seg, localUs, v) {
+  const anims = seg.animations || (seg.animations = {});
+  const ch = (anims.volume && anims.volume.keys) ? anims.volume : (anims.volume = { keys: [] });
+  let k = ch.keys.find(x => Math.abs(x.t - localUs) <= 1000);
+  if (k) k.v = v;
+  else {
+    const id = (typeof crypto !== "undefined" && crypto.randomUUID) ? crypto.randomUUID() : ("k" + Date.now() + Math.round(Math.random() * 1e6));
+    k = { id, t: localUs, v: v, seg: "linear" };
+    ch.keys.push(k); ch.keys.sort((a, b) => a.t - b.t);
+  }
+}
+
+// 音量关键帧开关(对齐 OpenCut ◆ toggleKeyframe)：有则清空通道,无则在播放头处打第一个点
+function toggleVolKf(refs) {
+  if (!refs || !refs.length) return;
+  const s = refs[0].seg;
+  const anims = s.animations || {};
+  const has = anims.volume && anims.volume.keys && anims.volume.keys.length;
+  if (has) call("clear_keyframes", ...kfSegArgs(), "volume").then(() => refresh());
+  else {
+    const local = Math.max(0, Math.min(Store.state.playheadUs - s.start, s.duration));
+    const v = (s.volume == null ? 1 : s.volume);
+    call("add_keyframe", ...kfSegArgs(), "volume", local, v, "linear").then(() => refresh());
+  }
 }
 
 // 速度面板（2026-08-19 Step2 OpenCut SpeedTab 风格重写）：

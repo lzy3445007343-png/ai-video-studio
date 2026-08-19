@@ -114,6 +114,7 @@ function _flattenAudio(seg, ti, idx, trackMuted, materials) {
     srcStartUs, srcEndUs,
     speed,
     gain: resolveGain(trackMuted, !!seg.muted, seg.volume),  // 不含 previewMuted（播放端另叠）
+    segAnim: seg.animations || null,   // 音量关键帧通道（AudioEngine.updateLiveGains 实时插值用）
     path: _resolvePath(seg, materials),
   };
 }

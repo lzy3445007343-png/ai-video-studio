@@ -97,7 +97,14 @@ function renderPreview(s) {
       rec = { el: wrap, key: layerKey, prepare: null, slotState: "EMPTY" };   // C.5：双槽结构初始化（prepare=后台预加载槽，slotState=状态机）
       previewState.visualEls.set(layerKey, rec);
     }
-    const changed = _setVisualContent(rec.el, h.seg.type, resolveSegPath(h.seg), isTrackMuted(h.type, h.ti) || h.seg.muted, h.seg.volume);
+    // 音量：有音量关键帧通道则按播放头局部时间插值覆盖 base（对齐 OpenCut 动画通道覆盖 base）
+    let _vol = (h.seg.volume == null ? 1 : h.seg.volume);
+    const _va = (h.seg.animations || {}).volume;
+    if (_va && _va.keys && _va.keys.length) {
+      const _lv = (typeof kfVal === "function") ? kfVal(h.seg.animations, "volume", Math.max(0, Math.min(us - h.seg.start, h.seg.duration))) : null;
+      if (_lv != null) _vol = _lv;
+    }
+    const changed = _setVisualContent(rec.el, h.seg.type, resolveSegPath(h.seg), isTrackMuted(h.type, h.ti) || h.seg.muted, _vol);
     rec.el.style.display = "";
     rec.el.style.zIndex = zIndexOf(h);
     rec.key = h.key;
@@ -711,4 +718,6 @@ function applyKfLiveAll() {
     applyKfTransform(rec.el, rec.seg, local);
   }
   applyEffects();   // ★ Phase C：特效用播放头每帧重算（关键帧动画/静态都覆盖）
+  // 音量关键帧实时增益（audio 轨由 AudioEngine 接管，每帧刷新）
+  if (typeof AudioEngine !== "undefined" && AudioEngine.updateLiveGains) AudioEngine.updateLiveGains(us);
 }

@@ -69,6 +69,31 @@ function createAudioEngine(ctx) {
     return us / 1e6 + engine.anchorOffset;
   };
 
+  // 音量关键帧实时增益：clip 有 volume 通道则按播放头局部时间插值,否则用 base gain。
+  // 静音(track/seg)已在 base gain=0 表达,优先尊重(返回 0)。
+  engine.clipVolumeAt = function (c, us) {
+    if (!c) return 0;
+    if ((c.gain || 0) <= 0) return 0; // 静音 → 静音
+    const a = c.segAnim;
+    if (a && a.volume && a.volume.keys && a.volume.keys.length) {
+      const local = Math.max(0, Math.min(us - (c.startUs || 0), c.durationUs || 0));
+      const v = (typeof kfVal === "function") ? kfVal(a, "volume", local) : null;
+      if (v != null) return v;
+    }
+    return c.gain;
+  };
+
+  // 每帧把已调度源的增益刷新为音量关键帧在当前播放头处的值(音量淡入淡出/包络)。
+  // 由 renderer.applyKfLiveAll 每帧调用；面板编辑预览时也可主动调一次。
+  engine.updateLiveGains = function (us) {
+    if (!engine.ctx) return;
+    for (const src of engine.scheduled) {
+      if (!src._clip || !src._gain) continue;
+      const g = engine.clipVolumeAt(src._clip, us != null ? us : engine.playheadUs);
+      src._gain.gain.value = engine.globalMuted ? 0 : g;
+    }
+  };
+
   // ---- 解码 + LRU 缓存 ----
   engine._decode = async function (path) {
     if (!engine.ctx || !path) return null;
@@ -121,8 +146,10 @@ function createAudioEngine(ctx) {
     src.playbackRate.value = c.speed || 1; // 变速（音调随变；change_pitch 后置）
     const g = engine.ctx.createGain();
     src._gain = g;
-    src._clipGain = c.gain || 0;
-    g.gain.value = engine.globalMuted ? 0 : (c.gain || 0); // v1.3：previewMuted 播放端叠加
+    src._clip = c; // 关键帧实时增益用：按播放头插值音量通道
+    const effGain = engine.clipVolumeAt(c, engine.playheadUs);
+    src._clipGain = effGain;
+    g.gain.value = engine.globalMuted ? 0 : effGain; // v1.3：previewMuted 播放端叠加
     src.connect(g).connect(engine.ctx.destination);
     let offset = (resumeOffsetSec != null) ? resumeOffsetSec : c.srcStartUs / 1e6;
     let dur = (resumeDurSec != null) ? resumeDurSec : (c.srcEndUs - c.srcStartUs) / 1e6 / (c.speed || 1);

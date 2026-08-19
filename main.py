@@ -1301,6 +1301,9 @@ KF_PROPS = {
     "transform.scaleY":    {"label": "缩放 Y", "default": 1.0, "export": "scale_y", "coord": None},
     "transform.rotate":    {"label": "旋转",   "default": 0.0, "export": "rotation", "coord": None},
     "transform.opacity":   {"label": "不透明度", "default": 1.0, "export": "alpha", "coord": None},
+    # 音量关键帧（OpenCut AudioTab ◆ 按钮）：value 存音量倍率(0~2)，与 seg["volume"] 同单位；
+    # 预览/导出时若有该通道则按播放头插值覆盖 base（对齐 OpenCut 动画通道覆盖 base 语义）
+    "volume":              {"label": "音量", "default": 1.0, "export": "volume", "coord": None},
 }
 KF_KEYFRAMEABLE = tuple(KF_PROPS.keys())
 
