@@ -723,6 +723,7 @@
 <script src="property/SliderField.js"></script>
 <script src="property/PropertyPanel.js"></script>
 <script src="property/audio-panel.js"></script>
+<script src="property/speed-panel.js"></script>
 <script>
 "use strict";
 
@@ -1243,7 +1244,7 @@ function renderPropertyPanel() {
   else if (activePanel === "stickerPanel") renderStickerPanel();
   else if (activePanel === "effectPanel") renderEffectPanel();
   else if (activePanel === "audioPanel") renderAudioTabPF();   // Phase 2：Property Framework 版（property/audio-panel.js）
-  else if (activePanel === "speedPanel") renderSpeedTab();
+  else if (activePanel === "speedPanel") renderSpeedTabPF();   // Phase 2：Property Framework 版（property/speed-panel.js）
 }
 
 // 特效属性面板（v0.9 P0）：选中特效段 → 由 Store.state.effects(EFFECT_META) 自动生成参数滑块 → 防抖调 update_effect。
