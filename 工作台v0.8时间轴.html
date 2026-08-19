@@ -146,15 +146,16 @@
   /* PropertiesPanel（2026-08-15 重构：4 面板统一加宽 280px + 空状态/多选/占位面板样式） */
   .tools-content .kfpanel, .tools-content .maskpanel, .tools-content .subpanel, .tools-content .stickerpanel,
   .tools-content .effectpanel,
-  .tools-content .empty-panel, .tools-content .multi-panel, .tools-content .placeholder-panel {
+  .tools-content .empty-panel, .tools-content .multi-panel, .tools-content .placeholder-panel,
+  .tools-content .audioPanel, .tools-content .speedPanel {
     display: none; border-top: none; width: 100%; flex: none; min-width: 0;
     background: var(--panel); border-left: 1px solid var(--border); overflow: hidden;
   }
   .tools-content .panel-active { display: flex !important; flex-direction: column; }
-  /* insp-panel（音频/速度）：2026-08-19 移到 body 直接子元素（脱离塌陷父级 .tools-content）+ fixed 浮窗 */
-  .insp-panel { position:fixed; top:42px; right:0; width:208px; height:auto; max-height:calc(100vh - 42px); background:var(--panel); border-left:1px solid var(--border); overflow-y:auto; z-index:50; }
-  .insp-panel > .head { padding: 10px; border-bottom: 1px solid var(--border); font-weight: 600; font-size: 12px; display: flex; align-items: center; gap: 6px; }
-  .insp-panel:not(.panel-active) { display: none; }
+  /* 兼容 body 子元素（若 .tools-content 塌陷导致 panel 不可见，body 子元素 fallback 仍然能匹配） */
+  .audioPanel, .speedPanel { background: var(--panel); border-left: 1px solid var(--border); overflow-y: auto; }
+  .audioPanel:not(.panel-active), .speedPanel:not(.panel-active) { display: none; }
+  .audioPanel > .head, .speedPanel > .head { padding: 10px; border-bottom: 1px solid var(--border); font-weight: 600; font-size: 12px; display: flex; align-items: center; gap: 6px; }
   .empty-panel { align-items: center; justify-content: center; text-align: center; color: var(--muted); font-size: 12px; padding: 32px 20px; line-height: 1.7; }
   .empty-panel .empty-icon { font-size: 36px; margin-bottom: 12px; opacity: .6; }
   .empty-panel .empty-title { font-size: 13px; font-weight: 500; color: var(--text); margin-bottom: 6px; }
@@ -632,7 +633,9 @@
     .tools-rail .rail-btn:hover { background:#2a2e37; color:var(--text); }
     .tools-rail .rail-btn.active { background:var(--primary-dim); border-color:var(--primary); color:var(--primary); }
     /* 统一 .tools-rail .rail-btn 已覆盖；此处旧 .rail-btn 规则删除（v0.9 P1，消除与 538 行的冲突） */
-    .tools-content { flex:1; min-width:0; overflow-y:auto; }
+    /* 2026-08-19 修 .tools-content 塌陷：.tools 高度撑满屏幕（100vh - 42px topbar），.tools-content 在 flex row 里自然 stretch */
+    .tools { height: calc(100vh - 42px); }
+    .tools-content { flex:1; min-width:0; overflow-y:auto; height:100%; }
     .tools-content .kfpanel, .tools-content .maskpanel, .tools-content .subpanel, .tools-content .stickerpanel, .tools-content .effectpanel,
     .tools-content .insp-panel { display:none; border-top:none; }
     .tools-content .panel-active { display:block; }
@@ -1157,22 +1160,11 @@ function renderPropertyPanel() {
     activePanel = TAB_TO_PANEL[activeTab] || "kfPanel";
   }
 
-  ["kfPanel", "maskPanel", "subPanel", "stickerPanel", "effectPanel", "emptyPanel", "multiPanel", "placeholderPanel"].forEach(id => {
+  ["kfPanel", "maskPanel", "subPanel", "stickerPanel", "effectPanel", "emptyPanel", "multiPanel", "placeholderPanel", "audioPanel", "speedPanel"].forEach(id => {
     const el = document.getElementById(id);
     if (!el) return;        // 防御：id 找不到跳过，不影响其他面板
     if (id === activePanel) el.classList.add("panel-active");
     else el.classList.remove("panel-active");
-  });
-  // 2026-08-19 修复：audioPanel/speedPanel 一次性移到 body 直接子元素
-  // —— 父级 .tools-content 容器塌陷导致 panel 即使 position:fixed 也被影响
-  // 移到 body 后 position:fixed 正常生效，固定显示在 .tools 右侧区域
-  ["audioPanel", "speedPanel"].forEach(id => {
-    const el = document.getElementById(id);
-    if (el && el.parentElement !== document.body) document.body.appendChild(el);
-    if (el) {
-      if (id === activePanel) el.classList.add("panel-active");
-      else el.classList.remove("panel-active");
-    }
   });
 
   document.querySelectorAll("#toolsRail .rail-btn").forEach(b => {
