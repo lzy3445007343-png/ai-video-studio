@@ -724,6 +724,7 @@
 <script src="property/PropertyPanel.js"></script>
 <script src="property/audio-panel.js"></script>
 <script src="property/speed-panel.js"></script>
+<script src="property/mask-panel.js"></script>
 <script>
 "use strict";
 
@@ -1239,7 +1240,7 @@ function renderPropertyPanel() {
 
   // 调对应 panel 渲染函数（2026-08-19：sub 同时渲染 ASR 控件层 renderSubtitlePanel + 段名层 renderSubPanel）
   if (activePanel === "kfPanel") renderKfPanel();
-  else if (activePanel === "maskPanel") renderMaskPanel();
+  else if (activePanel === "maskPanel") renderMaskPanelPF();   // Phase 3：Property Framework 版（property/mask-panel.js）
   else if (activePanel === "subPanel") { renderSubtitlePanel(); renderSubPanel(); }
   else if (activePanel === "stickerPanel") renderStickerPanel();
   else if (activePanel === "effectPanel") renderEffectPanel();
