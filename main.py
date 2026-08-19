@@ -79,6 +79,16 @@ class _SilentHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
     def log_message(self, format, *args):
         pass  # 关闭访问日志，保持控制台干净
 
+    def end_headers(self):
+        # 2026-08-19：HTML/JS/CSS 文档禁止缓存，确保改完代码重开 start.bat 立即生效。
+        # 否则 WebView2 按 Last-Modified 走 304 磁盘缓存，复用旧 HTML/JS → “改了代码没生效”。
+        p = self.path.split("?")[0].split("#")[0].lower()
+        if p.endswith((".html", ".htm", ".js", ".css")):
+            self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
+            self.send_header("Pragma", "no-cache")
+            self.send_header("Expires", "0")
+        super().end_headers()
+
     # ---- Range 支持（206 Partial Content）----
     def _parse_range(self, file_len):
         """解析 Range 头。返回 (start, end) 闭区间；None=全量；'error'=416。"""
@@ -188,30 +198,37 @@ class _SilentHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
             return
         super().do_HEAD()
 
-def _start_local_server(preferred=(8080, 8081, 8082, 8083, 8084, 8085)):
-    """尝试绑定 preferred 端口，失败则随机选 8000-9000 内可用端口。"""
+def _start_local_server(preferred=(8080, 8081, 8082, 8083, 8084, 8085, 8090, 8091, 8092, 0)):
+    """绑定本地媒体服务器。
+
+    ⚠️ 2026-08-19 关键修复：allow_reuse_port=False。
+    之前为 True，Windows 上允许多个 python 进程同绑 8080，OS 随机把连接分给某个进程——
+    只要有一个旧 main.py 进程还占着 8080，新窗口就可能被旧进程接走、发旧 HTML，
+    表现为“重启还旧构建 / 改了代码没生效”。关闭后：旧进程占着的端口新进程绝不再共享，
+    自动顺延到下一个空闲端口；末尾 port=0 让 OS 分配一个绝对空闲的随机端口，
+    保证新窗口永远连到“本次启动的新进程”服务的最新 HTML（与 ?v=时间戳 + no-cache 头三重保险）。
+    """
     class _ReusableTCPServer(socketserver.ThreadingTCPServer):
         allow_reuse_address = True
-        allow_reuse_port = True
+        allow_reuse_port = False
     for port in preferred:
         try:
             srv = _ReusableTCPServer(("127.0.0.1", port), _SilentHTTPRequestHandler)
             threading.Thread(target=srv.serve_forever, daemon=True).start()
-            return srv, port
-        except OSError:
-            continue
-    for port in range(8000, 9000):
-        try:
-            srv = _ReusableTCPServer(("127.0.0.1", port), _SilentHTTPRequestHandler)
-            threading.Thread(target=srv.serve_forever, daemon=True).start()
-            return srv, port
+            return srv, srv.server_address[1]
         except OSError:
             continue
     raise RuntimeError("无法为本地媒体服务器找到可用端口")
 
 _local_httpd, _LOCAL_PORT = _start_local_server()
 LOCAL_BASE_URL = f"http://127.0.0.1:{_LOCAL_PORT}"
-HTTP_URL = f"{LOCAL_BASE_URL}/工作台v0.8时间轴.html"
+# 2026-08-19：URL 带 ?v=<启动时间戳> 版本戳。每次重开 start.bat 时间戳必变→URL 必变→
+# WebView2 缓存键必变→必拉最新文件（与响应头 no-cache 双保险，彻底杜绝“改了没生效/重启还旧构建”）。
+# ⚠️ 之前用文件 mtime 做戳，但 mtime 只在“改 HTML”时变；两次重启间没改 HTML→戳不变→缓存命中旧构建。
+# 改用 time.time() 后，每次启动都强制刷新，与“我有没有改文件”无关。
+import time as _time
+_HTML_V = int(_time.time())
+HTTP_URL = f"{LOCAL_BASE_URL}/工作台v0.8时间轴.html?v={_HTML_V}"
 
 # 导入的素材统一复制到这里（相对项目，便于管理和将来写草稿时引用）
 ASSETS_DIR = os.path.join(HERE, "assets")
