@@ -63,9 +63,36 @@ const Store = {
     meta: { mcp: { connected: false, agent: "" } },
   },
   _subs: [],
+  /* =====================================================================
+   * Phase 5 订阅切片（ADR-2026-08-20 v2，Step 5.1 纯新增，不迁移任何业务渲染）
+   * =====================================================================
+   * - subscribeSlice(key, fn)：按状态切片订阅（一级字段名，如 playheadUs/selectedKey/drag）。
+   *   返回退订函数（防泄漏）。fn(value, state)。
+   * - renderSliceMode：feature flag。"legacy"= 切片订阅者 + 全量 _emit 双跑（迁移对照期）；
+   *   "slice"= 只跑切片订阅者（迁移完成）。避免"两套 UI 系统长期双跑"（GPT 审阅 R0）。
+   * - set()：计算 changed keys → 通知对应切片订阅者；legacy 模式仍 _emit()（行为零变化兜底）。
+   * - renderAll 保留不删（debug/导入/MCP 大批量/恢复路径显式调用，非广播订阅）。
+   */
+  _sliceSubs: {},
+  renderSliceMode: "legacy",
   subscribe(fn) { this._subs.push(fn); },
-  // 合并补丁并触发整树重绘
-  set(patch) { Object.assign(this.state, patch); this._emit(); },
+  subscribeSlice(key, fn) {
+    (this._sliceSubs[key] || (this._sliceSubs[key] = [])).push(fn);
+    return () => {
+      const arr = this._sliceSubs[key];
+      if (arr) { const i = arr.indexOf(fn); if (i >= 0) arr.splice(i, 1); }
+    };
+  },
+  // 合并补丁并触发渲染（切片订阅者必通知；legacy 模式额外全量 _emit）
+  set(patch) {
+    const changed = Object.keys(patch);
+    Object.assign(this.state, patch);
+    for (const k of changed) {
+      const fns = this._sliceSubs[k];
+      if (fns) for (const fn of fns) { try { fn(this.state[k], this.state); } catch (e) { console.error("[Store] 切片订阅者异常:", e); } }
+    }
+    if (this.renderSliceMode !== "slice") this._emit();
+  },
   // 直接通知（用于原地修改 state.drag 的逐帧拖拽，避免每帧重建对象）
   _emit() { for (const fn of this._subs) fn(this.state); },
 };
