@@ -552,18 +552,18 @@
     </div>
 
     <!-- 音频面板（2026-08-19 OpenCut Section 风格重做） -->
-    <div class="insp-panel" id="audioPanel" style="outline:4px solid red;background:#1a0020;">
-      <div class="head">音频 <span class="seg" id="audSegName"></span><button class="head-close" id="audClose" title="取消选择（Esc）">✕</button></div>
-      <div id="audBody" style="background:#0a2a0a;color:#9bff9b">
-        <div id="audDebug" style="padding:20px;font-size:11px;border:1px dashed #ff9b3a;margin:8px">⚠ DEBUG: audioPanel 默认占位 — 如果看到这段说明 panel 显示 OK，但 renderAudioTab 没填充。重启后如果仍只看到这段，请按 F12 看 console 里的 [debug-audio]</div>
+    <div class="insp-panel" id="audioPanel" style="outline:4px solid red !important;background:#1a0020 !important;z-index:99999;position:relative;">
+      <div class="head">音频 <span class="seg" id="audSegName"></span><button class="head-close" id="audClose" title="取消选择（Esc））✕</button></div>
+      <div id="audBody" style="background:#0a2a0a !important;color:#9bff9b !important;min-height:100px">
+        <div id="audDebug" style="padding:20px;font-size:11px;border:1px dashed #ff9b3a;margin:8px;color:#fff">⚠ DEBUG: audioPanel 默认占位 — 如果看到这段说明 panel 显示 OK，但 renderAudioTab 没填充。</div>
       </div>
     </div>
 
     <!-- 速度面板（2026-08-19 OpenCut Section 风格重做） -->
-    <div class="insp-panel" id="speedPanel" style="outline:4px solid red;background:#1a0020;">
-      <div class="head">速度 <span class="seg" id="spdSegName"></span><button class="head-close" id="spdClose" title="取消选择（Esc）">✕</button></div>
-      <div id="spdBody" style="background:#0a2a0a;color:#9bff9b">
-        <div id="spdDebug" style="padding:20px;font-size:11px;border:1px dashed #ff9b3a;margin:8px">⚠ DEBUG: speedPanel 默认占位 — 同上</div>
+    <div class="insp-panel" id="speedPanel" style="outline:4px solid red !important;background:#1a0020 !important;z-index:99999;position:relative;">
+      <div class="head">速度 <span class="seg" id="spdSegName"></span><button class="head-close" id="spdClose" title="取消选择（Esc））✕</button></div>
+      <div id="spdBody" style="background:#0a2a0a !important;color:#9bff9b !important;min-height:100px">
+        <div id="spdDebug" style="padding:20px;font-size:11px;border:1px dashed #ff9b3a;margin:8px;color:#fff">⚠ DEBUG: speedPanel 默认占位 — 同上</div>
       </div>
     </div>
     <div class="effectpanel" id="effectPanel">
@@ -1300,9 +1300,21 @@ function buildSegRefs() {
 // 支持批量：多选视频/音频段时应用到全部（set_segments_props 一次提交）
 function renderAudioTab() {
   const bodyEl = $("audBody"), nameEl = $("audSegName");
-  // DEBUG 2026-08-19 诊断可见性 bug：红 outline 强制显示 + computed style 报告
+  // DEBUG 2026-08-19：z-index/position/red outline 强制可见 + getBoundingClientRect 真实位置
   const p = document.getElementById("audioPanel");
-  console.log("[debug-audio] renderAudioTab 进入了", { selectedKey: Store.state.selectedKey, selectedKeys: Store.state.selectedKeys, audioPanel_classList: p?.className, audioPanel_computedDisplay: p ? getComputedStyle(p).display : "NO_PANEL", audioPanel_computedWidth: p ? getComputedStyle(p).width : "NO_PANEL", audioPanel_computedHeight: p ? getComputedStyle(p).height : "NO_PANEL", audioPanel_outerHTML: p?.outerHTML?.substring(0, 200) });
+  const t = document.getElementById("toolsPanel");
+  const tc = document.querySelector(".tools-content");
+  console.log("[debug-audio] renderAudioTab", {
+    selectedKey: Store.state.selectedKey,
+    audioPanel_classList: p?.className,
+    audioPanel_computedDisplay: p ? getComputedStyle(p).display : null,
+    audioPanel_computedZIndex: p ? getComputedStyle(p).zIndex : null,
+    audioPanel_computedPosition: p ? getComputedStyle(p).position : null,
+    audioPanel_bbox: p?.getBoundingClientRect(),
+    toolsPanel_bbox: t?.getBoundingClientRect(),
+    toolsContent_bbox: tc?.getBoundingClientRect(),
+    toolsContent_computedWidth: tc ? getComputedStyle(tc).width : null,
+  });
   if (!bodyEl) return;
   const refs = buildSegRefs();
   if (!refs.length) { bodyEl.innerHTML = '<div class="empty-hint" style="padding:24px;text-align:center">未选中片段</div>'; if (nameEl) nameEl.textContent = ""; return; }
