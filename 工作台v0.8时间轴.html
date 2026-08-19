@@ -146,7 +146,8 @@
   /* PropertiesPanel（2026-08-15 重构：4 面板统一加宽 280px + 空状态/多选/占位面板样式） */
   .tools-content .kfpanel, .tools-content .maskpanel, .tools-content .subpanel, .tools-content .stickerpanel,
   .tools-content .effectpanel,
-  .tools-content .empty-panel, .tools-content .multi-panel, .tools-content .placeholder-panel {
+  .tools-content .empty-panel, .tools-content .multi-panel, .tools-content .placeholder-panel,
+  .tools-content .insp-panel {
     display: none; border-top: none; width: 100%; flex: none; min-width: 0;
     background: var(--panel); border-left: 1px solid var(--border); overflow: hidden;
   }
@@ -551,13 +552,13 @@
     </div>
 
     <!-- 音频面板（2026-08-19 OpenCut Section 风格重做） -->
-    <div class="insp-panel" id="audioPanel" style="display:none">
+    <div class="insp-panel" id="audioPanel">
       <div class="head">音频 <span class="seg" id="audSegName"></span><button class="head-close" id="audClose" title="取消选择（Esc）">✕</button></div>
       <div id="audBody"></div>
     </div>
 
     <!-- 速度面板（2026-08-19 OpenCut Section 风格重做） -->
-    <div class="insp-panel" id="speedPanel" style="display:none">
+    <div class="insp-panel" id="speedPanel">
       <div class="head">速度 <span class="seg" id="spdSegName"></span><button class="head-close" id="spdClose" title="取消选择（Esc）">✕</button></div>
       <div id="spdBody"></div>
     </div>
@@ -629,7 +630,8 @@
     .tools-rail .rail-btn.active { background:var(--primary-dim); border-color:var(--primary); color:var(--primary); }
     /* 统一 .tools-rail .rail-btn 已覆盖；此处旧 .rail-btn 规则删除（v0.9 P1，消除与 538 行的冲突） */
     .tools-content { flex:1; min-width:0; overflow-y:auto; }
-    .tools-content .kfpanel, .tools-content .maskpanel, .tools-content .subpanel, .tools-content .stickerpanel, .tools-content .effectpanel { display:none; border-top:none; }
+    .tools-content .kfpanel, .tools-content .maskpanel, .tools-content .subpanel, .tools-content .stickerpanel, .tools-content .effectpanel,
+    .tools-content .insp-panel { display:none; border-top:none; }
     .tools-content .panel-active { display:block; }
     /* Skill 弹窗（顶栏按钮触发） */
     .modal-mask { position:fixed; inset:0; background:rgba(0,0,0,.5); display:flex; align-items:center; justify-content:center; z-index:9000; }
