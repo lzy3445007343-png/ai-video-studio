@@ -151,8 +151,8 @@
     background: var(--panel); border-left: 1px solid var(--border); overflow: hidden;
   }
   .tools-content .panel-active { display: flex !important; flex-direction: column; }
-  /* insp-panel（音频/速度）：2026-08-19 移到 body 直接子元素（脱离塌陷父级 .tools-content）+ position:fixed 浮在 .tools 区域 */
-  .insp-panel { position:fixed; top:42px; right:0; width:calc(var(--tools-w, 280px) - 72px); height:calc(100vh - 42px); background:var(--panel); border-left:1px solid var(--border); overflow-y:auto; z-index:50; }
+  /* insp-panel（音频/速度）：2026-08-19 移到 body 直接子元素（脱离塌陷父级 .tools-content）+ fixed 浮窗 */
+  .insp-panel { position:fixed; top:42px; right:0; width:208px; height:auto; max-height:calc(100vh - 42px); background:var(--panel); border-left:1px solid var(--border); overflow-y:auto; z-index:50; }
   .insp-panel > .head { padding: 10px; border-bottom: 1px solid var(--border); font-weight: 600; font-size: 12px; display: flex; align-items: center; gap: 6px; }
   .insp-panel:not(.panel-active) { display: none; }
   .empty-panel { align-items: center; justify-content: center; text-align: center; color: var(--muted); font-size: 12px; padding: 32px 20px; line-height: 1.7; }
