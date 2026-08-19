@@ -148,7 +148,7 @@
   .tools-content .effectpanel,
   .tools-content .empty-panel, .tools-content .multi-panel, .tools-content .placeholder-panel,
   .tools-content .insp-panel {
-    display: none; border-top: none; width: 100%; flex: 1; min-width: 0; min-height: 0;
+    display: none; border-top: none; width: 100%; flex: 1; min-width: 0; min-height: 200px;
     background: var(--panel); border-left: 1px solid var(--border); overflow: hidden;
     flex-direction: column;
   }
@@ -660,7 +660,7 @@
     .tools { height: calc(100vh - 42px); }
     .tools-content { flex:1; min-width:0; overflow-y:auto; height:100%; }
     .tools-content .kfpanel, .tools-content .maskpanel, .tools-content .subpanel, .tools-content .stickerpanel, .tools-content .effectpanel,
-    .tools-content .insp-panel { display:none; border-top:none; }
+    .tools-content .insp-panel { display:none; border-top:none; min-height: 200px; }
     .tools-content .panel-active { display:block; }
     /* Skill 弹窗（顶栏按钮触发） */
     .modal-mask { position:fixed; inset:0; background:rgba(0,0,0,.5); display:flex; align-items:center; justify-content:center; z-index:9000; }
