@@ -1303,12 +1303,15 @@ function buildSegRefs() {
 // 支持批量：多选视频/音频段时应用到全部（set_segments_props 一次提交）
 function renderAudioTab() {
   const bodyEl = $("audBody"), nameEl = $("audSegName");
-  // DEBUG 2026-08-19：JS 强制设样式 + 完整报告（同时写到屏幕，用户直接看，不用 console）
+  // DEBUG 2026-08-19：audioPanel 移到 body 直接子元素 + 强制 fixed left:0（彻底脱离 .tools-content 父级）
   const p = document.getElementById("audioPanel");
+  if (p && p.parentElement !== document.body) {
+    document.body.appendChild(p);   // 移到 body 直接子元素，脱离 .tools-content
+  }
   if (p) {
     p.style.position = "fixed";
-    p.style.top = "40px";
-    p.style.right = "0";
+    p.style.top = "0";
+    p.style.left = "0";
     p.style.width = "320px";
     p.style.height = "420px";
     p.style.zIndex = "999999";
@@ -1327,8 +1330,6 @@ function renderAudioTab() {
     h: p ? getComputedStyle(p).height : null,
     offsetW: p?.offsetWidth,
     offsetH: p?.offsetHeight,
-    inlineStyle: p?.getAttribute("style")?.substring(0, 80),
-    outerHTML: p?.outerHTML?.substring(0, 120),
     parentTag: p?.parentElement?.tagName,
     parentCls: p?.parentElement?.className,
     bbox: p?.getBoundingClientRect(),
@@ -1336,12 +1337,9 @@ function renderAudioTab() {
     toolsOverflow: tc ? getComputedStyle(tc).overflow : null,
   };
   console.log("[debug-audio]", r);
-  // 同步显示到屏幕（红底白字）——用户直接看，不用 DevTools
   if (bodyEl) {
-    bodyEl.innerHTML =
-      '<div style="background:#000;color:#0f0;font:11px/1.5 monospace;padding:8px;white-space:pre;overflow:auto">' +
-      "🔍 DEBUG: " + JSON.stringify(r, null, 2) +
-      "</div>";
+    bodyEl.innerHTML = '<div style="background:#000;color:#0f0;font:11px/1.5 monospace;padding:8px;white-space:pre;overflow:auto"></div>';
+    bodyEl.firstChild.textContent = "🔍 DEBUG: " + JSON.stringify(r, null, 2);
   }
   if (!bodyEl) return;
   const refs = buildSegRefs();
