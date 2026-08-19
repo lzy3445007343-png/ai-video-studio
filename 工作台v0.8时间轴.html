@@ -1303,20 +1303,36 @@ function buildSegRefs() {
 // 支持批量：多选视频/音频段时应用到全部（set_segments_props 一次提交）
 function renderAudioTab() {
   const bodyEl = $("audBody"), nameEl = $("audSegName");
-  // DEBUG 2026-08-19：z-index/position/red outline 强制可见 + getBoundingClientRect 真实位置
+  // DEBUG 2026-08-19：JS 强制设样式（不依赖 HTML inline style 解析），并完整报告
   const p = document.getElementById("audioPanel");
+  if (p) {
+    p.style.position = "fixed";
+    p.style.top = "40px";
+    p.style.right = "0";
+    p.style.width = "320px";
+    p.style.height = "420px";
+    p.style.zIndex = "999999";
+    p.style.outline = "4px solid red";
+    p.style.background = "#1a0020";
+  }
   const t = document.getElementById("toolsPanel");
   const tc = document.querySelector(".tools-content");
   console.log("[debug-audio] renderAudioTab", {
     selectedKey: Store.state.selectedKey,
+    audioPanel_tag: p?.tagName,
     audioPanel_classList: p?.className,
     audioPanel_computedDisplay: p ? getComputedStyle(p).display : null,
     audioPanel_computedZIndex: p ? getComputedStyle(p).zIndex : null,
     audioPanel_computedPosition: p ? getComputedStyle(p).position : null,
+    audioPanel_computedWidth: p ? getComputedStyle(p).width : null,
+    audioPanel_computedHeight: p ? getComputedStyle(p).height : null,
+    audioPanel_inlineStyle: p?.getAttribute("style")?.substring(0, 200),
+    audioPanel_outerHTML: p?.outerHTML?.substring(0, 150),
     audioPanel_bbox: p?.getBoundingClientRect(),
     toolsPanel_bbox: t?.getBoundingClientRect(),
     toolsContent_bbox: tc?.getBoundingClientRect(),
     toolsContent_computedWidth: tc ? getComputedStyle(tc).width : null,
+    toolsContent_computedOverflow: tc ? getComputedStyle(tc).overflow : null,
   });
   if (!bodyEl) return;
   const refs = buildSegRefs();
