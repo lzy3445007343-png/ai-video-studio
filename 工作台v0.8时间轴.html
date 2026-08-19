@@ -146,7 +146,6 @@
   /* PropertiesPanel（2026-08-15 重构：4 面板统一加宽 280px + 空状态/多选/占位面板样式） */
   .tools-content .kfpanel, .tools-content .maskpanel, .tools-content .subpanel, .tools-content .stickerpanel,
   .tools-content .effectpanel,
-  .tools-content .empty-panel, .tools-content .multi-panel, .tools-content .placeholder-panel,
   .tools-content .insp-panel {
     display: none; border-top: none; width: 100%; flex: none; min-width: 0; min-height: 0;
     background: var(--panel); border-left: 1px solid var(--border); overflow: hidden;
@@ -166,14 +165,6 @@
   .prop-multi-icon { font-size:36px; opacity:0.6; margin-bottom:4px; }
   .prop-multi-count { font-size:13px; font-weight:500; color:var(--text); }
   .prop-multi-hint { font-size:11px; color:var(--muted); text-align:center; max-width:200px; }
-  .empty-panel { align-items: center; justify-content: center; text-align: center; color: var(--muted); font-size: 12px; padding: 32px 20px; line-height: 1.7; }
-  .empty-panel .empty-icon { font-size: 36px; margin-bottom: 12px; opacity: .6; }
-  .empty-panel .empty-title { font-size: 13px; font-weight: 500; color: var(--text); margin-bottom: 6px; }
-  .empty-panel .empty-hint { font-size: 11px; color: var(--muted); }
-  .multi-panel { align-items: center; justify-content: center; text-align: center; color: var(--muted); font-size: 13px; padding: 32px 20px; }
-  .placeholder-panel { align-items: center; justify-content: center; text-align: center; color: var(--muted); font-size: 12px; padding: 32px 16px; line-height: 1.7; }
-  .placeholder-panel .ph-icon { font-size: 32px; margin-bottom: 10px; opacity: .5; }
-  .placeholder-panel .ph-title { font-size: 13px; font-weight: 500; color: var(--text); margin-bottom: 4px; }
   /* OpenCut Section 风格面板（2026-08-19 audio/speed 重做） */
   .insp-panel { background: var(--panel); border-left: 1px solid var(--border); overflow-y: auto; width: 100%; min-height: 200px; display: flex; flex-direction: column; }
   .insp-panel:not(.panel-active) { display: none; }
@@ -1337,6 +1328,8 @@ function buildSegRefs() {
 function renderAudioTab() {
   const bodyEl = $("audBody"), nameEl = $("audSegName");
   if (!bodyEl) return;
+  // 编辑中(音量输入框正聚焦)跳过重建,保住焦点 —— 对齐 OpenCut usePropertyDraft 两阶段
+  if (document.activeElement && bodyEl.contains(document.activeElement)) return;
   const refs = buildSegRefs();
   if (!refs.length) {
     bodyEl.innerHTML = '<div class="insp-empty" style="padding:24px;text-align:center;color:var(--muted)">未选中片段</div>';
@@ -1377,21 +1370,22 @@ function renderAudioTab() {
     '</div>';
   const volIn = $("audVol");
   if (volIn) {
-    const apply = (v) => {
+    // 两阶段(对齐 OpenCut usePropertyDraft):编辑中只改内存+实时预览,失焦/回车才提交后端
+    const preview = (v) => {
       v = Math.max(0, Math.min(200, v)) / 100;
       refs.forEach(r => { if (r.seg) r.seg.volume = v; });
       renderPreview();
-      clearTimeout(volIn._t);
-      volIn._t = setTimeout(() => {
-        if (isBatch) call("set_segments_props", refs.map(r => ({ segid: r.segid, props: { volume: v } }))).then(refresh);
-        else call("set_segment_volume", refs[0].type, refs[0].ti, refs[0].idx, v, refs[0].segid).then(refresh);
-      }, 250);
     };
-    volIn.addEventListener("input", () => { const v = parseFloat(volIn.value); if (!isNaN(v)) apply(v); });
-    volIn.addEventListener("blur", () => { volIn.value = String(Math.round((refs[0].seg.volume == null ? 1 : refs[0].seg.volume) * 100)); });
-    volIn.addEventListener("keydown", e => { if (e.key === "Enter") volIn.blur(); });
+    const commit = (v) => {
+      v = Math.max(0, Math.min(200, v)) / 100;
+      if (isBatch) call("set_segments_props", refs.map(r => ({ segid: r.segid, props: { volume: v } }))).then(refresh);
+      else call("set_segment_volume", refs[0].type, refs[0].ti, refs[0].idx, v, refs[0].segid).then(refresh);
+    };
+    volIn.addEventListener("input", () => { const v = parseFloat(volIn.value); if (!isNaN(v)) preview(v); });
+    volIn.addEventListener("blur", () => { const v = parseFloat(volIn.value); commit(isNaN(v) ? pct : v); });
+    volIn.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); volIn.blur(); } });
     const rst = $("audVolReset");
-    if (rst) rst.addEventListener("click", () => { volIn.value = "100"; apply(100); });
+    if (rst) rst.addEventListener("click", () => { volIn.value = "100"; preview(100); commit(100); });
   }
   const muteEl = $("audMute");
   if (muteEl) muteEl.addEventListener("click", () => {
@@ -1409,6 +1403,8 @@ function renderAudioTab() {
 function renderSpeedTab() {
   const bodyEl = $("spdBody"), nameEl = $("spdSegName");
   if (!bodyEl) return;
+  // 编辑中(速度输入框正聚焦)跳过重建,保住焦点 —— 对齐 OpenCut usePropertyDraft 两阶段
+  if (document.activeElement && bodyEl.contains(document.activeElement)) return;
   const refs = buildSegRefs();
   if (!refs.length) {
     bodyEl.innerHTML = '<div class="insp-empty" style="padding:24px;text-align:center;color:var(--muted)">未选中片段</div>';
@@ -1450,15 +1446,22 @@ function renderSpeedTab() {
     '</div>';
   const spdIn = $("spdVal");
   if (spdIn) {
-    const apply = (v) => {
+    // 两阶段(对齐 OpenCut usePropertyDraft):编辑中只改内存+实时预览,失焦/回车才提交后端
+    const preview = (v) => {
+      v = Math.max(0.01, Math.min(5, v));
+      refs.forEach(r => { if (r.seg) r.seg.speed = v; });
+      renderPreview();
+    };
+    const commit = (v) => {
       v = Math.max(0.01, Math.min(5, v));
       if (isBatch) call("set_segments_props", refs.map(r => ({ segid: r.segid, props: { speed: v } }))).then(refresh);
       else call("set_segment_speed", refs[0].type, refs[0].ti, refs[0].idx, v, null, refs[0].segid).then(refresh);
     };
-    spdIn.addEventListener("change", () => { const v = parseFloat(spdIn.value); if (!isNaN(v)) apply(v); else spdIn.value = String(spd); });
-    spdIn.addEventListener("keydown", e => { if (e.key === "Enter") spdIn.blur(); });
+    spdIn.addEventListener("input", () => { const v = parseFloat(spdIn.value); if (!isNaN(v)) preview(v); });
+    spdIn.addEventListener("blur", () => { const v = parseFloat(spdIn.value); commit(isNaN(v) ? spd : v); });
+    spdIn.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); spdIn.blur(); } });
     const rst = $("spdValReset");
-    if (rst) rst.addEventListener("click", () => { spdIn.value = "1"; apply(1); });
+    if (rst) rst.addEventListener("click", () => { spdIn.value = "1"; preview(1); commit(1); });
   }
   const pitchEl = $("spdPitch");
   if (pitchEl) pitchEl.addEventListener("click", () => {
