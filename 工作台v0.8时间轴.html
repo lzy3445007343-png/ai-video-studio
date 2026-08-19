@@ -146,12 +146,15 @@
   /* PropertiesPanel（2026-08-15 重构：4 面板统一加宽 280px + 空状态/多选/占位面板样式） */
   .tools-content .kfpanel, .tools-content .maskpanel, .tools-content .subpanel, .tools-content .stickerpanel,
   .tools-content .effectpanel,
-  .tools-content .empty-panel, .tools-content .multi-panel, .tools-content .placeholder-panel,
-  .tools-content .insp-panel {
+  .tools-content .empty-panel, .tools-content .multi-panel, .tools-content .placeholder-panel {
     display: none; border-top: none; width: 100%; flex: none; min-width: 0;
     background: var(--panel); border-left: 1px solid var(--border); overflow: hidden;
   }
   .tools-content .panel-active { display: flex !important; flex-direction: column; }
+  /* insp-panel（音频/速度）：2026-08-19 移到 body 直接子元素（脱离塌陷父级 .tools-content）+ position:fixed 浮在 .tools 区域 */
+  .insp-panel { position:fixed; top:42px; right:0; width:calc(var(--tools-w, 280px) - 72px); height:calc(100vh - 42px); background:var(--panel); border-left:1px solid var(--border); overflow-y:auto; z-index:50; }
+  .insp-panel > .head { padding: 10px; border-bottom: 1px solid var(--border); font-weight: 600; font-size: 12px; display: flex; align-items: center; gap: 6px; }
+  .insp-panel:not(.panel-active) { display: none; }
   .empty-panel { align-items: center; justify-content: center; text-align: center; color: var(--muted); font-size: 12px; padding: 32px 20px; line-height: 1.7; }
   .empty-panel .empty-icon { font-size: 36px; margin-bottom: 12px; opacity: .6; }
   .empty-panel .empty-title { font-size: 13px; font-weight: 500; color: var(--text); margin-bottom: 6px; }
@@ -551,23 +554,16 @@
       <div id="phContent"></div>
     </div>
 
-    <!-- 音频面板（2026-08-19 OpenCut Section 风格重做） -->
-    <!-- DEBUG 2026-08-19 决定性诊断：position:fixed 钉死右上角，无视父级布局。
-         重启后：看到浮层=容器布局错位（audioPanel 在容器里被挤没了）；
-         看不到=JS 层根本没渲染/被移除。确认后立即移除本 hack。 -->
-    <div class="insp-panel" id="audioPanel" style="position:fixed !important;top:40px;right:0;width:320px;height:420px;z-index:999999;outline:4px solid red;background:#1a0020;">
+    <!-- 音频面板（2026-08-19）：脱离父级塌陷→移到 body + fixed 右侧栏宽度 -->
+    <div class="insp-panel" id="audioPanel">
       <div class="head">音频 <span class="seg" id="audSegName"></span><button class="head-close" id="audClose" title="取消选择（Esc）">✕</button></div>
-      <div id="audBody" style="background:#0a2a0a;color:#9bff9b;min-height:100px">
-        <div id="audDebug" style="padding:20px;font-size:11px;border:1px dashed #ff9b3a;margin:8px;color:#fff">⚠ DEBUG: audioPanel 默认占位 — 如果看到这段说明 panel 渲染了。</div>
-      </div>
+      <div id="audBody"></div>
     </div>
 
-    <!-- 速度面板（2026-08-19 OpenCut Section 风格重做） -->
-    <div class="insp-panel" id="speedPanel" style="position:fixed !important;top:40px;right:0;width:320px;height:420px;z-index:999999;outline:4px solid red;background:#1a0020;">
+    <!-- 速度面板（2026-08-19）：同上 -->
+    <div class="insp-panel" id="speedPanel">
       <div class="head">速度 <span class="seg" id="spdSegName"></span><button class="head-close" id="spdClose" title="取消选择（Esc）">✕</button></div>
-      <div id="spdBody" style="background:#0a2a0a;color:#9bff9b;min-height:100px">
-        <div id="spdDebug" style="padding:20px;font-size:11px;border:1px dashed #ff9b3a;margin:8px;color:#fff">⚠ DEBUG: speedPanel 默认占位 — 同上</div>
-      </div>
+      <div id="spdBody"></div>
     </div>
     <div class="effectpanel" id="effectPanel">
       <div class="head">特效 <span class="seg" id="effSegName"></span><button class="head-close" id="effClose" title="取消选择（Esc）">✕</button></div>
@@ -1161,11 +1157,22 @@ function renderPropertyPanel() {
     activePanel = TAB_TO_PANEL[activeTab] || "kfPanel";
   }
 
-  ["kfPanel", "maskPanel", "subPanel", "stickerPanel", "effectPanel", "emptyPanel", "multiPanel", "placeholderPanel", "audioPanel", "speedPanel"].forEach(id => {
+  ["kfPanel", "maskPanel", "subPanel", "stickerPanel", "effectPanel", "emptyPanel", "multiPanel", "placeholderPanel"].forEach(id => {
     const el = document.getElementById(id);
     if (!el) return;        // 防御：id 找不到跳过，不影响其他面板
     if (id === activePanel) el.classList.add("panel-active");
     else el.classList.remove("panel-active");
+  });
+  // 2026-08-19 修复：audioPanel/speedPanel 一次性移到 body 直接子元素
+  // —— 父级 .tools-content 容器塌陷导致 panel 即使 position:fixed 也被影响
+  // 移到 body 后 position:fixed 正常生效，固定显示在 .tools 右侧区域
+  ["audioPanel", "speedPanel"].forEach(id => {
+    const el = document.getElementById(id);
+    if (el && el.parentElement !== document.body) document.body.appendChild(el);
+    if (el) {
+      if (id === activePanel) el.classList.add("panel-active");
+      else el.classList.remove("panel-active");
+    }
   });
 
   document.querySelectorAll("#toolsRail .rail-btn").forEach(b => {
@@ -1299,48 +1306,10 @@ function buildSegRefs() {
   return out;
 }
 
-// 音频面板（2026-08-19 OpenCut Section 风格重做）：音量 NumberField + 静音 Switch
+// 音频面板（2026-08-19 OpenCut Section 风格）：音量 NumberField + 静音 Switch
 // 支持批量：多选视频/音频段时应用到全部（set_segments_props 一次提交）
 function renderAudioTab() {
   const bodyEl = $("audBody"), nameEl = $("audSegName");
-  // DEBUG 2026-08-19：audioPanel 移到 body 直接子元素 + 强制 fixed left:0（彻底脱离 .tools-content 父级）
-  const p = document.getElementById("audioPanel");
-  if (p && p.parentElement !== document.body) {
-    document.body.appendChild(p);   // 移到 body 直接子元素，脱离 .tools-content
-  }
-  if (p) {
-    p.style.position = "fixed";
-    p.style.top = "0";
-    p.style.left = "0";
-    p.style.width = "320px";
-    p.style.height = "420px";
-    p.style.zIndex = "999999";
-    p.style.outline = "4px solid red";
-    p.style.background = "#1a0020";
-  }
-  const t = document.getElementById("toolsPanel");
-  const tc = document.querySelector(".tools-content");
-  const r = {
-    selectedKey: Store.state.selectedKey,
-    tag: p?.tagName,
-    cls: p?.className,
-    dis: p ? getComputedStyle(p).display : null,
-    pos: p ? getComputedStyle(p).position : null,
-    w: p ? getComputedStyle(p).width : null,
-    h: p ? getComputedStyle(p).height : null,
-    offsetW: p?.offsetWidth,
-    offsetH: p?.offsetHeight,
-    parentTag: p?.parentElement?.tagName,
-    parentCls: p?.parentElement?.className,
-    bbox: p?.getBoundingClientRect(),
-    toolsW: tc ? getComputedStyle(tc).width : null,
-    toolsOverflow: tc ? getComputedStyle(tc).overflow : null,
-  };
-  console.log("[debug-audio]", r);
-  if (bodyEl) {
-    bodyEl.innerHTML = '<div style="background:#000;color:#0f0;font:11px/1.5 monospace;padding:8px;white-space:pre;overflow:auto"></div>';
-    bodyEl.firstChild.textContent = "🔍 DEBUG: " + JSON.stringify(r, null, 2);
-  }
   if (!bodyEl) return;
   const refs = buildSegRefs();
   if (!refs.length) { bodyEl.innerHTML = '<div class="empty-hint" style="padding:24px;text-align:center">未选中片段</div>'; if (nameEl) nameEl.textContent = ""; return; }
@@ -1402,10 +1371,9 @@ function renderAudioTab() {
   });
 }
 
-// 速度面板（2026-08-19 OpenCut Section 风格重做）：速度 NumberField(x) + 变音 Switch
+// 速度面板（2026-08-19 OpenCut Section 风格）：速度 NumberField(x) + 变音 Switch
 // 变速走后端 set_segment_speed（重算 duration）；支持批量
 function renderSpeedTab() {
-  console.log("[debug-speed] renderSpeedTab 进入了，selectedKey=", Store.state.selectedKey, "speedPanel classList=", document.getElementById("speedPanel")?.className);
   const bodyEl = $("spdBody"), nameEl = $("spdSegName");
   if (!bodyEl) return;
   const refs = buildSegRefs();
