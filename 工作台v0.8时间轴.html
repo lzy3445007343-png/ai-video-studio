@@ -458,6 +458,17 @@
         </button>
       </div>
       <div class="tools-content" id="toolsContent">
+    <!-- OpenCut 风格三态 view（独立 div 切 display，绝不清空 root——保护 kfPanel/maskPanel/audioPanel 等子元素） -->
+    <div id="propEmptyView" class="prop-empty-view" style="display:none">
+      <div class="prop-empty-icon">⚙</div>
+      <div class="prop-empty-title">这里空无一人</div>
+      <div class="prop-empty-hint">点击时间轴上的片段以编辑其属性</div>
+    </div>
+    <div id="propMultiView" class="prop-multi-view" style="display:none">
+      <div class="prop-multi-icon">◫</div>
+      <div class="prop-multi-count" id="propMultiCount">0 个片段已选中</div>
+      <div class="prop-multi-hint">批量音量/速度：选中全为视频/音频段时可同时修改</div>
+    </div>
     <div class="kfpanel" id="kfPanel">
       <div class="head">关键帧 <span class="seg" id="kfSegName"></span><button class="head-close" id="kfClose" title="取消选择（Esc）">✕</button></div>
       <div class="body" id="kfBody">
@@ -1164,30 +1175,27 @@ function renderPropertyPanel() {
   const multiCount = (Store.state.selectedKeys || []).length;
   const type = s ? s.type : null;
 
-  // 1. 无选中：EmptyView（OpenCut 风格 ⚙ 图标 + 文案）
+  // 1. 无选中：EmptyView（OpenCut 风格 ⚙ 图标 + 文案）——用 div 切换 display，绝不清空 root
   if (!type && multiCount === 0) {
-    // 清空 root，隐藏所有 panel
-    root.innerHTML = '<div class="prop-empty-view">'
-      + '<div class="prop-empty-icon">⚙</div>'
-      + '<div class="prop-empty-title">这里空无一人</div>'
-      + '<div class="prop-empty-hint">点击时间轴上的片段以编辑其属性</div>'
-      + '</div>';
+    const ev = $("propEmptyView");
+    if (ev) ev.style.display = "";
+    const mv = $("propMultiView"); if (mv) mv.style.display = "none";
     // 隐藏所有 panel（清掉 panel-active）
     ["kfPanel","maskPanel","subPanel","stickerPanel","effectPanel","audioPanel","speedPanel","multiPanel","emptyPanel","placeholderPanel"].forEach(id => {
       const el = document.getElementById(id); if (el) el.classList.remove("panel-active");
     });
-    // 禁用所有 rail
     document.querySelectorAll("#toolsRail .rail-btn").forEach(b => { b.setAttribute("disabled", "true"); b.classList.remove("active"); });
     return;
   }
 
   // 2. 多选：multiPanel
   if (multiCount > 1) {
-    root.innerHTML = '<div class="prop-multi-view">'
-      + '<div class="prop-multi-icon">◫</div>'
-      + '<div class="prop-multi-count">' + multiCount + ' 个片段已选中</div>'
-      + '<div class="prop-multi-hint">批量音量/速度：选中全为视频/音频段时可同时修改</div>'
-      + '</div>';
+    const mv = $("propMultiView");
+    if (mv) {
+      mv.style.display = "";
+      const mc = $("propMultiCount"); if (mc) mc.textContent = multiCount + " 个片段已选中";
+    }
+    const ev = $("propEmptyView"); if (ev) ev.style.display = "none";
     ["kfPanel","maskPanel","subPanel","stickerPanel","effectPanel","audioPanel","speedPanel","multiPanel","emptyPanel","placeholderPanel"].forEach(id => {
       const el = document.getElementById(id); if (el) el.classList.remove("panel-active");
     });
@@ -1195,12 +1203,9 @@ function renderPropertyPanel() {
     return;
   }
 
-  // 3. 单选：清 root 暂时为空，把现有 panel 元素（kfPanel/audioPanel/...）按 active tab 显示
-  // 关键：root.innerHTML = '' 不再丢失 panel 元素——而是把 panel 元素 appendChild 到 root
-  //      这样保持原 panel 元素的事件绑定和数据
-  // 但用户已经点击 tab 时，renderAll 周期性调用——保持 root 不动
-  // 简化：root 不重写，让 panel-active class 控制
-  const enabled = new Set(PROPERTY_TABS_BY_TYPE[type] || ["kf"]);
+  // 3. 单选：隐藏 empty/multi view，用 panel-active 切当前 tab 的 panel
+  const ev2 = $("propEmptyView"); if (ev2) ev2.style.display = "none";
+  const mv2 = $("propMultiView"); if (mv2) mv2.style.display = "none";
   const activeTab = (activeToolTab && enabled.has(activeToolTab)) ? activeToolTab
                   : (PROPERTY_DEFAULT_TAB_BY_TYPE[type] || "kf");
   const activePanel = TAB_TO_PANEL[activeTab] || "kfPanel";
