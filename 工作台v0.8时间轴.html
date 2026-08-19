@@ -175,9 +175,10 @@
   .placeholder-panel .ph-icon { font-size: 32px; margin-bottom: 10px; opacity: .5; }
   .placeholder-panel .ph-title { font-size: 13px; font-weight: 500; color: var(--text); margin-bottom: 4px; }
   /* OpenCut Section 风格面板（2026-08-19 audio/speed 重做） */
-  .insp-panel { background: var(--panel); border-left: 1px solid var(--border); overflow-y: auto; }
+  .insp-panel { background: var(--panel); border-left: 1px solid var(--border); overflow-y: auto; width: 100%; min-height: 200px; display: flex; flex-direction: column; }
   .insp-panel:not(.panel-active) { display: none; }
   .insp-panel > .head { padding: 10px; border-bottom: 1px solid var(--border); font-weight: 600; font-size: 12px; display: flex; align-items: center; gap: 6px; }
+  #audBody, #spdBody { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow-y: auto; padding: 4px 0; }
   .insp-section { border-bottom: 1px solid var(--border); }
   .insp-section:last-child { border-bottom: none; }
   .insp-section-head { height: 40px; display: flex; align-items: center; gap: 8px; padding: 0 14px; cursor: pointer; user-select: none; }
@@ -1347,24 +1348,31 @@ function buildSegRefs() {
   return out;
 }
 
-// 音频面板（2026-08-19 OpenCut Section 风格）：音量 NumberField + 静音 Switch
+// 音频面板（2026-08-19 Step2 OpenCut AudioTab 风格重写）：
+// 音量 NumberField(0~200%) + 静音 Switch，OpenCut Section 折叠样式
 // 支持批量：多选视频/音频段时应用到全部（set_segments_props 一次提交）
 function renderAudioTab() {
   const bodyEl = $("audBody"), nameEl = $("audSegName");
   if (!bodyEl) return;
   const refs = buildSegRefs();
-  if (!refs.length) { bodyEl.innerHTML = '<div class="empty-hint" style="padding:24px;text-align:center">未选中片段</div>'; if (nameEl) nameEl.textContent = ""; return; }
+  if (!refs.length) {
+    bodyEl.innerHTML = '<div class="insp-empty" style="padding:24px;text-align:center;color:var(--muted)">未选中片段</div>';
+    if (nameEl) nameEl.textContent = "";
+    return;
+  }
   const isBatch = refs.length > 1;
   const allMedia = refs.every(r => r.seg && (r.seg.type === "video" || r.seg.type === "audio"));
   if (!allMedia) {
-    bodyEl.innerHTML = '<div class="empty-hint" style="padding:24px;text-align:center">音量仅适用于视频/音频段' + (isBatch ? "（批量需全选视频/音频）" : "") + '</div>';
-    if (nameEl) nameEl.textContent = ""; return;
+    bodyEl.innerHTML = '<div class="insp-empty" style="padding:24px;text-align:center;color:var(--muted)">音量仅适用于视频/音频段' + (isBatch ? "（批量需全选视频/音频）" : "") + '</div>';
+    if (nameEl) nameEl.textContent = "";
+    return;
   }
   const s = refs[0].seg;
   if (nameEl) nameEl.textContent = isBatch ? (" " + refs.length + " 个片段") : (" " + (s.name || ""));
   const vol = (s.volume == null ? 1 : s.volume);
   const muted = !!s.muted;
   const pct = Math.round(vol * 100);
+  // OpenCut AudioTab 结构：折叠 Section("Volume") + 音量 NumberField + 静音 Switch
   bodyEl.innerHTML =
     '<div class="insp-section">' +
       '<div class="insp-section-head open"><span class="chev">▼</span><span class="t">音量</span></div>' +
@@ -1388,7 +1396,7 @@ function renderAudioTab() {
   if (volIn) {
     const apply = (v) => {
       v = Math.max(0, Math.min(200, v)) / 100;
-      refs.forEach(r => { if (r.seg) r.seg.volume = v; });   // 本地预览即时生效
+      refs.forEach(r => { if (r.seg) r.seg.volume = v; });
       renderPreview();
       clearTimeout(volIn._t);
       volIn._t = setTimeout(() => {
@@ -1412,24 +1420,31 @@ function renderAudioTab() {
   });
 }
 
-// 速度面板（2026-08-19 OpenCut Section 风格）：速度 NumberField(x) + 变音 Switch
+// 速度面板（2026-08-19 Step2 OpenCut SpeedTab 风格重写）：
+// 速度 NumberField(0.01~5x) + 变音 Switch，OpenCut Section 折叠样式
 // 变速走后端 set_segment_speed（重算 duration）；支持批量
 function renderSpeedTab() {
   const bodyEl = $("spdBody"), nameEl = $("spdSegName");
   if (!bodyEl) return;
   const refs = buildSegRefs();
-  if (!refs.length) { bodyEl.innerHTML = '<div class="empty-hint" style="padding:24px;text-align:center">未选中片段</div>'; if (nameEl) nameEl.textContent = ""; return; }
+  if (!refs.length) {
+    bodyEl.innerHTML = '<div class="insp-empty" style="padding:24px;text-align:center;color:var(--muted)">未选中片段</div>';
+    if (nameEl) nameEl.textContent = "";
+    return;
+  }
   const isBatch = refs.length > 1;
   const allMedia = refs.every(r => r.seg && (r.seg.type === "video" || r.seg.type === "audio"));
   if (!allMedia) {
-    bodyEl.innerHTML = '<div class="empty-hint" style="padding:24px;text-align:center">仅视频/音频段可变速' + (isBatch ? "（批量需全选视频/音频）" : "") + '</div>';
-    if (nameEl) nameEl.textContent = ""; return;
+    bodyEl.innerHTML = '<div class="insp-empty" style="padding:24px;text-align:center;color:var(--muted)">仅视频/音频段可变速' + (isBatch ? "（批量需全选视频/音频）" : "") + '</div>';
+    if (nameEl) nameEl.textContent = "";
+    return;
   }
   const s = refs[0].seg;
   if (nameEl) nameEl.textContent = isBatch ? (" " + refs.length + " 个片段") : (" " + (s.name || ""));
   const sp = (s.speed == null ? 1 : s.speed);
   const pitch = !!s.change_pitch;
   const spd = Math.round(sp * 100) / 100;
+  // OpenCut SpeedTab 结构：折叠 Section("Speed") + 速度 NumberField(x) + Change pitch Switch
   bodyEl.innerHTML =
     '<div class="insp-section">' +
       '<div class="insp-section-head open"><span class="chev">▼</span><span class="t">速度</span></div>' +
