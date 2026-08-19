@@ -554,13 +554,17 @@
     <!-- 音频面板（2026-08-19 OpenCut Section 风格重做） -->
     <div class="insp-panel" id="audioPanel">
       <div class="head">音频 <span class="seg" id="audSegName"></span><button class="head-close" id="audClose" title="取消选择（Esc）">✕</button></div>
-      <div id="audBody"></div>
+      <div id="audBody">
+        <div id="audDebug" style="padding:20px;color:#ff9b3a;font-size:11px;background:#2a1a00;border:1px dashed #ff9b3a;margin:8px">⚠ DEBUG: audioPanel 默认占位 — 如果看到这段说明 panel 显示 OK，但 renderAudioTab 没填充。重启后如果仍只看到这段，请按 F12 看 console 里的 [debug-audio]</div>
+      </div>
     </div>
 
     <!-- 速度面板（2026-08-19 OpenCut Section 风格重做） -->
     <div class="insp-panel" id="speedPanel">
       <div class="head">速度 <span class="seg" id="spdSegName"></span><button class="head-close" id="spdClose" title="取消选择（Esc）">✕</button></div>
-      <div id="spdBody"></div>
+      <div id="spdBody">
+        <div id="spdDebug" style="padding:20px;color:#ff9b3a;font-size:11px;background:#2a1a00;border:1px dashed #ff9b3a;margin:8px">⚠ DEBUG: speedPanel 默认占位 — 同上</div>
+      </div>
     </div>
     <div class="effectpanel" id="effectPanel">
       <div class="head">特效 <span class="seg" id="effSegName"></span><button class="head-close" id="effClose" title="取消选择（Esc）">✕</button></div>
@@ -1295,6 +1299,7 @@ function buildSegRefs() {
 // 音频面板（2026-08-19 OpenCut Section 风格重做）：音量 NumberField + 静音 Switch
 // 支持批量：多选视频/音频段时应用到全部（set_segments_props 一次提交）
 function renderAudioTab() {
+  console.log("[debug-audio] renderAudioTab 进入了，selectedKey=", Store.state.selectedKey, "selectedKeys=", JSON.stringify(Store.state.selectedKeys), "audioPanel classList=", document.getElementById("audioPanel")?.className);
   const bodyEl = $("audBody"), nameEl = $("audSegName");
   if (!bodyEl) return;
   const refs = buildSegRefs();
@@ -1360,6 +1365,7 @@ function renderAudioTab() {
 // 速度面板（2026-08-19 OpenCut Section 风格重做）：速度 NumberField(x) + 变音 Switch
 // 变速走后端 set_segment_speed（重算 duration）；支持批量
 function renderSpeedTab() {
+  console.log("[debug-speed] renderSpeedTab 进入了，selectedKey=", Store.state.selectedKey, "speedPanel classList=", document.getElementById("speedPanel")?.className);
   const bodyEl = $("spdBody"), nameEl = $("spdSegName");
   if (!bodyEl) return;
   const refs = buildSegRefs();
