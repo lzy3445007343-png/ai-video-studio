@@ -47,7 +47,10 @@ function _setVisualContent(wrap, mtype, path, muted, volume) {
     setMediaSrc(v, fileURL(path), "render-visual", layerKey);
     // 轨道静音 或 全局预览静音 → 关闭该视频段的内嵌音频
     setMediaMute(v, !!muted || previewMuted, "render-visual", (path || "visual"));
-    v.volume = (volume == null ? 1 : volume);   // 段级音量（2026-08-16）
+    // 段级音量（2026-08-16）。⚠️ 2026-08-20 修复：HTMLMediaElement.volume 只接受 [0,1]，
+    // 音量 >1（面板可拉到 +6dB）直接设会抛 IndexSizeError → renderAll 崩溃 → 后续渲染全断（"全空"来源之一）。
+    // 钳制到 [0,1]；>1 的增益由 AudioEngine（Web Audio gain，支持 >1）承载。
+    v.volume = Math.min(1, Math.max(0, (volume == null ? 1 : volume)));
     v.playsInline = true;
   } else if (mtype === "image") {
     const img = document.createElement("img");
