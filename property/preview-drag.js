@@ -123,6 +123,7 @@ class DragSession extends GestureSession {
 
 /* —— 薄壳事件 handler（语义与 C2 前完全一致） —— */
 function onPreviewDragDown(e) {
+  if (e.button !== 0) return;                                   // C5.3：只接管左键（中键=画布平移 viewport-input.js）
   if (isPlaying) return;                                    // v2：播放中禁止拖动
   const t = e.target;
   const wrap = t && t.closest ? t.closest("[data-preview-el]") : null;
