@@ -662,21 +662,37 @@ function updateKfLiveValues() {
 }
 
 // 把段的关键帧动画实时应用到预览元素（translate/scale/rotate/opacity）
-function applyKfTransform(el, seg, localUs) {
+// ★ v2 (2026-08-20) Transform Schema：三层解析 animation → transform → default
+// seg.transform = { x, y, scaleX, scaleY, rotation, opacity }（静态态，默认 {0,0,1,1,0,1}）
+// seg.animations["transform.*"] 关键帧通道优先；无通道读 transform；再无读 default。
+// ⚠️ 贴纸(sticker)渲染仍用旧 seg.transform {x,y,scale,rotation,opacity,flipH,flipV}(百分比)，
+//    renderer.js:215 独立处理，不经过本函数——旧结构统一到新 Schema 列为遗留(待后续单独处理)。
+function resolveTransform(seg, localUs) {
   const anims = seg.animations || {};
+  const tr = seg.transform || {};
   const X = kfVal(anims, "transform.positionX", localUs);
   const Y = kfVal(anims, "transform.positionY", localUs);
   const SX = kfVal(anims, "transform.scaleX", localUs);
   const SY = kfVal(anims, "transform.scaleY", localUs);
   const R = kfVal(anims, "transform.rotate", localUs);
   const O = kfVal(anims, "transform.opacity", localUs);
-  const x = X == null ? 0 : X, y = Y == null ? 0 : Y, sx = SX == null ? 1 : SX,
-        sy = SY == null ? 1 : SY, r = R == null ? 0 : R, o = O == null ? 1 : O;
+  return {
+    x:  X != null ? X  : (tr.x != null ? tr.x : 0),
+    y:  Y != null ? Y  : (tr.y != null ? tr.y : 0),
+    sx: SX != null ? SX : (tr.scaleX != null ? tr.scaleX : 1),
+    sy: SY != null ? SY : (tr.scaleY != null ? tr.scaleY : 1),
+    r:  R != null ? R  : (tr.rotation != null ? tr.rotation : 0),
+    o:  O != null ? O  : (tr.opacity != null ? tr.opacity : 1),
+  };
+}
+
+function applyKfTransform(el, seg, localUs) {
+  const t = resolveTransform(seg, localUs);
   const stack = $("previewStack"); const rect = stack ? stack.getBoundingClientRect() : null;
   const cp = canvasPxJS();
   const sc = (rect && rect.width) ? rect.width / cp.W : 1;
-  el.style.transform = "translate(" + (x * sc) + "px," + (y * sc) + "px) scale(" + sx + "," + sy + ") rotate(" + r + "deg)";
-  el.style.opacity = o;
+  el.style.transform = "translate(" + (t.x * sc) + "px," + (t.y * sc) + "px) scale(" + t.sx + "," + t.sy + ") rotate(" + t.r + "deg)";
+  el.style.opacity = t.o;
 }
 
 // 每帧把当前播放头处的关键帧动画应用到所有可见预览元素（播放/拖动时实时动画）。
