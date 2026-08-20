@@ -3121,7 +3121,10 @@ function initSubscriptionSlices() {
   Store.subscribeSlice("selectedKeys", selRender);
   Store.subscribeSlice("selectedSegId", selRender);
   // 素材卡选中 → 素材面板 + 工具栏（素材库随素材选中刷新）
-  Store.subscribeSlice("selectedMaterialUid", () => { renderMedia(); updateToolbarState(); });
+  // ★ 修复(2026-08-20 真机反馈)：订阅回调必须透传 state——renderMedia(s) 用 s.filter/s.materials，
+  //   之前 `() => { renderMedia(); }` 不传参 → s=undefined → s.filter 报错 → renderMedia 中断 →
+  //   素材库卡片不渲染看着"全丢"（store.js:122 try/catch 吞了异常不崩 UI）。直接传 renderMedia 让回调透传。
+  Store.subscribeSlice("selectedMaterialUid", (v, s) => { renderMedia(s); updateToolbarState(); });
   // C4.2 拖拽临时态（时间轴拖动/框选/整组缩放）→ 只渲染时间轴
   Store.subscribeSlice("drag", () => { renderTimeline(); });
   Store.subscribeSlice("pendingDrag", () => { renderTimeline(); });
@@ -3129,7 +3132,8 @@ function initSubscriptionSlices() {
   Store.subscribeSlice("groupScale", () => { renderTimeline(); });
   // C4.3 低频切片
   Store.subscribeSlice("pxPerSec", () => { renderTimeline(); });
-  Store.subscribeSlice("filter", () => { renderMedia(); });
+  // ★ 同 FIX-1：透传 state 给 renderMedia
+  Store.subscribeSlice("filter", (v, s) => { renderMedia(s); });
   Store.subscribeSlice("bookmarks", () => { renderTimeline(); });
   // B2（GPT 定案）：播放头切片独立订阅者——拖播放头 → KF 面板值实时更新
   // 不挂 renderPlayheadUI（UI 层不互相调，防耦合）；updateKfPanelValues 内部跳过编辑中的 input

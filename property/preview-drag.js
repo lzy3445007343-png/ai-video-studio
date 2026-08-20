@@ -73,6 +73,13 @@ class DragSession extends GestureSession {
   }
   commit() {
     const c = this.ctx;
+    // FIX-2 防御（2026-08-20 真机反馈）：previewState.visualEls 的 rec.key 可能 stale
+    // （段已删/折叠但 wrap 残留于 previewState，renderer.js:142 rec.key=h.key 无清理路径）。
+    // 用 c.key 反查 Store 验证段仍在；不在则 warn + skip，避免刷'video[0] 没有第 1 段'日志+无效 add_keyframe。
+    if (typeof findSegByKey === "function" && !findSegByKey(c.key)) {
+      console.warn("[preview-drag] commit 跳过：段已不存在", c.key);
+      return;
+    }
     const nx = OverlayState.get(c.target.id, "transform.positionX");
     const ny = OverlayState.get(c.target.id, "transform.positionY");
     if (nx === undefined || ny === undefined) return;        // 没拖过 → 不落库
