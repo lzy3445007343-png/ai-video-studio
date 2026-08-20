@@ -446,7 +446,8 @@ function makeSeg(s, type, ti, idx, overrideLeftUs, forceDragging) {
   const stBadge = (type === "sticker") ? '<div class="badge">贴</div>' : '';
   const fillHtml = waveCanvas || ('<div class="fill" style="' + bgStyle + '"></div>');
   // 关键帧 marker（2026-08-20，对齐 OpenCut timeline-element.tsx KeyframeIndicator：白色菱形选中变蓝）
-  // 遍历所有动画通道，按 key.time 在段内绝对定位一个 8x8 菱形（钳制 0..duration 防溢出，seg overflow:hidden 会裁切段外的）
+  // 遍历所有动画通道，按 key.t 在段内绝对定位一个 8x8 菱形（钳制 0..duration 防溢出，seg overflow:hidden 会裁切段外的）
+  // ⚠️ 键名是 k.t（后端 add_keyframe 存 {"id","t","v","seg"}）——与 kfVal/renderKfGraph 一致；用 k.time 会 undefined→0→全在段开头
   let kfMarkersHtml = "";
   if (s.animations) {
     const durSec = (s.duration || 0) / 1e6;
@@ -454,9 +455,9 @@ function makeSeg(s, type, ti, idx, overrideLeftUs, forceDragging) {
       const ch = s.animations[path];
       if (!ch || !ch.keys || !ch.keys.length) continue;
       for (const k of ch.keys) {
-        const tSec = Math.max(0, Math.min(durSec, (k.time || 0) / 1e6));
+        const tSec = Math.max(0, Math.min(durSec, (k.t || 0) / 1e6));
         const xPx = tSec * pps();
-        kfMarkersHtml += '<div class="kf-marker" data-path="' + path + '" data-kftime="' + (k.time || 0) + '" style="left:' + xPx + 'px"></div>';
+        kfMarkersHtml += '<div class="kf-marker" data-path="' + path + '" data-kftime="' + (k.t || 0) + '" style="left:' + xPx + 'px"></div>';
       }
     }
   }
