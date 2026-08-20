@@ -70,7 +70,7 @@ function renderKfPanelPF() {
   emptyEl.style.display = "none"; rowsEl.style.display = ""; graphEl.style.display = "";
   hintEl.style.display = ""; nameEl.textContent = s.name || "";
   const anims = s.animations || {};
-  const local = Math.max(0, Math.min(Store.state.playheadUs - s.start, s.duration));
+  const local = TimelineMapper.playheadLocal(s);
   const selId = s.id || (Store.state.selectedKey || "");
 
   // 结构 key：段身份 + 每通道开/关状态（通道开关变化触发重建；播放头移动不重建）
@@ -152,17 +152,21 @@ function buildKfSections(rowsEl, anims, local) {
 }
 
 function buildKfRow(path, lab, step, def, anims, local) {
-  const on = KfChannel.isAnimated(selectedSeg(), path);
-  // B1：通道开 → kfVal 插值；通道关 → C1 静态值（params→legacy→default）
   const s = selectedSeg();
-  const cur = s && on ? kfVal(anims, path, local)
-            : (s ? ((typeof getProperty === "function") ? getProperty(s, path) : null) : null);
+  // B2.1（GPT 定案，kf-state-machine.md）：两概念拆开——
+  //   channelOn = isAnimated（通道激活，决定输入框编辑语义：改 KF 还是静态值）
+  //   hitOn     = hitAtPlayhead（播放头是否踩中 KF，决定 ◆ 外观：实心蓝/空心灰）
+  const channelOn = KfChannel.isAnimated(s, path);
+  const hitOn = KfChannel.hitAtPlayhead(s, path, local);
+  // B2.1：显示值收口到 EffectivePropertyResolver（animation→transform→default，带 source）
+  const cur = getEffectivePropertyValue(s, path, local).value;
   const shown = cur == null ? def : cur;
   const row = document.createElement("div");
   row.className = "kf-row";
   row.dataset.path = path;
   row.innerHTML =
-    '<button class="kf-kf-toggle' + (on ? ' is-active' : '') + '" data-act="tog" title="开/关关键帧">' +
+    '<button class="kf-kf-toggle' + (hitOn ? ' is-active' : '') + '" data-act="tog" title="' +
+      (hitOn ? '删除当前位置关键帧' : '在播放头处打关键帧') + '">' +
       '<span class="dia">◆</span>' +
     '</button>' +
     '<span class="lab">' + lab + '</span>' +
@@ -184,7 +188,7 @@ function buildKfRow(path, lab, step, def, anims, local) {
     const s = selectedSeg();   // 每次取最新段引用（Store 刷新替换 draft 后旧引用失效）
     if (!s) return;
     const hasKf = KfChannel.isAnimated(s, path);
-    const local = Math.max(0, Math.min(Store.state.playheadUs - s.start, s.duration));
+    const local = TimelineMapper.playheadLocal(s);
     _draft = { v, hasKf, local };
     if (hasKf) {
       KfChannel.upsertLocal(s, path, local, v, "linear");   // 本地打点（预览插值用，不进后端/undo）
@@ -233,14 +237,20 @@ function buildKfRow(path, lab, step, def, anims, local) {
 function updateKfRowValues(rowsEl, anims, local) {
   rowsEl.querySelectorAll(".kf-row").forEach(row => {
     const path = row.dataset.path;
-    // B1：通道开 → kfVal 插值；通道关 → C1 静态值（params→legacy→default）——两者都该显示
+    // B2.1：显示值收口到 EffectivePropertyResolver；source 驱动 ◆ 外观
     const s = selectedSeg();
-    const cur = s && KfChannel.isAnimated(s, path)
-      ? kfVal(anims, path, local)
-      : (s ? ((typeof getProperty === "function") ? getProperty(s, path) : null) : null);
+    if (!s) return;
+    const { value: cur, source } = getEffectivePropertyValue(s, path, local);
     if (cur == null) return;
     const inp = row.querySelector('[data-act="val"]');
     if (inp && document.activeElement !== inp) inp.value = round2(cur);
+    // B2.1（GPT 定案）：◆ 外观 = 播放头是否踩中 KF（source==="keyframe"）——拖播放头实时亮灭
+    const tog = row.querySelector('[data-act="tog"]');
+    if (tog) {
+      const hit = source === "keyframe";
+      tog.classList.toggle("is-active", hit);
+      tog.title = hit ? "删除当前位置关键帧" : "在播放头处打关键帧";
+    }
   });
 }
 
@@ -256,6 +266,6 @@ function updateKfPanelValues() {
   const activeIn = rowsEl.querySelector("[data-act='val']:focus");
   if (activeIn) return;
   const anims = s.animations || {};
-  const local = Math.max(0, Math.min(Store.state.playheadUs - s.start, s.duration));
+  const local = TimelineMapper.playheadLocal(s);
   updateKfRowValues(rowsEl, anims, local);
 }

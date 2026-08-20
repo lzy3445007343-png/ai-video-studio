@@ -797,6 +797,8 @@
 <script src="renderer.js"></script>
 <script src="property/property-kernel.js"></script>
 <script src="property/kf-channel.js"></script>
+<script src="property/timeline-mapper.js"></script>
+<script src="property/effective-property-resolver.js"></script>
 <script src="property/interaction-kernel.js"></script>
 <script src="property/command.js"></script>
 <script src="property/preview-coordinate.js"></script>
@@ -1663,21 +1665,26 @@ function onKfDiamondDown(e, path, id, dur) {
 }
 
 function toggleKf(path) {
+  // B2.1（GPT 定案，kf-state-machine.md）：◆ = 当前位置单点 toggle，不是通道开关——
+  //   命中 KF → remove_keyframe(当前点)（删空通道由后端/B0 自动清理）
+  //   未命中 → add_keyframe(当前位置, 当前面板显示值)
+  // 绝不 clear_channel()（否则三个点被一次点击全删，反直觉）
   const s = selectedSeg(); if (!s) return;
+  const local = TimelineMapper.playheadLocal(s);
   const anims = s.animations || {};
-  const has = anims[path] && anims[path].keys && anims[path].keys.length;
-  if (has) {
-    call("clear_keyframes", ...kfSegArgs(), path).then(() => { selectedKf = { path: null, id: null }; refresh(); });
+  const keys = (anims[path] && anims[path].keys) ? anims[path].keys : [];
+  const hitKey = keys.find(k => Math.abs((k.t || 0) - local) <= 1000);
+  if (hitKey) {
+    call("remove_keyframe", ...kfSegArgs(), path, hitKey.id).then(() => { selectedKf = { path: null, id: null }; refresh(); });
   } else {
-    const local = Math.max(0, Math.min(Store.state.playheadUs - s.start, s.duration));
-    const def = KF_PATHS.find(p => p[0] === path)[3];
-    call("add_keyframe", ...kfSegArgs(), path, local, def, "linear").then(() => refresh());
+    const v = getEffectivePropertyValue(s, path, local).value;
+    call("add_keyframe", ...kfSegArgs(), path, local, v, "linear").then(() => refresh());
   }
 }
 
 function addKfAtPlayhead(path, valStr) {
   const s = selectedSeg(); if (!s) return;
-  const local = Math.max(0, Math.min(Store.state.playheadUs - s.start, s.duration));
+  const local = TimelineMapper.playheadLocal(s);
   let v = parseFloat(valStr); if (isNaN(v)) v = KF_PATHS.find(p => p[0] === path)[3];
   call("add_keyframe", ...kfSegArgs(), path, local, v, "linear").then(() => refresh());
 }

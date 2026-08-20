@@ -48,6 +48,14 @@ const KfChannel = {
               seg.animations[path].keys && seg.animations[path].keys.length);
   },
 
+  /** 当前位置是否命中 KF（±1ms，与后端 add_keyframe 合并容差一致）——◆ 状态机（B2.1）
+   * 与 isAnimated 正交：isAnimated=通道激活（输入编辑语义）；hitAtPlayhead=播放头踩中（◆ 外观） */
+  hitAtPlayhead(seg, path, localUs) {
+    if (!seg || !seg.animations || !seg.animations[path]) return false;
+    const keys = seg.animations[path].keys || [];
+    return keys.some(k => Math.abs((k.t || 0) - (localUs || 0)) <= 1000);
+  },
+
   /** 读取：通道开 → kfVal 插值；关 → C1 静态值（params→legacy→default） */
   getCurrentValue(seg, path, localUs) {
     if (!seg) return null;
