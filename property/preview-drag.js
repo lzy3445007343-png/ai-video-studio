@@ -29,6 +29,8 @@ function _previewHasAnim(seg, path) {
   return !!(a && a.keys && a.keys.length);
 }
 function _previewScale() {
+  // C5.1：统一显示缩放（legacy=stackW/cp.W 宽适配，viewport=fitScale×zoom）
+  if (typeof PreviewCoordinate !== "undefined") return PreviewCoordinate.displayScale();
   const stack = $("previewStack");
   const cp = canvasPxJS();
   const w = stack ? stack.getBoundingClientRect().width : 0;
@@ -54,7 +56,12 @@ class DragSession extends GestureSession {
     OverlayState.set(c.target.id, "transform.positionX", nx);
     OverlayState.set(c.target.id, "transform.positionY", ny);
     const t = resolveTransform(c.seg, c.localSnap);
-    c.el.style.transform = "translate(" + (nx * sc) + "px," + (ny * sc) + "px) scale(" + t.sx + "," + t.sy + ") rotate(" + t.r + "deg)";
+    // C5.1：统一坐标定位（素材中心 = toOverlay，wrap 左上 = 中心 - 尺寸/2）
+    const pos = PreviewCoordinate.toOverlay(nx, ny);
+    const w = c.el.offsetWidth || 0, h = c.el.offsetHeight || 0;
+    c.el.style.left = (pos.x - w / 2) + "px";
+    c.el.style.top = (pos.y - h / 2) + "px";
+    c.el.style.transform = "scale(" + t.sx + "," + t.sy + ") rotate(" + t.r + "deg)";
     if (e.cancelable) e.preventDefault();
   }
   onPointerUp(e) {

@@ -17,8 +17,7 @@ function _makeVisualEl(mtype) {
 
 // R1（2026-08-20，GPT 评审定案）：Element Bounds——wrap 尺寸 = 素材实际渲染尺寸（contain），
 // 而非画布大小。黑边由画布底色承担 → 拖动素材黑边不再跟着跑（对齐 OpenCut element-bounds.ts）。
-// 定位：left/top 50% + margin 负值 → wrap 左上角在画布中心；applyKfTransform 的 translate(x*sc,y*sc)
-// 相对 wrap 原点位移 → 素材中心 = 画布中心 + (x,y)，与 OpenCut bounds.cx = canvasW/2 + position.x 数学等价。
+// C5.1（2026-08-20）：定位交给 applyKfTransform（PreviewCoordinate.toOverlay），本函数只管尺寸。
 // 素材尺寸未知（未加载）→ fallback 画布大小（现状，letterbox），media 尺寸事件到达后自动校正。
 function _applyVisualSize(el, seg) {
   if (!el) return;
@@ -31,15 +30,10 @@ function _applyVisualSize(el, seg) {
   const cp = canvasPxJS();
   if (mw && mh) {
     const s = Math.min(cp.W / mw, cp.H / mh);
-    const w = Math.max(1, Math.round(mw * s));
-    const h = Math.max(1, Math.round(mh * s));
-    el.style.width = w + "px"; el.style.height = h + "px";
-    el.style.left = "50%"; el.style.top = "50%";
-    el.style.marginLeft = (-w / 2) + "px"; el.style.marginTop = (-h / 2) + "px";
+    el.style.width = Math.max(1, Math.round(mw * s)) + "px";
+    el.style.height = Math.max(1, Math.round(mh * s)) + "px";
   } else {
     el.style.width = "100%"; el.style.height = "100%";
-    el.style.left = "0"; el.style.top = "0";
-    el.style.marginLeft = "0"; el.style.marginTop = "0";
   }
 }
 
@@ -717,10 +711,13 @@ function applyKfTransform(el, seg, localUs) {
   // renderer 跳过接管（等价旧 PreviewInteraction.dragging 语义；Refresh Lock 已上移 InteractionManager）
   if (typeof InteractionManager !== "undefined" && InteractionManager.isActiveOn(seg.id)) return;
   const t = resolveTransform(seg, localUs);
-  const stack = $("previewStack"); const rect = stack ? stack.getBoundingClientRect() : null;
-  const cp = canvasPxJS();
-  const sc = (rect && rect.width) ? rect.width / cp.W : 1;
-  el.style.transform = "translate(" + (t.x * sc) + "px," + (t.y * sc) + "px) scale(" + t.sx + "," + t.sy + ") rotate(" + t.r + "deg)";
+  // C5.1（2026-08-20）：统一坐标——素材中心 = PreviewCoordinate.toOverlay(x,y)，wrap 定位 = 中心 - 尺寸/2。
+  // legacy 模式数学等价现状（applyCanvasRatio 已把 stack 设成 fit 尺寸，legacy sc == viewport fitScale）。
+  const pos = PreviewCoordinate.toOverlay(t.x, t.y);
+  const w = el.offsetWidth || 0, h = el.offsetHeight || 0;
+  el.style.left = (pos.x - w / 2) + "px";
+  el.style.top = (pos.y - h / 2) + "px";
+  el.style.transform = "scale(" + t.sx + "," + t.sy + ") rotate(" + t.r + "deg)";
   el.style.opacity = t.o;
 }
 
