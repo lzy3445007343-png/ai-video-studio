@@ -129,8 +129,15 @@ function onPreviewDragUp(e) {
       rotation: (typeof getProperty === "function") ? getProperty(seg, "transform.rotate") : (tr.rotation != null ? tr.rotation : 0),
       opacity: (typeof getProperty === "function") ? getProperty(seg, "transform.opacity") : (tr.opacity != null ? tr.opacity : 1),
     };
-    call("update_segment_transform", { segid: drag.seg.id, transform: next })
-      .then(refresh)
+    // ⚠️ 2026-08-20 根因修复：call() 是纯位置参数桥接（pywebview），对象会落到 track_type 上导致
+    // segid=None → 后端"未定位到段" → 静默弹回（.then 不检查 res.ok，无任何日志）。
+    // 必须按 Python 签名 update_segment_transform(track_type, track_index, index, segid, transform) 传位置参数。
+    const k = drag.key.split(":");
+    call("update_segment_transform", k[0], +k[1], +k[2], drag.seg.id, next)
+      .then(res => {
+        if (res && res.ok === false) console.error("[preview-drag] transform commit 被拒:", res.error);
+        refresh();
+      })
       .catch(err => console.error("[preview-drag] 写 transform 失败:", err));
   }
 }
