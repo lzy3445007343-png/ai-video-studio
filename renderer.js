@@ -719,10 +719,13 @@ function applyKfTransform(el, seg, localUs) {
   // legacy 模式数学等价现状（applyCanvasRatio 已把 stack 设成 fit 尺寸，legacy sc == viewport fitScale）。
   // C5.2（2026-08-20）：viewport 模式 wrap 尺寸 × zoom（视觉放大=画布缩放；素材属性 scale 不变，显示层 zoom）。
   const pos = PreviewCoordinate.toOverlay(t.x, t.y);
-  const zoom = (PreviewCoordinate.mode === "viewport") ? (PreviewCoordinate.zoom || 1) : 1;
+  // 2026-08-20 修复：wrap 屏幕尺寸 = baseW(baseH) × displayScale（viewport=fitScale×zoom；legacy=stackW/cp.W）。
+  // 之前只乘 zoom 漏乘 fitScale → viewport 模式素材被放大 1/fitScale 倍 → "素材巨大超出画布"。
+  // 对齐 OpenCut resolve.ts: effectWidth = sourceWidth × containScale × transform.scaleX（×screenScale）。
+  const ds = (typeof PreviewCoordinate !== "undefined") ? PreviewCoordinate.displayScale() : 1;
   const bw = parseFloat(el.dataset.baseW || "0"), bh = parseFloat(el.dataset.baseH || "0");
-  const w = (bw > 0 ? bw : (el.offsetWidth || 0)) * zoom;
-  const h = (bh > 0 ? bh : (el.offsetHeight || 0)) * zoom;
+  const w = (bw > 0 ? bw : (el.offsetWidth || 0)) * ds;
+  const h = (bh > 0 ? bh : (el.offsetHeight || 0)) * ds;
   el.style.width = w + "px";          // C5.2：viewport 视觉放大（素材属性 scale 不变，显示层 zoom）
   el.style.height = h + "px";
   el.style.left = (pos.x - w / 2) + "px";
