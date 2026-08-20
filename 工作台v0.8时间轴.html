@@ -1752,7 +1752,12 @@ function doSetSpeed() {
 }
 
 /* ---------- 吸附（对齐 OpenCut snapping/{build,resolve,threshold}.ts） ---------- */
-// 收集吸附点：所有段的 start/end + 播放头位置（微秒）。excludeKey 排除正在拖的段，避免吸到自己。
+// 收集吸附点：所有段的 start/end + 关键帧 + 书签 + 播放头位置（微秒）。
+// excludeKey 排除正在拖的段，避免吸到自己。
+// ★ 关键帧吸附（对齐 OpenCut getAnimationKeyframeSnapPointsForTimeline）：
+//   每个段每个动画通道的每个 key → global 时间 = s.start + k.t（TimelineMapper.localToGlobal）
+//   这是"播放头能对上关键帧→◆ 蓝点亮"的前提——没有它，播放头永远停在任意微秒，
+//   hitOn 的 ±1ms 精确判定形同虚设（用户反馈"播放头很难挪到关键帧上"的根因）。
 function buildSnapPoints(excludeKey, excludePlayhead) {
   const pts = [];
   forEachSeg((s, type, ti, idx) => {
@@ -1760,6 +1765,16 @@ function buildSnapPoints(excludeKey, excludePlayhead) {
     if (excludeKey && k === excludeKey) return;
     pts.push({ time: s.start, type: "element-start" });
     pts.push({ time: s.start + s.duration, type: "element-end" });
+    // 关键帧吸附点（每个 key 一个；s.start + k.t = local→global）
+    if (s.animations) {
+      for (const path in s.animations) {
+        const ch = s.animations[path];
+        if (!ch || !ch.keys) continue;
+        for (const kf of ch.keys) {
+          pts.push({ time: TimelineMapper.localToGlobal(s, kf.t || 0), type: "keyframe", path });
+        }
+      }
+    }
   });
   (Store.state.bookmarks || []).forEach(b => pts.push({ time: b.us, type: "bookmark" }));
   if (!excludePlayhead) pts.push({ time: Store.state.playheadUs, type: "playhead" });
@@ -2202,7 +2217,8 @@ function scheduleScrubPreview() {
 function onPhMove(e) {
   if (!_phScrub) return;
   let us = clientXToUs(e.clientX);
-  if (Store.state.snapOn) {
+  // 对齐 OpenCut PlayheadController.scrub：snapOn 开且未按 Shift 才吸附（Shift=临时关闭吸附）
+  if (Store.state.snapOn && !e.shiftKey) {
     const r = resolveSnap(us, buildSnapPoints(null, true));  // 播放头吸附排除自身，避免吸到自己
     us = r.snapped;
     r.point ? showSnapGuide(r.point.time) : hideSnapGuide();
