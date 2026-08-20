@@ -158,7 +158,7 @@ function previewAudioVolume(dbv) {
     const refs = liveAudioRefs(); if (!refs) return;
     const s = refs[0].seg;
     if (audioHasKf(s)) setVolKfLocal(s, audioLocal(s), v);   // 改当前播放头处的音量关键帧
-    else refs.forEach(r => { if (r.seg) r.seg.volume = v; });
+    else refs.forEach(r => { if (r.seg) setProperty(r.seg, "audio.volume", v); });  // C1.3：统一走 setProperty
     renderPreview();
     if (typeof AudioEngine !== "undefined" && AudioEngine.updateLiveGains) AudioEngine.updateLiveGains(Store.state.playheadUs);
   } catch (e) { console.error("[audio] preview 失败:", e); }

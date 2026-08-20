@@ -114,14 +114,20 @@ function onPreviewDragUp(e) {
     if (drag.hasAnimY) jobs.push(call("add_keyframe", type, ti, idx, "transform.positionY", drag.localSnap, ny, "linear"));
     Promise.all(jobs).then(() => refresh()).catch(err => console.error("[preview-drag] add_keyframe 失败:", err));
   } else {
-    // 无动画通道 → 写 seg.transform（合并保留其他字段）
-    const tr = drag.seg.transform || {};
+    // 无动画通道 → 写静态 transform（C1.3：走 setProperty 统一 params + legacy mirror）
+    const seg = drag.seg;
+    setProperties(seg, {
+      "transform.positionX": nx,
+      "transform.positionY": ny,
+    });
+    // 后端落盘（合并保留其他字段，从 params/旧字段取）
+    const tr = seg.transform || {};
     const next = {
       x: nx, y: ny,
-      scaleX: tr.scaleX != null ? tr.scaleX : 1,
-      scaleY: tr.scaleY != null ? tr.scaleY : 1,
-      rotation: tr.rotation != null ? tr.rotation : 0,
-      opacity: tr.opacity != null ? tr.opacity : 1,
+      scaleX: (typeof getProperty === "function") ? getProperty(seg, "transform.scaleX") : (tr.scaleX != null ? tr.scaleX : 1),
+      scaleY: (typeof getProperty === "function") ? getProperty(seg, "transform.scaleY") : (tr.scaleY != null ? tr.scaleY : 1),
+      rotation: (typeof getProperty === "function") ? getProperty(seg, "transform.rotate") : (tr.rotation != null ? tr.rotation : 0),
+      opacity: (typeof getProperty === "function") ? getProperty(seg, "transform.opacity") : (tr.opacity != null ? tr.opacity : 1),
     };
     call("update_segment_transform", { segid: drag.seg.id, transform: next })
       .then(refresh)

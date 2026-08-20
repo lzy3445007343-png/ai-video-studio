@@ -128,7 +128,7 @@ function liveSpeedRefs() { const r = buildSegRefs(); return r.length ? r : null;
 function previewSpeed(v) {
   v = Math.max(0.01, Math.min(5, v));
   const refs = liveSpeedRefs(); if (!refs) return;
-  refs.forEach(r => { if (r.seg) r.seg.speed = v; });
+  refs.forEach(r => { if (r.seg) setProperty(r.seg, "speed.rate", v); });  // C1.3：统一走 setProperty
   renderPreview();
 }
 // 提交：失焦/回车才落库(对齐 OpenCut onCommit)
