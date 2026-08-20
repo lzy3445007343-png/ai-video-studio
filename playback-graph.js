@@ -82,7 +82,7 @@ function _flattenVideo(seg, ti, idx, trackMuted, trackHidden, materials) {
   const startUs = _num(seg.start, 0);
   const durationUs = _num(seg.duration, 0);
   const srcStartUs = _num(seg.src_start, 0);
-  const speed = _clampSpeed(seg.speed);
+  const speed = _clampSpeed((typeof getProperty === "function") ? getProperty(seg, "speed.rate") : seg.speed);
   // 2026-08-17 根治：src_end 一律推导（不信任 seg.src_end 字段，防 trim 累加失同步脏数据）
   const srcEndUs = deriveSrcEndUs(srcStartUs, durationUs, speed);
   return {
@@ -91,7 +91,7 @@ function _flattenVideo(seg, ti, idx, trackMuted, trackHidden, materials) {
     startUs, durationUs,               // 时间轴位置
     srcStartUs, srcEndUs,              // 源窗口（⭐推导值，非 draft 字段）
     speed,
-    gain: resolveGain(trackMuted, !!seg.muted, seg.volume),  // 内嵌声音量（轨/段静音→0），不含 previewMuted
+    gain: resolveGain(trackMuted, !!seg.muted, (typeof getProperty === "function") ? getProperty(seg, "audio.volume") : seg.volume),  // 内嵌声音量（轨/段静音→0），不含 previewMuted
     muted: !!seg.muted,                // 段级静音 → video 元素 muted
     path: _resolvePath(seg, materials),
     type: seg.type || "video",         // 段类型（image 需跳过 video 元素预加载，见 renderer.js preloadNextVideoSlot）
@@ -104,7 +104,7 @@ function _flattenAudio(seg, ti, idx, trackMuted, materials) {
   const startUs = _num(seg.start, 0);
   const durationUs = _num(seg.duration, 0);
   const srcStartUs = _num(seg.src_start, 0);
-  const speed = _clampSpeed(seg.speed);
+  const speed = _clampSpeed((typeof getProperty === "function") ? getProperty(seg, "speed.rate") : seg.speed);
   // 2026-08-17 根治：src_end 一律推导（不信任 seg.src_end 字段，防 trim 累加失同步脏数据）
   const srcEndUs = deriveSrcEndUs(srcStartUs, durationUs, speed);
   return {
@@ -113,7 +113,7 @@ function _flattenAudio(seg, ti, idx, trackMuted, materials) {
     startUs, durationUs,
     srcStartUs, srcEndUs,
     speed,
-    gain: resolveGain(trackMuted, !!seg.muted, seg.volume),  // 不含 previewMuted（播放端另叠）
+    gain: resolveGain(trackMuted, !!seg.muted, (typeof getProperty === "function") ? getProperty(seg, "audio.volume") : seg.volume),  // 不含 previewMuted（播放端另叠）
     segAnim: seg.animations || null,   // 音量关键帧通道（AudioEngine.updateLiveGains 实时插值用）
     path: _resolvePath(seg, materials),
   };

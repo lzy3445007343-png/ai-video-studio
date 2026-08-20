@@ -98,13 +98,10 @@ function renderPreview(s) {
       rec = { el: wrap, key: layerKey, prepare: null, slotState: "EMPTY" };   // C.5：双槽结构初始化（prepare=后台预加载槽，slotState=状态机）
       previewState.visualEls.set(layerKey, rec);
     }
-    // 音量：有音量关键帧通道则按播放头局部时间插值覆盖 base（对齐 OpenCut 动画通道覆盖 base）
-    let _vol = (h.seg.volume == null ? 1 : h.seg.volume);
-    const _va = (h.seg.animations || {}).volume;
-    if (_va && _va.keys && _va.keys.length) {
-      const _lv = (typeof kfVal === "function") ? kfVal(h.seg.animations, "volume", Math.max(0, Math.min(us - h.seg.start, h.seg.duration))) : null;
-      if (_lv != null) _vol = _lv;
-    }
+    // 音量：C1.2 走 PropertyResolver（动画覆盖静态，旧通道名 volume 兼容；对齐 OpenCut 动画通道覆盖 base）
+    const _vol = (typeof resolveProperty === "function")
+      ? resolveProperty(h.seg, "audio.volume", Math.max(0, Math.min(us - h.seg.start, h.seg.duration)))
+      : (h.seg.volume == null ? 1 : h.seg.volume);
     const changed = _setVisualContent(rec.el, h.seg.type, resolveSegPath(h.seg), isTrackMuted(h.type, h.ti) || h.seg.muted, _vol);
     rec.el.style.display = "";
     rec.el.style.zIndex = zIndexOf(h);
@@ -663,27 +660,19 @@ function updateKfLiveValues() {
 }
 
 // 把段的关键帧动画实时应用到预览元素（translate/scale/rotate/opacity）
-// ★ v2 (2026-08-20) Transform Schema：三层解析 animation → transform → default
-// seg.transform = { x, y, scaleX, scaleY, rotation, opacity }（静态态，默认 {0,0,1,1,0,1}）
-// seg.animations["transform.*"] 关键帧通道优先；无通道读 transform；再无读 default。
+// ★ v2 (2026-08-20) Transform Schema：三层解析 animation → params → legacy → default
+// ★ C1.2 (2026-08-20)：读取走 PropertyResolver（唯一属性访问协议）——kfVal(animations[path])
+//    → params[path] → legacy 旧字段 → default；与 kernel 的 transform.rotate 路径对齐。
 // ⚠️ 贴纸(sticker)渲染仍用旧 seg.transform {x,y,scale,rotation,opacity,flipH,flipV}(百分比)，
 //    renderer.js:215 独立处理，不经过本函数——旧结构统一到新 Schema 列为遗留(待后续单独处理)。
 function resolveTransform(seg, localUs) {
-  const anims = seg.animations || {};
-  const tr = seg.transform || {};
-  const X = kfVal(anims, "transform.positionX", localUs);
-  const Y = kfVal(anims, "transform.positionY", localUs);
-  const SX = kfVal(anims, "transform.scaleX", localUs);
-  const SY = kfVal(anims, "transform.scaleY", localUs);
-  const R = kfVal(anims, "transform.rotate", localUs);
-  const O = kfVal(anims, "transform.opacity", localUs);
   return {
-    x:  X != null ? X  : (tr.x != null ? tr.x : 0),
-    y:  Y != null ? Y  : (tr.y != null ? tr.y : 0),
-    sx: SX != null ? SX : (tr.scaleX != null ? tr.scaleX : 1),
-    sy: SY != null ? SY : (tr.scaleY != null ? tr.scaleY : 1),
-    r:  R != null ? R  : (tr.rotation != null ? tr.rotation : 0),
-    o:  O != null ? O  : (tr.opacity != null ? tr.opacity : 1),
+    x:  resolveProperty(seg, "transform.positionX", localUs),
+    y:  resolveProperty(seg, "transform.positionY", localUs),
+    sx: resolveProperty(seg, "transform.scaleX", localUs),
+    sy: resolveProperty(seg, "transform.scaleY", localUs),
+    r:  resolveProperty(seg, "transform.rotate", localUs),
+    o:  resolveProperty(seg, "transform.opacity", localUs),
   };
 }
 
