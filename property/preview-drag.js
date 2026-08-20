@@ -67,14 +67,23 @@ class DragSession extends GestureSession {
     const nx = OverlayState.get(c.target.id, "transform.positionX");
     const ny = OverlayState.get(c.target.id, "transform.positionY");
     if (nx === undefined || ny === undefined) return;        // 没拖过 → 不落库
+    const k = c.key.split(":");
+    const args = { track_type: k[0], track_index: +k[1], index: +k[2] };
+    const paths = ["transform.positionX", "transform.positionY"];
     if (c.hasAnimX || c.hasAnimY) {
-      // 有动画通道 → 在当前 localSnap 处打关键帧（与面板 addKfAtPlayhead 同命令，位置参数）
-      const k = c.key.split(":");
-      const type = k[0], ti = +k[1], idx = +k[2];
+      // 有动画通道 → 在当前 localSnap 处打关键帧（事务：一次拖动 = 一条 undo）
       const jobs = [];
-      if (c.hasAnimX) jobs.push(call("add_keyframe", type, ti, idx, "transform.positionX", c.localSnap, nx, "linear"));
-      if (c.hasAnimY) jobs.push(call("add_keyframe", type, ti, idx, "transform.positionY", c.localSnap, ny, "linear"));
-      Promise.all(jobs).then(() => refresh()).catch(err => console.error("[preview-drag] add_keyframe 失败:", err));
+      if (c.hasAnimX) jobs.push(CommandService.run("add_keyframe", Object.assign({}, args, {
+        path: "transform.positionX", time_us: c.localSnap, value: nx, seg_mode: "linear",
+      }), { actor: "ui", paths: ["transform.positionX"] }));
+      if (c.hasAnimY) jobs.push(CommandService.run("add_keyframe", Object.assign({}, args, {
+        path: "transform.positionY", time_us: c.localSnap, value: ny, seg_mode: "linear",
+      }), { actor: "ui", paths: ["transform.positionY"] }));
+      CommandService.withTx("drag-transform-kf", () => Promise.all(jobs).then(rs => {
+        const bad = rs.find(r => !r || r.ok === false);
+        if (bad) return { ok: false, error: (bad.error || "add_keyframe 失败") };
+        return { ok: true };
+      }), { onError: e => console.error("[preview-drag] add_keyframe 失败:", e) });
     } else {
       // 无动画通道 → 写静态 transform（C1.3：setProperty 统一 params + legacy mirror）
       const seg = c.seg;
@@ -91,15 +100,10 @@ class DragSession extends GestureSession {
         rotation: (typeof getProperty === "function") ? getProperty(seg, "transform.rotate") : (tr.rotation != null ? tr.rotation : 0),
         opacity: (typeof getProperty === "function") ? getProperty(seg, "transform.opacity") : (tr.opacity != null ? tr.opacity : 1),
       };
-      // ⚠️ call() 纯位置参数桥接（pywebview）——按 Python 签名 update_segment_transform
-      // (track_type, track_index, index, segid, transform) 传 5 个位置参数（弹回根因修复 6b06e2b）
-      const k = c.key.split(":");
-      call("update_segment_transform", k[0], +k[1], +k[2], c.target.id, next)
-        .then(res => {
-          if (res && res.ok === false) console.error("[preview-drag] transform commit 被拒:", res.error);
-          refresh();
-        })
-        .catch(err => console.error("[preview-drag] 写 transform 失败:", err));
+      // 位置参数经 execute 包装：execute(cmd_id, args_dict) → fn(**args)——args 键名=Python 签名参数名
+      CommandService.withTx("drag-transform", () => CommandService.run("update_segment_transform", Object.assign({}, args, {
+        segid: c.target.id, transform: next,
+      }), { actor: "ui", paths }), { onError: e => console.error("[preview-drag] 写 transform 失败:", e) });
     }
   }
   cancel() { /* 不落库，丢弃 overlay */ }
