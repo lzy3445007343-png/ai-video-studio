@@ -29,6 +29,9 @@ function _transformOverlay() {
 
 /* —— 渲染选中 video/image 段的手柄（选中态/非播放时） —— */
 function renderTransformHandles() {
+  // 2026-08-20 修复：交互进行中（缩放/旋转 session active）绝不重建 overlay——
+  // 否则按住的手柄元素被 innerHTML="" 销毁，pointerup 丢失 → session 永不结束 → "鼠标进预览框就停不下来"。
+  if (typeof InteractionManager !== "undefined" && InteractionManager.activeSession) return;
   const ov = _transformOverlay();
   if (!ov) return;
   ov.innerHTML = "";
