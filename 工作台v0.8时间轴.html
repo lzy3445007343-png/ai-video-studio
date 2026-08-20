@@ -391,6 +391,10 @@
   .seg .handle { position: absolute; top: 0; bottom: 0; width: 7px; cursor: ew-resize; background: rgba(61,169,255,.35); }
   .seg .handle.l { left: 0; } .seg .handle.r { right: 0; }
   .seg .handle:hover { background: rgba(61,169,255,.65); }
+  /* 关键帧 marker（2026-08-20，对齐 OpenCut timeline-element.tsx KeyframeIndicator：白色菱形 8x8） */
+  .seg .kf-marker { position: absolute; top: 50%; width: 8px; height: 8px; background: #fff;
+    border: 1px solid #000; transform: translate(-50%,-50%) rotate(45deg); pointer-events: auto; z-index: 5; }
+  .seg .kf-marker.is-selected { background: var(--primary, #3da9ff); border-color: var(--primary, #3da9ff); }
   .seg.effect { border-top: 2px dashed rgba(255,255,255,.28); }   /* 图层语义：虚线顶边 = 这是盖在素材上的「层」 */
   .seg.effect .hdr { font-style: italic; }
   /* 变速倍率徽章：段上显示当前 speed（对齐 OpenCut speed 标签），speed=1 不显示 */

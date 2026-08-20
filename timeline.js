@@ -445,8 +445,24 @@ function makeSeg(s, type, ti, idx, overrideLeftUs, forceDragging) {
   const speedBadge = (s.speed && s.speed !== 1) ? ('<div class="speed-badge">' + s.speed + 'x</div>') : '';
   const stBadge = (type === "sticker") ? '<div class="badge">贴</div>' : '';
   const fillHtml = waveCanvas || ('<div class="fill" style="' + bgStyle + '"></div>');
+  // 关键帧 marker（2026-08-20，对齐 OpenCut timeline-element.tsx KeyframeIndicator：白色菱形选中变蓝）
+  // 遍历所有动画通道，按 key.time 在段内绝对定位一个 8x8 菱形（钳制 0..duration 防溢出，seg overflow:hidden 会裁切段外的）
+  let kfMarkersHtml = "";
+  if (s.animations) {
+    const durSec = (s.duration || 0) / 1e6;
+    for (const path in s.animations) {
+      const ch = s.animations[path];
+      if (!ch || !ch.keys || !ch.keys.length) continue;
+      for (const k of ch.keys) {
+        const tSec = Math.max(0, Math.min(durSec, (k.time || 0) / 1e6));
+        const xPx = tSec * pps();
+        kfMarkersHtml += '<div class="kf-marker" data-path="' + path + '" data-kftime="' + (k.time || 0) + '" style="left:' + xPx + 'px"></div>';
+      }
+    }
+  }
   seg.innerHTML =
     fillHtml +
+    kfMarkersHtml +
     '<div class="hdr">' + headerTxt + '</div>' +
     speedBadge + stBadge +
     (key === Store.state.selectedKey ? '<div class="handle l"></div><div class="handle r"></div>' : '');
