@@ -128,6 +128,12 @@
     background: var(--panel-2); border: 1px solid var(--border); color: var(--muted); cursor: pointer; }
   .preview .controls .asp-btn:hover { color: var(--text); border-color: #ffffff44; }
   .preview .controls .asp-btn.on { background: var(--primary); color: #fff; border-color: var(--primary); }
+  /* C5.2 画布缩放控件（右下角：− 适应 100% + 滑块 %） */
+  .preview .controls .zoom-group { display: flex; align-items: center; gap: 3px; margin-left: auto; }
+  .preview .controls .zoom-btn { padding: 3px 7px; font-size: 11px; line-height: 1; border-radius: 4px; background: transparent; border: 1px solid #ffffff22; color: var(--text); cursor: pointer; }
+  .preview .controls .zoom-btn:hover { color: var(--text); border-color: #ffffff44; }
+  .preview .controls .zoom-slider { width: 70px; height: 14px; accent-color: var(--primary); }
+  .preview .controls .zoom-pct { color: var(--muted); font-size: 11px; min-width: 38px; text-align: center; font-variant-numeric: tabular-nums; }
   #canvasFrame { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
     border: 1px solid #ffffff2e; pointer-events: none; z-index: 5;
     box-shadow: 0 0 0 2000px rgba(0, 0, 0, .55); }
@@ -478,6 +484,14 @@
           <button class="asp-btn" data-ratio="3:4">3:4</button>
           <button class="asp-btn" data-ratio="1:1">1:1</button>
           <button class="asp-btn" data-ratio="auto" title="解除锁定：由素材自动决定">自动</button>
+        </span>
+        <span class="zoom-group" id="zoomGroup" title="画布缩放（Ctrl+滚轮）">
+          <button class="zoom-btn" id="zoomOutBtn" title="缩小">−</button>
+          <button class="zoom-btn" id="zoomFitBtn" title="适应屏幕">适应</button>
+          <button class="zoom-btn" id="zoomActualBtn" title="实际大小">100%</button>
+          <button class="zoom-btn" id="zoomInBtn" title="放大">+</button>
+          <input type="range" class="zoom-slider" id="zoomSlider" min="25" max="200" step="25" value="100" title="缩放比例">
+          <span class="zoom-pct" id="zoomPct">100%</span>
         </span>
       </div>
         </div>
@@ -1519,6 +1533,8 @@ function applyCanvasRatio() {
   // 画布框同步约束 previewStack 尺寸：视频/图片严格 contain 在画布内（画幅切换立即可见）
   const stack = $("previewStack");
   if (stack) { stack.style.width = w + "px"; stack.style.height = h + "px"; }
+  // C5.2：画幅切换 → viewport 重算 fitScale + 归中（zoom 保持？归中更符合直觉）
+  if (typeof PreviewCoordinate !== "undefined") { PreviewCoordinate.refreshFitScale(); PreviewCoordinate.resetPan(); }
   const cur = (Store.state.draft.canvas || {}).ratio || "16:9";
   const locked = !!((Store.state.draft.canvas || {}).locked);
   document.querySelectorAll("#aspectGroup .asp-btn").forEach(b => {
@@ -3024,6 +3040,28 @@ function refresh() {
   });
 }
 
+/* ---------- C5.2 Viewport 缩放控件（右下角） ---------- */
+function syncZoomUI() {
+  const pct = (typeof PreviewCoordinate !== "undefined") ? PreviewCoordinate.zoomPercent : 100;
+  const sl = $("zoomSlider"); if (sl) sl.value = String(Math.round(pct));
+  const p = $("zoomPct"); if (p) p.textContent = Math.round(pct) + "%";
+}
+function initZoomControls() {
+  if (typeof PreviewCoordinate === "undefined") return;
+  // C5.2：切换 viewport 坐标模式（C5.1 已证明 zoom=1 与 legacy 等价）
+  PreviewCoordinate.mode = "viewport";
+  PreviewCoordinate.refreshFitScale();
+  PreviewCoordinate.resetPan();
+  const on = (id, fn) => { const b = $(id); if (b) b.addEventListener("click", () => { fn(); syncZoomUI(); }); };
+  on("zoomOutBtn", () => PreviewCoordinate.zoomOut());
+  on("zoomInBtn", () => PreviewCoordinate.zoomIn());
+  on("zoomFitBtn", () => PreviewCoordinate.fitToScreen());
+  on("zoomActualBtn", () => PreviewCoordinate.setActualSize());
+  const sl = $("zoomSlider");
+  if (sl) sl.addEventListener("input", e => { PreviewCoordinate.setViewportPercent(+e.target.value); syncZoomUI(); });
+  syncZoomUI();
+}
+
 /* ---------- C4 订阅切片注册（ADR-2026-08-20 v2 / C4 方案） ----------
  * 依赖审计（C4.0，grep 实证）：
  *   renderTimeline    ← draft/drag/groupScale/selectedKey/selectedKeys/selectedSegId/thumbMap/waveMap/bookmarks/pxPerSec
@@ -3071,10 +3109,10 @@ function boot() {
   // 先拿本地 HTTP 服务器地址，素材才能走 http（WebView2 下 video/audio 不能读 file://）
   call("get_server_url").then(url => {
     if (url) window.MEDIA_BASE = url;
-    try { bindEvents(); initSplit(); initHSplit("L"); initHSplit("R"); initSubscriptionSlices(); refresh(); call("get_effect_registry").then(r => { if (r && r.ok) Store.set({ effects: r.meta }); }); }
+    try { bindEvents(); initSplit(); initHSplit("L"); initHSplit("R"); initZoomControls(); initSubscriptionSlices(); refresh(); call("get_effect_registry").then(r => { if (r && r.ok) Store.set({ effects: r.meta }); }); }
     catch (e) { showFatal("init: " + (e && e.stack || e)); }
   }).catch(() => {
-    try { bindEvents(); initSplit(); initHSplit("L"); initHSplit("R"); initSubscriptionSlices(); refresh(); call("get_effect_registry").then(r => { if (r && r.ok) Store.set({ effects: r.meta }); }); }
+    try { bindEvents(); initSplit(); initHSplit("L"); initHSplit("R"); initZoomControls(); initSubscriptionSlices(); refresh(); call("get_effect_registry").then(r => { if (r && r.ok) Store.set({ effects: r.meta }); }); }
     catch (e) { showFatal("init(fallback): " + (e && e.stack || e)); }
   });
 }

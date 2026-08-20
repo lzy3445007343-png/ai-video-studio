@@ -30,8 +30,12 @@ function _applyVisualSize(el, seg) {
   const cp = canvasPxJS();
   if (mw && mh) {
     const s = Math.min(cp.W / mw, cp.H / mh);
-    el.style.width = Math.max(1, Math.round(mw * s)) + "px";
-    el.style.height = Math.max(1, Math.round(mh * s)) + "px";
+    const w = Math.max(1, Math.round(mw * s));
+    const h = Math.max(1, Math.round(mh * s));
+    el.style.width = w + "px";
+    el.style.height = h + "px";
+    el.dataset.baseW = w;   // C5.2：基础 contain 尺寸（applyKfTransform 乘 zoom 做视觉放大）
+    el.dataset.baseH = h;
   } else {
     el.style.width = "100%"; el.style.height = "100%";
   }
@@ -713,8 +717,14 @@ function applyKfTransform(el, seg, localUs) {
   const t = resolveTransform(seg, localUs);
   // C5.1（2026-08-20）：统一坐标——素材中心 = PreviewCoordinate.toOverlay(x,y)，wrap 定位 = 中心 - 尺寸/2。
   // legacy 模式数学等价现状（applyCanvasRatio 已把 stack 设成 fit 尺寸，legacy sc == viewport fitScale）。
+  // C5.2（2026-08-20）：viewport 模式 wrap 尺寸 × zoom（视觉放大=画布缩放；素材属性 scale 不变，显示层 zoom）。
   const pos = PreviewCoordinate.toOverlay(t.x, t.y);
-  const w = el.offsetWidth || 0, h = el.offsetHeight || 0;
+  const zoom = (PreviewCoordinate.mode === "viewport") ? (PreviewCoordinate.zoom || 1) : 1;
+  const bw = parseFloat(el.dataset.baseW || "0"), bh = parseFloat(el.dataset.baseH || "0");
+  const w = (bw > 0 ? bw : (el.offsetWidth || 0)) * zoom;
+  const h = (bh > 0 ? bh : (el.offsetHeight || 0)) * zoom;
+  el.style.width = w + "px";          // C5.2：viewport 视觉放大（素材属性 scale 不变，显示层 zoom）
+  el.style.height = h + "px";
   el.style.left = (pos.x - w / 2) + "px";
   el.style.top = (pos.y - h / 2) + "px";
   el.style.transform = "scale(" + t.sx + "," + t.sy + ") rotate(" + t.r + "deg)";

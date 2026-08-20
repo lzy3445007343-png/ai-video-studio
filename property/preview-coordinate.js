@@ -76,4 +76,51 @@ const PreviewCoordinate = {
   displayScale() {
     return this.mode === "viewport" ? this.scale : this._legacyScale();
   },
+
+  /* =====================================================================
+   * C5.2 Viewport 控制（对齐 OpenCut preview-viewport.tsx）
+   * ===================================================================== */
+  ZOOM_MIN: 0.25,
+  ZOOM_MAX: 16,
+  ZOOM_STEP: 1.25,
+
+  // fitScale 随画布比例/容器尺寸更新（applyCanvasRatio 已把 stack 设成画布 fit 尺寸）
+  refreshFitScale() {
+    const cp = this.canvasSize();
+    this.fitScale = (cp.W && this._vw()) ? Math.min(this._vw() / cp.W, this._vh() / cp.H) : 1;
+    return this.fitScale;
+  },
+  _clampZoom(z) { return Math.max(this.ZOOM_MIN, Math.min(this.ZOOM_MAX, z)); },
+  scaleZoom(factor) { this.zoom = this._clampZoom(this.zoom * factor); this.invalidate(); },
+  zoomIn() { this.scaleZoom(this.ZOOM_STEP); },
+  zoomOut() { this.scaleZoom(1 / this.ZOOM_STEP); },
+  fitToScreen() { this.zoom = 1; this.resetPan(); this.invalidate(); },
+  setActualSize() { const fs = this.refreshFitScale(); this.zoom = this._clampZoom(fs > 0 ? 1 / fs : 1); this.invalidate(); },
+  setViewportPercent(percent) {
+    const fs = this.refreshFitScale();
+    this.zoom = this._clampZoom(fs > 0 ? percent / 100 / fs : 1);
+    this.invalidate();
+  },
+  get zoomPercent() { return Math.round(this.displayScale() * 100); },
+  resetPan() {
+    const cp = this.canvasSize();
+    this.centerX = cp.W / 2; this.centerY = cp.H / 2;
+  },
+  // 平移（center 偏移 + clamp 画布边界内，对齐 OpenCut clampViewportCenter）
+  panByScreenDelta(dx, dy) {
+    if (this.zoom <= 1 || (dx === 0 && dy === 0)) return;
+    const cp = this.canvasSize();
+    const s = this.scale;
+    this.centerX = this._clampAxis(cp.W, this.centerX + dx / s, this._vw() / (2 * s));
+    this.centerY = this._clampAxis(cp.H, this.centerY + dy / s, this._vh() / (2 * s));
+    this.invalidate();
+  },
+  _clampAxis(axisSize, center, halfSpan) {
+    if (halfSpan >= axisSize / 2) return axisSize / 2;
+    return Math.max(halfSpan, Math.min(axisSize - halfSpan, center));
+  },
+  // 通知渲染（viewport 变化 → 预览重绘；频率低可接受全量，或后续切片定向）
+  invalidate() {
+    if (typeof renderAll === "function") { try { renderAll(Store.state); } catch (e) { console.error("[PreviewCoordinate] invalidate 渲染失败:", e); } }
+  },
 };
