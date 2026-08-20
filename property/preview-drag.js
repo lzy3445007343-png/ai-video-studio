@@ -1,40 +1,26 @@
 /* =====================================================================
- * property/preview-drag.js —— 预览拖动（Step2+3+4，对齐 OpenCut preview-interaction）
+ * property/preview-drag.js —— 预览拖动（DragSession，C2 迁移）
  * =====================================================================
- * 链路（GPT 评审 v2）：
+ * 链路（C2 v2，GPT 评审）：
  *   pointerdown → hit-test（closest [data-preview-el] → previewState.visualEls）
  *     → 选中联动（目标未选中则 selectKey 单选，OpenCut beginDragFromPending 语义）
- *     → 记录起始快照（鼠标偏移/起始 transform/localUs 快照）
- *   pointermove → 位移超阈值(3px)进拖动 → PreviewInteraction 持有 override（interactionDraft）
- *     （不碰 seg/后端；renderer 读 PreviewInteraction 应用拖动值）
- *   pointerup → commit：
- *     无动画通道 → update_segment_transform({transform})；有动画通道 → add_keyframe(localSnap)
- *     → 若拖动期间被 refresh 锁缓存了 pendingRefresh → 补一次 refresh
- *   P0（2026-08-20，GPT 评审）：Refresh Lock——拖动期间 refresh() 见 PreviewInteraction.active
- *     直接 return 并置 pendingRefresh，pointerup 后补刷。杜绝 500ms 轮询替换 draft 覆盖拖动预览。
- *   P1（2026-08-20）：PreviewInteraction 独立交互状态对象替代 dataset.dragActive（DOM 不持有状态）。
- *   v2 约束：播放中禁止拖动（编辑/播放分离）；第一版只拖 video/image；单击(3px 内)=只选中
- * 依赖：previewState/Store/selectKey/resolveTransform/canvasPxJS/kfSegArgs（全局）
+ *     → InteractionManager.begin("preview-transform", new DragSession(ctx))
+ *   pointermove → manager.handleMove → DragSession：位移超阈值(3px)转 active
+ *     → OverlayState.set(segId, "transform.positionX/Y", v)（interactionDraft，不碰 seg/后端）
+ *     → 直接写 el.style.transform（拖动跟手）
+ *   pointerup → manager.handleUp → DragSession.commit()：
+ *     无动画通道 → setProperty + update_segment_transform（位置参数，弹回修复 6b06e2b 不回归）
+ *     有动画通道 → add_keyframe（位置参数）
+ *     → manager.end() → destroy：OverlayState.clear + pendingRefresh 补刷
+ *   pointercancel → manager.handleCancel → cancel()（不落库）
+ *   v2 约束：播放中禁止拖动；第一版只拖 video/image；单击(3px 内)=只选中
+ * 依赖：InteractionManager/GestureSession/OverlayState（interaction-kernel.js）
+ *       previewState/Store/selectKey/resolveTransform/canvasPxJS（全局）
  * ===================================================================== */
 
-/* —— 交互状态（P1：document state 与 interaction state 分离） —— */
-const PreviewInteraction = {
-  active: false,
-  segId: null,
-  override: null,          // {x, y} 拖动中的值（interactionDraft）
-  pendingRefresh: false,   // 拖动期间被锁的 refresh 请求（P0 refresh lock）
-  begin(segId) { this.active = true; this.segId = segId; this.override = null; },
-  update(x, y) { this.override = { x, y }; },
-  dragging(seg) { return this.active && seg && seg.id === this.segId; },
-  end() {
-    const need = this.pendingRefresh;
-    this.active = false; this.segId = null; this.override = null; this.pendingRefresh = false;
-    return need;   // 返回是否需要在 commit 后补一次 refresh
-  },
-};
+/* —— DragSession（kernel 不知道业务，DragSession 留在 preview-drag.js） —— */
 
-let previewDrag = null;
-
+/* 辅助函数（C2 迁移时保留，供 DragSession 使用） */
 function _previewLocalUs(seg) {
   return Math.max(0, Math.min(Store.state.playheadUs - seg.start, seg.duration));
 }
@@ -49,6 +35,82 @@ function _previewScale() {
   return (w && cp.W) ? w / cp.W : 1;
 }
 
+class DragSession extends GestureSession {
+  constructor(ctx) {
+    super(ctx);
+    this.moved = false;
+  }
+  onPointerMove(e) {
+    const c = this.ctx;
+    c.pointer.currentX = e.clientX; c.pointer.currentY = e.clientY;
+    const dx = e.clientX - c.pointer.startX, dy = e.clientY - c.pointer.startY;
+    if (!this.moved && Math.hypot(dx, dy) < 3) return;   // 单击阈值（3px 内=选中）
+    this.moved = true;
+    this.state = "active";
+    const sc = _previewScale();
+    // 从 path 快照算新值（v2：snapshot 是 path 化的，与 C1 kernel 对齐）
+    const nx = Math.round((c.snapshot["transform.positionX"] + dx / sc) * 100) / 100;
+    const ny = Math.round((c.snapshot["transform.positionY"] + dy / sc) * 100) / 100;
+    OverlayState.set(c.target.id, "transform.positionX", nx);
+    OverlayState.set(c.target.id, "transform.positionY", ny);
+    const t = resolveTransform(c.seg, c.localSnap);
+    c.el.style.transform = "translate(" + (nx * sc) + "px," + (ny * sc) + "px) scale(" + t.sx + "," + t.sy + ") rotate(" + t.r + "deg)";
+    if (e.cancelable) e.preventDefault();
+  }
+  onPointerUp(e) {
+    if (e.cancelable) e.preventDefault();
+    if (!this.moved) { InteractionManager.end(); return; }   // 单击 → 仅选中（已 selectKey）
+    InteractionManager.commit();   // session.commit() 落库 + end()（destroy → clear overlay + 补刷）
+  }
+  commit() {
+    const c = this.ctx;
+    const nx = OverlayState.get(c.target.id, "transform.positionX");
+    const ny = OverlayState.get(c.target.id, "transform.positionY");
+    if (nx === undefined || ny === undefined) return;        // 没拖过 → 不落库
+    if (c.hasAnimX || c.hasAnimY) {
+      // 有动画通道 → 在当前 localSnap 处打关键帧（与面板 addKfAtPlayhead 同命令，位置参数）
+      const k = c.key.split(":");
+      const type = k[0], ti = +k[1], idx = +k[2];
+      const jobs = [];
+      if (c.hasAnimX) jobs.push(call("add_keyframe", type, ti, idx, "transform.positionX", c.localSnap, nx, "linear"));
+      if (c.hasAnimY) jobs.push(call("add_keyframe", type, ti, idx, "transform.positionY", c.localSnap, ny, "linear"));
+      Promise.all(jobs).then(() => refresh()).catch(err => console.error("[preview-drag] add_keyframe 失败:", err));
+    } else {
+      // 无动画通道 → 写静态 transform（C1.3：setProperty 统一 params + legacy mirror）
+      const seg = c.seg;
+      setProperties(seg, {
+        "transform.positionX": nx,
+        "transform.positionY": ny,
+      });
+      // 后端落盘（合并保留其他字段，从 params/旧字段取）
+      const tr = seg.transform || {};
+      const next = {
+        x: nx, y: ny,
+        scaleX: (typeof getProperty === "function") ? getProperty(seg, "transform.scaleX") : (tr.scaleX != null ? tr.scaleX : 1),
+        scaleY: (typeof getProperty === "function") ? getProperty(seg, "transform.scaleY") : (tr.scaleY != null ? tr.scaleY : 1),
+        rotation: (typeof getProperty === "function") ? getProperty(seg, "transform.rotate") : (tr.rotation != null ? tr.rotation : 0),
+        opacity: (typeof getProperty === "function") ? getProperty(seg, "transform.opacity") : (tr.opacity != null ? tr.opacity : 1),
+      };
+      // ⚠️ call() 纯位置参数桥接（pywebview）——按 Python 签名 update_segment_transform
+      // (track_type, track_index, index, segid, transform) 传 5 个位置参数（弹回根因修复 6b06e2b）
+      const k = c.key.split(":");
+      call("update_segment_transform", k[0], +k[1], +k[2], c.target.id, next)
+        .then(res => {
+          if (res && res.ok === false) console.error("[preview-drag] transform commit 被拒:", res.error);
+          refresh();
+        })
+        .catch(err => console.error("[preview-drag] 写 transform 失败:", err));
+    }
+  }
+  cancel() { /* 不落库，丢弃 overlay */ }
+  destroy() {
+    OverlayState.clear(this.ctx.target.id);
+    const need = InteractionManager.takePendingRefresh();
+    if (need) refresh();           // 拖动中被锁的 refresh 补刷（commit 已 .then(refresh) 时重复一次，幂等无害）
+  }
+}
+
+/* —— 薄壳事件 handler（语义与 C2 前完全一致） —— */
 function onPreviewDragDown(e) {
   if (isPlaying) return;                                    // v2：播放中禁止拖动
   const t = e.target;
@@ -62,92 +124,25 @@ function onPreviewDragDown(e) {
   if (Store.state.selectedKey !== rec.key) selectKey(rec.key);
   const tr = resolveTransform(seg, _previewLocalUs(seg));
   const rect = wrap.getBoundingClientRect();
-  PreviewInteraction.begin(seg.id);
-  previewDrag = {
+  // v2 ctx 三层：pointer（鼠标）/ target（操作对象）/ snapshot（事务前 path 快照）
+  // DragSession 专属引用（seg/el/key/localSnap/hasAnimX/Y）放 ctx 顶层
+  const ctx = {
+    pointer: { id: e.pointerId, startX: e.clientX, startY: e.clientY, currentX: e.clientX, currentY: e.clientY },
+    target: { type: "segment", id: seg.id },
     seg, el: wrap, key: rec.key,
-    startCX: e.clientX, startCY: e.clientY,
     offX: e.clientX - rect.left, offY: e.clientY - rect.top,   // 抓哪拖哪
-    startX: tr.x, startY: tr.y,
-    moved: false, last: null,
+    snapshot: { "transform.positionX": tr.x, "transform.positionY": tr.y },
     localSnap: _previewLocalUs(seg),
     hasAnimX: _previewHasAnim(seg, "transform.positionX"),
     hasAnimY: _previewHasAnim(seg, "transform.positionY"),
   };
+  InteractionManager.begin("preview-transform", new DragSession(ctx));
   try { $("previewStack").setPointerCapture(e.pointerId); } catch (err) { /* ignore */ }
   if (e.cancelable) e.preventDefault();
 }
-
-function onPreviewDragMove(e) {
-  if (!previewDrag) return;
-  const dx = e.clientX - previewDrag.startCX;
-  const dy = e.clientY - previewDrag.startCY;
-  if (!previewDrag.moved && Math.hypot(dx, dy) < 3) return;   // 单击阈值（3px 内=选中）
-  previewDrag.moved = true;
-  const sc = _previewScale();
-  const nx = Math.round((previewDrag.startX + dx / sc) * 100) / 100;
-  const ny = Math.round((previewDrag.startY + dy / sc) * 100) / 100;
-  previewDrag.last = { x: nx, y: ny };
-  // interactionDraft（P1）：值存 PreviewInteraction，renderer 读它应用；不碰 seg/后端
-  PreviewInteraction.update(nx, ny);
-  const t = resolveTransform(previewDrag.seg, previewDrag.localSnap);
-  const el = previewDrag.el;
-  el.style.transform = "translate(" + (nx * sc) + "px," + (ny * sc) + "px) scale(" + t.sx + "," + t.sy + ") rotate(" + t.r + "deg)";
-  if (e.cancelable) e.preventDefault();
-}
-
-function onPreviewDragUp(e) {
-  if (!previewDrag) return;
-  const drag = previewDrag;
-  previewDrag = null;
-  const needRefresh = PreviewInteraction.end();              // P0：释放 refresh 锁，取回被缓存的 pendingRefresh
-  if (!drag.moved || !drag.last) {                           // 单击 → 只做选中（已 selectKey）
-    if (needRefresh) refresh();
-    return;
-  }
-  const nx = drag.last.x, ny = drag.last.y;
-  if (drag.hasAnimX || drag.hasAnimY) {
-    // 有动画通道 → 在当前 localSnap 处打关键帧（与面板 addKfAtPlayhead 同命令）
-    const k = drag.key.split(":");
-    const type = k[0], ti = +k[1], idx = +k[2];
-    const jobs = [];
-    if (drag.hasAnimX) jobs.push(call("add_keyframe", type, ti, idx, "transform.positionX", drag.localSnap, nx, "linear"));
-    if (drag.hasAnimY) jobs.push(call("add_keyframe", type, ti, idx, "transform.positionY", drag.localSnap, ny, "linear"));
-    Promise.all(jobs).then(() => refresh()).catch(err => console.error("[preview-drag] add_keyframe 失败:", err));
-  } else {
-    // 无动画通道 → 写静态 transform（C1.3：走 setProperty 统一 params + legacy mirror）
-    const seg = drag.seg;
-    setProperties(seg, {
-      "transform.positionX": nx,
-      "transform.positionY": ny,
-    });
-    // 后端落盘（合并保留其他字段，从 params/旧字段取）
-    const tr = seg.transform || {};
-    const next = {
-      x: nx, y: ny,
-      scaleX: (typeof getProperty === "function") ? getProperty(seg, "transform.scaleX") : (tr.scaleX != null ? tr.scaleX : 1),
-      scaleY: (typeof getProperty === "function") ? getProperty(seg, "transform.scaleY") : (tr.scaleY != null ? tr.scaleY : 1),
-      rotation: (typeof getProperty === "function") ? getProperty(seg, "transform.rotate") : (tr.rotation != null ? tr.rotation : 0),
-      opacity: (typeof getProperty === "function") ? getProperty(seg, "transform.opacity") : (tr.opacity != null ? tr.opacity : 1),
-    };
-    // ⚠️ 2026-08-20 根因修复：call() 是纯位置参数桥接（pywebview），对象会落到 track_type 上导致
-    // segid=None → 后端"未定位到段" → 静默弹回（.then 不检查 res.ok，无任何日志）。
-    // 必须按 Python 签名 update_segment_transform(track_type, track_index, index, segid, transform) 传位置参数。
-    const k = drag.key.split(":");
-    call("update_segment_transform", k[0], +k[1], +k[2], drag.seg.id, next)
-      .then(res => {
-        if (res && res.ok === false) console.error("[preview-drag] transform commit 被拒:", res.error);
-        refresh();
-      })
-      .catch(err => console.error("[preview-drag] 写 transform 失败:", err));
-  }
-}
-
-function onPreviewDragCancel() {
-  if (!previewDrag) return;
-  previewDrag = null;
-  const needRefresh = PreviewInteraction.end();
-  if (needRefresh) refresh();
-}
+function onPreviewDragMove(e) { if (typeof InteractionManager !== "undefined") InteractionManager.handleMove(e); }
+function onPreviewDragUp(e) { if (typeof InteractionManager !== "undefined") InteractionManager.handleUp(e); }
+function onPreviewDragCancel() { if (typeof InteractionManager !== "undefined") InteractionManager.handleCancel(); }
 
 function bindPreviewDrag() {
   const stack = $("previewStack");

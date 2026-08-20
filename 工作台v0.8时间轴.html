@@ -771,6 +771,7 @@
 <script src="effects.js"></script>
 <script src="renderer.js"></script>
 <script src="property/property-kernel.js"></script>
+<script src="property/interaction-kernel.js"></script>
 <!-- 2026-08-19 Property Framework v1 基础设施（ADR-2026-08-19，Phase 1 最小集，暂未接入面板） -->
 <script src="property/Field.js"></script>
 <script src="property/DraftStore.js"></script>
@@ -2982,10 +2983,10 @@ function bindEvents() {
 
 /* ---------- 从后端拉取最新状态填入 Store ---------- */
 function refresh() {
-  // P0 refresh lock（2026-08-20，GPT 评审）：预览拖动交互期间禁止 refresh——
-  // 否则 500ms 轮询替换 Store.state.draft 会覆盖拖动预览/引发引用竞态。锁期间缓存请求，pointerup 后补刷。
-  if (typeof PreviewInteraction !== "undefined" && PreviewInteraction.active) {
-    PreviewInteraction.pendingRefresh = true;
+  // Refresh Lock（C2 上移 InteractionManager）：任何交互会话期间禁止 refresh——
+  // 否则 500ms 轮询替换 Store.state.draft 会覆盖交互预览/引发引用竞态。锁期间缓存请求，会话结束补刷。
+  if (typeof InteractionManager !== "undefined" && InteractionManager.blocksRefresh()) {
+    InteractionManager.notePendingRefresh();
     return Promise.resolve();
   }
   return call("get_state").then(st => {

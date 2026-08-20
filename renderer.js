@@ -677,17 +677,9 @@ function resolveTransform(seg, localUs) {
 }
 
 function applyKfTransform(el, seg, localUs) {
-  // P1（2026-08-20）：拖动覆盖——PreviewInteraction 持有拖动中的值，renderer 读它应用（interactionDraft）
-  // 替代旧 dataset.dragActive 方案（DOM 不持有交互状态）；refresh 锁(P0)保证拖动期间后端不回来覆盖。
-  if (typeof PreviewInteraction !== "undefined" && PreviewInteraction.dragging(seg) && PreviewInteraction.override) {
-    const t = resolveTransform(seg, localUs);
-    const stack = $("previewStack"); const rect = stack ? stack.getBoundingClientRect() : null;
-    const cp = canvasPxJS();
-    const sc = (rect && rect.width) ? rect.width / cp.W : 1;
-    const d = PreviewInteraction.override;
-    el.style.transform = "translate(" + (d.x * sc) + "px," + (d.y * sc) + "px) scale(" + t.sx + "," + t.sy + ") rotate(" + t.r + "deg)";
-    return;
-  }
+  // C2（2026-08-20）：拖动中由 DragSession 持有 overlay（OverlayState + 直接写 el.style），
+  // renderer 跳过接管（等价旧 PreviewInteraction.dragging 语义；Refresh Lock 已上移 InteractionManager）
+  if (typeof InteractionManager !== "undefined" && InteractionManager.isActiveOn(seg.id)) return;
   const t = resolveTransform(seg, localUs);
   const stack = $("previewStack"); const rect = stack ? stack.getBoundingClientRect() : null;
   const cp = canvasPxJS();
