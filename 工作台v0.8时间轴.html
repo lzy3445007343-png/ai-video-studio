@@ -1751,6 +1751,35 @@ function doSetSpeed() {
     });
 }
 
+/* 导出剪映草稿：命名 → 选保存位置（系统文件夹框，初始定位上次路径）→ 导出 → 显示完整路径
+ * 2026-08-20 重写：原实现 call("export_draft","我的剪辑","") 硬编码名字+空文件夹，
+ * 导出成功只 alert "已导出" 不显示路径——用户不知道导到哪。现在每次都可选位置、可命名、
+ * 返回完整 path + 跳过清单。后端 select_folder/get_default_export_folder/export_draft 本就齐全，前端之前没用。 */
+async function doExportDraft() {
+  // 1) 命名（默认带时间戳，避免每次覆盖同名草稿）
+  const d = new Date();
+  const pad = n => String(n).padStart(2, "0");
+  const defName = "我的剪辑_" + d.getFullYear() + pad(d.getMonth() + 1) + pad(d.getDate()) + "_" + pad(d.getHours()) + pad(d.getMinutes());
+  const name = (prompt("请输入剪映草稿名称：", defName) || "").trim();
+  if (!name) return;
+  // 2) 选保存位置（系统文件夹选择框，初始定位到上次导出路径）
+  const folder = await call("select_folder");
+  if (typeof folder !== "string" || !folder) { alert("已取消导出（未选择保存位置）"); return; }
+  // 3) 导出（后端返回完整草稿文件夹路径 + 跳过清单）
+  const r = await call("export_draft", name, folder);
+  if (r && r.ok) {
+    let msg = "✅ 导出成功\n\n草稿位置：\n" + r.path + "\n\n已导出 " + r.segments + " 个片段";
+    if (r.skipped && r.skipped.length) {
+      msg += "\n\n⚠️ " + r.skipped.length + " 个片段被跳过：\n" +
+        r.skipped.slice(0, 8).map(s => "· " + (s.name || "") + "：" + (s.reason || "")).join("\n") +
+        (r.skipped.length > 8 ? "\n… 等 " + r.skipped.length + " 个" : "");
+    }
+    alert(msg + "\n\n现在可以打开剪映 → 导入草稿验证");
+  } else {
+    alert("❌ 导出失败：" + ((r && r.error) || "未知错误"));
+  }
+}
+
 /* ---------- 吸附（对齐 OpenCut snapping/{build,resolve,threshold}.ts） ---------- */
 // 收集吸附点：所有段的 start/end + 关键帧 + 书签 + 播放头位置（微秒）。
 // excludeKey 排除正在拖的段，避免吸到自己。
@@ -2984,8 +3013,7 @@ function bindEvents() {
   $("speedBtn").addEventListener("click", doSetSpeed);   // 变速 / 重定时（对齐 OpenCut updateElementRetime）
   $("snapBtn").addEventListener("click", toggleSnap);   // 吸附开关（对齐 OpenCut N 键）
   $("rippleBtn").addEventListener("click", toggleRipple);   // 波纹开关（对齐 OpenCut R 键）
-  $("exportBtn").addEventListener("click", () =>
-    call("export_draft", "我的剪辑", "").then(r => alert(r && r.ok ? "已导出剪映草稿" : "导出失败：" + (r && r.error))));
+  $("exportBtn").addEventListener("click", doExportDraft);
   $("undoBtn").addEventListener("click", () => call("undo").then(refresh));
   $("redoBtn").addEventListener("click", () => call("redo").then(refresh));
   document.addEventListener("dragover", e => { moveDragGhost(e.clientX, e.clientY); });

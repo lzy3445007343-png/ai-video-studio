@@ -4422,9 +4422,15 @@ class Api:
         save_state(self.state)
         return {"ok": True, "canvas": canvas}
 
-    def select_folder(self):
-        """弹系统文件夹选择框，返回选中的文件夹路径（字符串）或 None。"""
-        result = webview.windows[0].create_file_dialog(webview.FOLDER_DIALOG)
+    def select_folder(self, initial=None):
+        """弹系统文件夹选择框，返回选中的文件夹路径（字符串）或 None。
+        initial: 初始目录（用于定位到上次导出路径）；为空则用记住的默认导出路径。"""
+        directory = initial or get_setting("default_export_folder", None) or ""
+        try:
+            result = webview.windows[0].create_file_dialog(webview.FOLDER_DIALOG, directory=directory)
+        except TypeError:
+            # 老版本 pywebview 可能不接受 directory 参数，降级为无初始目录
+            result = webview.windows[0].create_file_dialog(webview.FOLDER_DIALOG)
         if result and isinstance(result, (list, tuple)) and len(result) > 0:
             return result[0]
         return None
