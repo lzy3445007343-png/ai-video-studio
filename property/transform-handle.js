@@ -90,6 +90,12 @@ function renderTransformHandles() {
  * ===================================================================== */
 class ResizeSession extends GestureSession {
   constructor(ctx) { super(ctx); }
+  // 2026-08-20 修复：必须覆写 onPointerUp——基类只 commit 不 end（activeSession 残留）
+  // → 松手后鼠标移动仍触发 onPointerMove（"停不下来"）。与 DragSession 对齐：InteractionManager.commit()
+  onPointerUp(e) {
+    if (e.cancelable) e.preventDefault();
+    InteractionManager.commit();   // session.commit() 落库 + end()（destroy → clear overlay + activeSession=null）
+  }
   onPointerMove(e) {
     const c = this.ctx;
     const t = resolveTransform(c.seg, c.localSnap);
@@ -156,6 +162,11 @@ class ResizeSession extends GestureSession {
  * ===================================================================== */
 class RotateSession extends GestureSession {
   constructor(ctx) { super(ctx); }
+  // 2026-08-20 修复：同 ResizeSession——必须覆写 onPointerUp，基类只 commit 不 end
+  onPointerUp(e) {
+    if (e.cancelable) e.preventDefault();
+    InteractionManager.commit();
+  }
   onPointerMove(e) {
     const c = this.ctx;
     const el = c.el; const t = resolveTransform(c.seg, c.localSnap);
