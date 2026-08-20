@@ -688,7 +688,17 @@ function resolveTransform(seg, localUs) {
 }
 
 function applyKfTransform(el, seg, localUs) {
-  if (el.dataset && el.dataset.dragActive) return;   // 2026-08-20：预览拖动中（interactionDraft），保留拖动位置不覆盖
+  // P1（2026-08-20）：拖动覆盖——PreviewInteraction 持有拖动中的值，renderer 读它应用（interactionDraft）
+  // 替代旧 dataset.dragActive 方案（DOM 不持有交互状态）；refresh 锁(P0)保证拖动期间后端不回来覆盖。
+  if (typeof PreviewInteraction !== "undefined" && PreviewInteraction.dragging(seg) && PreviewInteraction.override) {
+    const t = resolveTransform(seg, localUs);
+    const stack = $("previewStack"); const rect = stack ? stack.getBoundingClientRect() : null;
+    const cp = canvasPxJS();
+    const sc = (rect && rect.width) ? rect.width / cp.W : 1;
+    const d = PreviewInteraction.override;
+    el.style.transform = "translate(" + (d.x * sc) + "px," + (d.y * sc) + "px) scale(" + t.sx + "," + t.sy + ") rotate(" + t.r + "deg)";
+    return;
+  }
   const t = resolveTransform(seg, localUs);
   const stack = $("previewStack"); const rect = stack ? stack.getBoundingClientRect() : null;
   const cp = canvasPxJS();

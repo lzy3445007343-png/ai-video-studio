@@ -5,14 +5,34 @@
  *   pointerdown → hit-test（closest [data-preview-el] → previewState.visualEls）
  *     → 选中联动（目标未选中则 selectKey 单选，OpenCut beginDragFromPending 语义）
  *     → 记录起始快照（鼠标偏移/起始 transform/localUs 快照）
- *   pointermove → 位移超阈值(3px)进拖动 → 只改 el.style + data-dragActive 标记
- *     （interactionDraft：不碰 seg/后端，refresh 替换 seg 对象也不丢；renderer 跳过该元素）
- *   pointerup → 恢复 renderer 接管 → commit：
- *     无动画通道 → set_segments_props({transform:{x,y,...}})（后端写 seg.transform）
- *     有动画通道 → add_keyframe(path, localSnap, value)（当前播放头处打点）
+ *   pointermove → 位移超阈值(3px)进拖动 → PreviewInteraction 持有 override（interactionDraft）
+ *     （不碰 seg/后端；renderer 读 PreviewInteraction 应用拖动值）
+ *   pointerup → commit：
+ *     无动画通道 → update_segment_transform({transform})；有动画通道 → add_keyframe(localSnap)
+ *     → 若拖动期间被 refresh 锁缓存了 pendingRefresh → 补一次 refresh
+ *   P0（2026-08-20，GPT 评审）：Refresh Lock——拖动期间 refresh() 见 PreviewInteraction.active
+ *     直接 return 并置 pendingRefresh，pointerup 后补刷。杜绝 500ms 轮询替换 draft 覆盖拖动预览。
+ *   P1（2026-08-20）：PreviewInteraction 独立交互状态对象替代 dataset.dragActive（DOM 不持有状态）。
  *   v2 约束：播放中禁止拖动（编辑/播放分离）；第一版只拖 video/image；单击(3px 内)=只选中
  * 依赖：previewState/Store/selectKey/resolveTransform/canvasPxJS/kfSegArgs（全局）
  * ===================================================================== */
+
+/* —— 交互状态（P1：document state 与 interaction state 分离） —— */
+const PreviewInteraction = {
+  active: false,
+  segId: null,
+  override: null,          // {x, y} 拖动中的值（interactionDraft）
+  pendingRefresh: false,   // 拖动期间被锁的 refresh 请求（P0 refresh lock）
+  begin(segId) { this.active = true; this.segId = segId; this.override = null; },
+  update(x, y) { this.override = { x, y }; },
+  dragging(seg) { return this.active && seg && seg.id === this.segId; },
+  end() {
+    const need = this.pendingRefresh;
+    this.active = false; this.segId = null; this.override = null; this.pendingRefresh = false;
+    return need;   // 返回是否需要在 commit 后补一次 refresh
+  },
+};
+
 let previewDrag = null;
 
 function _previewLocalUs(seg) {
@@ -42,6 +62,7 @@ function onPreviewDragDown(e) {
   if (Store.state.selectedKey !== rec.key) selectKey(rec.key);
   const tr = resolveTransform(seg, _previewLocalUs(seg));
   const rect = wrap.getBoundingClientRect();
+  PreviewInteraction.begin(seg.id);
   previewDrag = {
     seg, el: wrap, key: rec.key,
     startCX: e.clientX, startCY: e.clientY,
@@ -66,10 +87,10 @@ function onPreviewDragMove(e) {
   const nx = Math.round((previewDrag.startX + dx / sc) * 100) / 100;
   const ny = Math.round((previewDrag.startY + dy / sc) * 100) / 100;
   previewDrag.last = { x: nx, y: ny };
+  // interactionDraft（P1）：值存 PreviewInteraction，renderer 读它应用；不碰 seg/后端
+  PreviewInteraction.update(nx, ny);
   const t = resolveTransform(previewDrag.seg, previewDrag.localSnap);
   const el = previewDrag.el;
-  // interactionDraft：只改 DOM + 标记（不碰 seg/后端；refresh 替换 seg 也不丢；applyKfTransform 见标记跳过）
-  el.dataset.dragActive = "1";
   el.style.transform = "translate(" + (nx * sc) + "px," + (ny * sc) + "px) scale(" + t.sx + "," + t.sy + ") rotate(" + t.r + "deg)";
   if (e.cancelable) e.preventDefault();
 }
@@ -78,8 +99,11 @@ function onPreviewDragUp(e) {
   if (!previewDrag) return;
   const drag = previewDrag;
   previewDrag = null;
-  delete drag.el.dataset.dragActive;                        // 恢复 renderer 接管
-  if (!drag.moved || !drag.last) return;                    // 单击 → 只做选中（已 selectKey）
+  const needRefresh = PreviewInteraction.end();              // P0：释放 refresh 锁，取回被缓存的 pendingRefresh
+  if (!drag.moved || !drag.last) {                           // 单击 → 只做选中（已 selectKey）
+    if (needRefresh) refresh();
+    return;
+  }
   const nx = drag.last.x, ny = drag.last.y;
   if (drag.hasAnimX || drag.hasAnimY) {
     // 有动画通道 → 在当前 localSnap 处打关键帧（与面板 addKfAtPlayhead 同命令）
@@ -107,8 +131,9 @@ function onPreviewDragUp(e) {
 
 function onPreviewDragCancel() {
   if (!previewDrag) return;
-  delete previewDrag.el.dataset.dragActive;
   previewDrag = null;
+  const needRefresh = PreviewInteraction.end();
+  if (needRefresh) refresh();
 }
 
 function bindPreviewDrag() {

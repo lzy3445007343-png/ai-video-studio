@@ -1190,20 +1190,26 @@ function syncPreviewVolume() {
   }
 }
 function renderAll(s) {
-  renderMedia(s);
-  if (!isPlaying) renderTimeline(s);   // 播放中冻结时间轴重建：OpenCut 播放时绝不重建 timeline DOM，否则每 0.5s 拆建导致闪/双播放头撕裂
-  renderPreviewMaybe(s);
-  renderTimecode(s);
-  renderSkill(s);
-  renderMcp(s);
-  // 2026-08-19 根因修复：仅后台轮询/非用户动作时冻结属性面板重建。
-  // 否则每 0.5s refresh()→Store.set→这里会无条件推倒重建所有面板 innerHTML，
-  // 按钮在 mousedown→mouseup 之间被替换，click 永不触发 → “点不动”。用户动作(_suppressPanelRender=false)仍正常重渲。
-  // 2026-08-19 23:00 全面板持久化：只渲染 active tab 面板（showToolTab→renderPropertyPanel），
-  // 不再无条件调 renderMaskPanel/renderSubtitlePanel/renderStickerPanel——非 active 面板 display:none 无需渲染，
-  // 否则每个 500ms 轮询都在重建隐藏面板 = 整个参数面板每 0.5s 全量刷新（"哪里都是抓手"的根源）。
-  if (!_suppressPanelRender) {
-    showToolTab(activeToolTab);
+  // 2026-08-20 诊断打点（GPT 评审）：任何渲染函数崩溃 → [renderAll fail] + 堆栈，不静默黑屏
+  console.log("[renderAll start]");
+  try {
+    renderMedia(s);
+    if (!isPlaying) renderTimeline(s);   // 播放中冻结时间轴重建：OpenCut 播放时绝不重建 timeline DOM，否则每 0.5s 拆建导致闪/双播放头撕裂
+    renderPreviewMaybe(s);
+    renderTimecode(s);
+    renderSkill(s);
+    renderMcp(s);
+    // 2026-08-19 根因修复：仅后台轮询/非用户动作时冻结属性面板重建。
+    // 否则每 0.5s refresh()→Store.set→这里会无条件推倒重建所有面板 innerHTML，
+    // 按钮在 mousedown→mouseup 之间被替换，click 永不触发 → “点不动”。用户动作(_suppressPanelRender=false)仍正常重渲。
+    // 2026-08-19 23:00 全面板持久化：只渲染 active tab 面板（showToolTab→renderPropertyPanel），
+    // 不再无条件调 renderMaskPanel/renderSubtitlePanel/renderStickerPanel——非 active 面板 display:none 无需渲染，
+    // 否则每个 500ms 轮询都在重建隐藏面板 = 整个参数面板每 0.5s 全量刷新（"哪里都是抓手"的根源）。
+    if (!_suppressPanelRender) {
+      showToolTab(activeToolTab);
+    }
+  } catch (e) {
+    console.error("[renderAll fail]", e && e.stack || e);
   }
 }
 Store.subscribe(renderAll);
@@ -2975,6 +2981,12 @@ function bindEvents() {
 
 /* ---------- 从后端拉取最新状态填入 Store ---------- */
 function refresh() {
+  // P0 refresh lock（2026-08-20，GPT 评审）：预览拖动交互期间禁止 refresh——
+  // 否则 500ms 轮询替换 Store.state.draft 会覆盖拖动预览/引发引用竞态。锁期间缓存请求，pointerup 后补刷。
+  if (typeof PreviewInteraction !== "undefined" && PreviewInteraction.active) {
+    PreviewInteraction.pendingRefresh = true;
+    return Promise.resolve();
+  }
   return call("get_state").then(st => {
     if (!st) return;
     const m = {};
@@ -3007,6 +3019,9 @@ function refresh() {
 
 /* ---------- 启动 ---------- */
 let booted = false;
+// 2026-08-20 诊断打点（GPT 评审）：全局错误捕获——"全空/黑屏"类问题不再需要猜，控制台直接看堆栈
+window.addEventListener("error", e => console.error("[window error]", e.message, e.filename + ":" + e.lineno + ":" + e.colno));
+window.addEventListener("unhandledrejection", e => console.error("[unhandledrejection]", e.reason && (e.reason.stack || e.reason)));
 function boot() {
   if (booted) return;
   if (!api()) return;            // pywebview 未注入就等，绝不缓存 null
