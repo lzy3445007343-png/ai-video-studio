@@ -3108,6 +3108,11 @@ function initSubscriptionSlices() {
   Store.subscribeSlice("pxPerSec", () => { renderTimeline(); });
   Store.subscribeSlice("filter", () => { renderMedia(); });
   Store.subscribeSlice("bookmarks", () => { renderTimeline(); });
+  // B2（GPT 定案）：播放头切片独立订阅者——拖播放头 → KF 面板值实时更新
+  // 不挂 renderPlayheadUI（UI 层不互相调，防耦合）；updateKfPanelValues 内部跳过编辑中的 input
+  if (typeof updateKfPanelValues === "function") {
+    Store.subscribeSlice("playheadUs", updateKfPanelValues);
+  }
 }
 
 /* ---------- 启动 ---------- */

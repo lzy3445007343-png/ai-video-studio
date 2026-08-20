@@ -243,3 +243,19 @@ function updateKfRowValues(rowsEl, anims, local) {
     if (inp && document.activeElement !== inp) inp.value = round2(cur);
   });
 }
+
+/* —— B2（GPT 定案）：播放头切片独立订阅者——拖播放头 → KF 面板值实时更新
+ * 不挂 renderPlayheadUI（UI 层不互相调，防耦合）；播放头是 Store 的 playheadUs 切片，
+ * 三个独立订阅者：renderPlayheadUI（播放头 DOM）/ updateKfPanelValues（KF 面板）/ 预览插值。 —— */
+function updateKfPanelValues() {
+  const rowsEl = $("kfRows");
+  if (!rowsEl || rowsEl.style.display === "none") return;
+  const s = selectedSeg();
+  if (!s) return;
+  // 编辑中（input 聚焦）→ 跳过（防吞输入；B1 _kfEditing 已暂停 refresh，此处只兜底）
+  const activeIn = rowsEl.querySelector("[data-act='val']:focus");
+  if (activeIn) return;
+  const anims = s.animations || {};
+  const local = Math.max(0, Math.min(Store.state.playheadUs - s.start, s.duration));
+  updateKfRowValues(rowsEl, anims, local);
+}
