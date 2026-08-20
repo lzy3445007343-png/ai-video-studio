@@ -469,6 +469,7 @@
         <div id="previewStack" class="preview-stack">
         <svg id="maskDefs" width="0" height="0" style="position:absolute;left:0;top:0;overflow:visible"><defs id="maskDefsDefs"></defs></svg>
         <svg id="maskOverlay" class="mask-overlay"></svg>
+        <svg id="transformOverlay" class="transform-overlay"></svg>
       </div>
         <div class="placeholder" id="previewPlaceholder">导入素材并拖入时间轴后，点标尺定位预览</div>
       </div>
@@ -685,6 +686,12 @@
     .mask-overlay .mhandle.scale { fill:#06d6a0; }
     .mask-overlay .mbox { fill:none; stroke:#fff; stroke-width:1.4; stroke-dasharray:5 4; pointer-events:none; }
     .mask-overlay .mrotline { stroke:#ffd166; stroke-width:1.2; pointer-events:none; }
+    /* C5.4 变换手柄（选中 video/image 段时显示：8 手柄 + 顶部旋转柄） */
+    .transform-overlay { position:absolute; inset:0; width:100%; height:100%; z-index:39; pointer-events:none; overflow:visible; }
+    .transform-overlay .th-box { fill:none; stroke:#3da9ff; stroke-width:1.4; pointer-events:none; }
+    .transform-overlay .th-handle { fill:#fff; stroke:#3da9ff; stroke-width:1.4; cursor:pointer; pointer-events:auto; }
+    .transform-overlay .th-handle.rot { fill:#ffd166; stroke:#b8860b; }
+    .transform-overlay .th-rotline { stroke:#ffd166; stroke-width:1.2; pointer-events:none; }
     .stickerpanel .empty { font-size: 12px; color: var(--muted); line-height: 1.5; }
     .stickerpanel .row { display: flex; align-items: center; gap: 8px; margin: 6px 0; font-size: 12px; }
     .stickerpanel .row label { width: 44px; color: var(--muted); flex: none; }
@@ -801,6 +808,7 @@
 <script src="property/kf-panel.js"></script>
 <script src="property/preview-drag.js"></script>
 <script src="property/viewport-input.js"></script>
+<script src="property/transform-handle.js"></script>
 <script>
 "use strict";
 

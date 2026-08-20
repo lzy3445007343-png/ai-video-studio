@@ -286,6 +286,7 @@ function renderPreview(s) {
   // 若此处也调，会导致同一媒体被反复 play → AbortError（反复播/卡顿根因之一）。
   applyEffects();        // ★ Phase C：特效段合成（盖在素材层/整栈上的滤镜）
   renderMaskOverlay();   // 选中段有遮罩时画把手（拖拽用）
+  if (typeof renderTransformHandles === "function") renderTransformHandles();   // C5.4：选中 video/image 段画缩放手柄/旋转柄
 }
 
 /* ---------- 特效合成（Phase C：特效只是 Graph 上的 Node，renderer 只调用 effects.js 纯函数） ---------- */
