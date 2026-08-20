@@ -22,7 +22,9 @@
 
 /* 辅助函数（C2 迁移时保留，供 DragSession 使用） */
 function _previewLocalUs(seg) {
-  return Math.max(0, Math.min(Store.state.playheadUs - seg.start, seg.duration));
+  // B2.1 收口：统一走 TimelineMapper（global→local 钳制），不散落手写换算
+  return (typeof TimelineMapper !== "undefined") ? TimelineMapper.playheadLocal(seg)
+       : Math.max(0, Math.min(Store.state.playheadUs - seg.start, seg.duration));
 }
 function _previewHasAnim(seg, path) {
   const a = (seg.animations || {})[path];
