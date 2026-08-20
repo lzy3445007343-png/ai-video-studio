@@ -889,7 +889,7 @@ def load_state():
 # =====================================================================
 class Command:
     """一次可审计、可回退的操作。"""
-    __slots__ = ("cmd_id", "label", "meta", "saved_state", "post_state")
+    __slots__ = ("cmd_id", "label", "meta", "saved_state", "post_state", "changed_paths", "count")
 
     def __init__(self, cmd_id, label, meta=None):
         self.cmd_id = cmd_id
@@ -897,6 +897,8 @@ class Command:
         self.meta = meta or {}
         self.saved_state = None   # execute 前草稿深拷贝（undo 还原）
         self.post_state = None    # undo 时记录 execute 后状态（redo 恢复）
+        self.changed_paths = []   # C3 v2：本次操作改动的属性 path（属性历史/Agent 审计/增量保存用）
+        self.count = 1            # 事务合并条数（普通命令=1，事务命令=N）
 
     def __repr__(self):
         return "<Command %s actor=%s>" % (self.cmd_id, self.meta.get("actor", "-"))
@@ -909,6 +911,8 @@ class CommandManager:
         self.history = []       # undo 栈：Command 对象
         self.redo_stack = []    # redo 栈
         self._cap = cap
+        self._tx = None         # C3：事务状态 {label, meta, saved_state, count, changed_paths, created_at}
+        self._TX_TIMEOUT_S = 30 # C3 v2：事务超时保护（begin 成功但后续失败/卡住 → 超时自动 abort）
 
     def push_snapshot(self, saved_state):
         """save_state 自动快照入口（5a 兜底）：草稿变化时压一个无语义快照 Command。
@@ -923,7 +927,8 @@ class CommandManager:
     def execute(self, api, cmd_id, args=None, meta=None):
         """写操作统一入口（5b 起）。构造 Command → 执行现有方法 → 成功入栈 + 审计。
         双录防护：被调方法内部会调 save_state（5a 兜底自动压 snapshot），
-        此处执行后把多余的 snapshot 弹掉，由带语义的 cmd 统一代表本次操作。"""
+        此处执行后把多余的 snapshot 弹掉，由带语义的 cmd 统一代表本次操作。
+        C3：事务内 execute 只执行不入栈（count++），commit 时合并为一条事务 Command。"""
         fn = getattr(api, cmd_id, None)
         if not callable(fn):
             return {"ok": False, "error": "未知命令 %s" % cmd_id}
@@ -932,16 +937,77 @@ class CommandManager:
         before = len(self.history)
         result = fn(**dict(args or {}))
         if result and result.get("ok"):
-            if len(self.history) > before:
-                self.history.pop()   # 弹掉被调方法内部 save_state 压的 snapshot
-            self.history.append(cmd)
-            if len(self.history) > self._cap:
-                self.history.pop(0)
-            self.redo_stack.clear()
+            if self._tx is not None:
+                # 事务内：只累计，不入栈（合并为一条事务 Command，undo 一次=回 begin 前）
+                self._tx["count"] += 1
+                if meta and meta.get("paths"):
+                    for p in meta["paths"]:
+                        if p not in self._tx["changed_paths"]:
+                            self._tx["changed_paths"].append(p)
+            else:
+                if len(self.history) > before:
+                    self.history.pop()   # 弹掉被调方法内部 save_state 压的 snapshot
+                self.history.append(cmd)
+                if len(self.history) > self._cap:
+                    self.history.pop(0)
+                self.redo_stack.clear()
         return result
 
+    # ---------- C3 事务（快照合并策略：一次事务 = 一条含 begin 前快照的 Command） ----------
+    def begin_transaction(self, api, label="batch", meta=None):
+        """开启事务：事务内 execute 只执行不入栈。超时遗留事务自动放弃后重开。"""
+        if self._tx is not None:
+            if self._tx_expired():
+                self._abort_tx(api)      # 超时遗留事务自动放弃（v2：防 begin 成功→后续失败→commit 卡住）
+            else:
+                return {"ok": False, "error": "已有进行中的事务"}
+        self._tx = {
+            "label": label, "meta": meta or {},
+            "saved_state": copy.deepcopy(api.draft),
+            "count": 0, "changed_paths": [], "created_at": time.time(),
+        }
+        return {"ok": True, "tx": True}
+
+    def commit_transaction(self, api):
+        """事务结束：合并成一条快照 Command 入栈（undo 一次=回 begin 前）。空事务不压栈。"""
+        if self._tx is None:
+            return {"ok": False, "error": "没有进行中的事务"}
+        tx = self._tx; self._tx = None
+        if tx["count"] == 0:
+            return {"ok": True, "tx": False, "count": 0}
+        cmd = Command("tx:" + tx["label"], tx["label"], tx["meta"])
+        cmd.saved_state = tx["saved_state"]
+        cmd.count = tx["count"]
+        cmd.changed_paths = tx["changed_paths"]
+        self.history.append(cmd)
+        if len(self.history) > self._cap:
+            self.history.pop(0)
+        self.redo_stack.clear()
+        return {"ok": True, "tx": True, "count": tx["count"], "paths": tx["changed_paths"]}
+
+    def abort_transaction(self, api):
+        """回滚事务内全部改动（恢复 begin 前快照，不入栈）。幂等：无事务时直接报错。"""
+        if self._tx is None:
+            return {"ok": False, "error": "没有进行中的事务"}
+        return self._abort_tx(api)
+
+    def _tx_expired(self):
+        return self._tx is not None and (time.time() - self._tx["created_at"]) > self._TX_TIMEOUT_S
+
+    def _abort_tx(self, api):
+        tx = self._tx; self._tx = None
+        api.draft = copy.deepcopy(tx["saved_state"])
+        api.state["draft"] = api.draft
+        save_state(api.state, record=False)
+        return {"ok": True, "count": tx["count"]}
+
     def undo(self, api):
-        """撤销：弹 Command → 恢复其 saved_state（操作前状态）。"""
+        """撤销：弹 Command → 恢复其 saved_state（操作前状态）。
+        C3：若存在未完成事务，先放弃事务（不撤销事务前的历史步），用户再按一次才撤销上一步。"""
+        if self._tx is not None:
+            # 拖动/操作进行中按 Ctrl+Z → 语义=放弃未完成动作（拖一半撤销=回到拖动前）
+            self._abort_tx(api)
+            return {"ok": True, "aborted_tx": True, "remaining": len(self.history)}
         if not self.history:
             return {"ok": False, "error": "没有可撤销的操作"}
         cmd = self.history.pop()
@@ -2382,6 +2448,25 @@ class Api:
             return {"ok": False, "error": "重做系统未就绪"}
         self._reload()
         return Api.cmd_mgr.redo(self)
+
+    # ---------- C3 事务桥接（UI/Agent/MCP 统一入口） ----------
+    def begin_transaction(self, label="batch", meta=None):
+        """开启事务：事务内多条命令合并为一条 undo（一次拖动/一次 Agent 操作 = 一条 undo）。"""
+        if Api.cmd_mgr is None:
+            return {"ok": False, "error": "命令系统未就绪"}
+        return Api.cmd_mgr.begin_transaction(self, label, meta)
+
+    def commit_transaction(self):
+        """事务结束：合并入栈（undo 一次 = 回事务开始前）。空事务不压栈。"""
+        if Api.cmd_mgr is None:
+            return {"ok": False, "error": "命令系统未就绪"}
+        return Api.cmd_mgr.commit_transaction(self)
+
+    def abort_transaction(self):
+        """回滚事务内全部改动（恢复事务前快照，不入栈）。"""
+        if Api.cmd_mgr is None:
+            return {"ok": False, "error": "命令系统未就绪"}
+        return Api.cmd_mgr.abort_transaction(self)
 
     def add_to_timeline(self, name, path, mtype, track_index=None, at_time_us=None, insert_index=None, track_tid=None):
         """把素材登记进草稿对应轨道（双击或拖拽都走这里，真实进轨）。
