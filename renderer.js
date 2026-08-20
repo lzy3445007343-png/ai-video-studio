@@ -15,6 +15,34 @@ function _makeVisualEl(mtype) {
   return wrap;
 }
 
+// R1（2026-08-20，GPT 评审定案）：Element Bounds——wrap 尺寸 = 素材实际渲染尺寸（contain），
+// 而非画布大小。黑边由画布底色承担 → 拖动素材黑边不再跟着跑（对齐 OpenCut element-bounds.ts）。
+// 定位：left/top 50% + margin 负值 → wrap 左上角在画布中心；applyKfTransform 的 translate(x*sc,y*sc)
+// 相对 wrap 原点位移 → 素材中心 = 画布中心 + (x,y)，与 OpenCut bounds.cx = canvasW/2 + position.x 数学等价。
+// 素材尺寸未知（未加载）→ fallback 画布大小（现状，letterbox），media 尺寸事件到达后自动校正。
+function _applyVisualSize(el, seg) {
+  if (!el) return;
+  const media = el.firstElementChild;
+  let mw = 0, mh = 0;
+  if (media) {
+    if (media.tagName === "VIDEO") { mw = media.videoWidth || 0; mh = media.videoHeight || 0; }
+    else if (media.tagName === "IMG") { mw = media.naturalWidth || 0; mh = media.naturalHeight || 0; }
+  }
+  const cp = canvasPxJS();
+  if (mw && mh) {
+    const s = Math.min(cp.W / mw, cp.H / mh);
+    const w = Math.max(1, Math.round(mw * s));
+    const h = Math.max(1, Math.round(mh * s));
+    el.style.width = w + "px"; el.style.height = h + "px";
+    el.style.left = "50%"; el.style.top = "50%";
+    el.style.marginLeft = (-w / 2) + "px"; el.style.marginTop = (-h / 2) + "px";
+  } else {
+    el.style.width = "100%"; el.style.height = "100%";
+    el.style.left = "0"; el.style.top = "0";
+    el.style.marginLeft = "0"; el.style.marginTop = "0";
+  }
+}
+
 // ============================================================
 // PlayerManager —— 媒体生命周期收口门面（Phase 2 / Step 1：仅建壳，行为零变化）
 // ------------------------------------------------------------
@@ -52,10 +80,14 @@ function _setVisualContent(wrap, mtype, path, muted, volume) {
     // 钳制到 [0,1]；>1 的增益由 AudioEngine（Web Audio gain，支持 >1）承载。
     v.volume = Math.min(1, Math.max(0, (volume == null ? 1 : volume)));
     v.playsInline = true;
+    // R1：视频元数据就绪后校正 wrap 尺寸（videoWidth/Height 可用 → contain 尺寸）
+    v.addEventListener("loadeddata", () => _applyVisualSize(wrap, null));
   } else if (mtype === "image") {
     const img = document.createElement("img");
     img.src = fileURL(path);
     wrap.appendChild(img);
+    // R1：图片加载后校正 wrap 尺寸（naturalWidth/Height → contain 尺寸）
+    img.onload = () => _applyVisualSize(wrap, null);
   }
   return true;
 }
@@ -106,6 +138,7 @@ function renderPreview(s) {
       ? resolveProperty(h.seg, "audio.volume", Math.max(0, Math.min(us - h.seg.start, h.seg.duration)))
       : (h.seg.volume == null ? 1 : h.seg.volume);
     const changed = _setVisualContent(rec.el, h.seg.type, resolveSegPath(h.seg), isTrackMuted(h.type, h.ti) || h.seg.muted, _vol);
+    _applyVisualSize(rec.el, h.seg);   // R1：wrap 尺寸 = 素材 contain 尺寸（黑边不再跟着素材跑）
     rec.el.style.display = "";
     rec.el.style.zIndex = zIndexOf(h);
     rec.key = h.key;
