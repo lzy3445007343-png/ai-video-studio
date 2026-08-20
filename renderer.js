@@ -10,6 +10,7 @@
 function _makeVisualEl(mtype) {
   const wrap = document.createElement("div");
   wrap.className = "vis-layer";
+  wrap.setAttribute("data-preview-el", "1");   // 2026-08-20：预览拖动 hit-test 标记（preview-drag.js）
   wrap.style.display = "none";
   return wrap;
 }
@@ -687,6 +688,7 @@ function resolveTransform(seg, localUs) {
 }
 
 function applyKfTransform(el, seg, localUs) {
+  if (el.dataset && el.dataset.dragActive) return;   // 2026-08-20：预览拖动中（interactionDraft），保留拖动位置不覆盖
   const t = resolveTransform(seg, localUs);
   const stack = $("previewStack"); const rect = stack ? stack.getBoundingClientRect() : null;
   const cp = canvasPxJS();

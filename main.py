@@ -2757,6 +2757,33 @@ class Api:
         save_state(self.state)
         return {"ok": True, "count": ok_count, "skipped": skipped}
 
+    def update_segment_transform(self, track_type=None, track_index=None, index=None, segid=None, transform=None):
+        """更新段的静态 transform（预览拖动/面板写入，一次 undo）。
+
+        transform: {x, y, scaleX, scaleY, rotation, opacity}（可只传要改的字段，其余保留）。
+        segid 优先定位（稳定 id）；缺省回退 (track_type, track_index, index)。
+        """
+        self._reload()
+        self._push_undo()
+        seg = None
+        if segid:
+            seg = _seg_by_id(self.draft, segid)
+        elif track_type is not None and track_index is not None and isinstance(index, int):
+            segs = _track_segs(self.draft, track_type, track_index)
+            if segs and 0 <= index < len(segs):
+                seg = segs[index]
+        if seg is None:
+            return {"ok": False, "error": "未定位到段"}
+        if not isinstance(transform, dict) or not transform:
+            return {"ok": False, "error": "transform 必须是非空 dict"}
+        cur = seg.get("transform") if isinstance(seg.get("transform"), dict) else {}
+        seg["transform"] = dict(cur)
+        for k in ("x", "y", "scaleX", "scaleY", "rotation", "opacity"):
+            if k in transform:
+                seg["transform"][k] = transform[k]
+        save_state(self.state)
+        return {"ok": True, "segid": seg.get("id"), "transform": seg["transform"]}
+
     # ---------- 关键帧 / 动画 CRUD（对齐 OpenCut upsertKeyframe / removeKeyframe / retimeKeyframe） ----------
     def _kf_resolve_seg(self, track_type, track_index, index):
         """取关键帧编辑目标段，返回 (seg, None) 或 (None, error)。"""

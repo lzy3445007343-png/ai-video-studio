@@ -223,6 +223,60 @@
   .kf-row .val { width: 56px; background: var(--panel); border: 1px solid var(--border); border-radius: 4px; color: var(--text); font-size: 11px; padding: 2px 4px; min-width: 0; }
   .kf-row .add { flex: none; width: 22px; font-size: 12px; padding: 1px 0; border-radius: 4px; border: 1px solid var(--border); background: var(--panel); color: var(--text); cursor: pointer; line-height: 1; }
   .kf-row .add:hover { border-color: var(--primary); }
+  /* === KF 面板 UI 重构（2026-08-20，对齐 OpenCut 分 section：变换 + 融合） === */
+  .kf-section { margin-bottom: 10px; }
+  .kf-section-head {
+    display: flex; align-items: center; gap: 6px;
+    padding: 6px 10px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    font-size: 12px; font-weight: 500;
+    color: var(--text);
+    user-select: none;
+  }
+  .kf-section-icon { color: var(--muted); font-size: 12px; line-height: 1; }
+  .kf-section-title { color: var(--text); }
+  .kf-section-chevron { color: var(--muted); font-size: 9px; line-height: 1; width: 8px; text-align: center; flex: none; transition: transform 0.15s; }
+  .kf-section.is-collapsed .kf-section-chevron { transform: rotate(0deg); }
+  .kf-section:not(.is-collapsed) .kf-section-chevron { transform: rotate(0deg); }
+  .kf-section-head:hover { border-color: var(--primary); }
+  .kf-section.is-collapsed .kf-section-body { display: none; }
+  .kf-section-body { padding: 4px 0 0 0; }
+  .kf-pair { display: flex; align-items: center; gap: 4px; margin-bottom: 6px; }
+  .kf-pair .kf-row { flex: 1; min-width: 0; }
+  .kf-pair-link { color: var(--muted); font-size: 11px; padding: 0 2px; flex: none; cursor: default; user-select: none; }
+  .kf-section .kf-row {
+    display: flex; align-items: center; gap: 4px;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 4px 6px;
+    min-width: 0;
+  }
+  .kf-kf-toggle {
+    flex: none; width: 18px; height: 18px;
+    background: transparent; border: 0; padding: 0;
+    color: var(--muted); cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .kf-kf-toggle .dia { font-size: 12px; line-height: 1; opacity: 0.35; transition: opacity 0.15s; }
+  .kf-kf-toggle:hover .dia { opacity: 0.65; }
+  .kf-kf-toggle.is-active .dia { color: var(--primary); opacity: 1; }
+  .kf-section .kf-row .lab { flex: none; font-size: 11px; color: var(--text); min-width: 36px; }
+  .kf-section .kf-row .val {
+    flex: 1; min-width: 0;
+    background: transparent; border: 0; outline: 0;
+    color: var(--text); font-size: 11px;
+    padding: 2px 4px; cursor: text;
+  }
+  .kf-section .kf-row .add {
+    flex: none; font-size: 14px;
+    background: transparent; border: 0;
+    color: var(--muted); cursor: pointer; padding: 0 4px; line-height: 1;
+  }
+  .kf-section .kf-row .add:hover { color: var(--primary); }
+  .kf-empty-hint { padding: 16px 8px; font-size: 11px; color: var(--muted); text-align: center; line-height: 1.6; }
   /* Inspector 统一体系（v0.9 P1：特效面板等新建面板复用，删重复 CSS） */
   .insp { display: flex; flex-direction: column; min-width: 0; }
   .insp-head { display: flex; align-items: center; gap: 6px; padding: 10px; border-bottom: 1px solid var(--border); font-weight: 600; font-size: 12px; }
@@ -727,6 +781,7 @@
 <script src="property/mask-panel.js"></script>
 <script src="property/effect-panel.js"></script>
 <script src="property/kf-panel.js"></script>
+<script src="property/preview-drag.js"></script>
 <script>
 "use strict";
 
