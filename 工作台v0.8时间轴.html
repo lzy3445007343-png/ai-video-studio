@@ -3021,6 +3021,11 @@ function refresh() {
     InteractionManager.notePendingRefresh();
     return Promise.resolve();
   }
+  // B1（GPT 定案）：KF 面板输入框聚焦期间暂停 refresh——本地临时态（KfChannel.upsertLocal/setProperty）
+  // 在 blur 提交前不能被 500ms 轮询的后端 draft 覆盖，否则"预览跟手"瞬间弹回。blur 后恢复+withTx 已自动 refresh。
+  if (typeof _kfEditing !== "undefined" && _kfEditing) {
+    return Promise.resolve();
+  }
   return call("get_state").then(st => {
     if (!st) return;
     const m = {};
