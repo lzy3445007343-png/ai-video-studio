@@ -75,6 +75,8 @@ const Store = {
    */
   _sliceSubs: {},
   renderSliceMode: "legacy",
+  _batchDepth: 0,          // C4 v2（GPT 建议留接口）：批量通知——同帧多个 set 合并一次 flush
+  _batchQueue: [],
   subscribe(fn) { this._subs.push(fn); },
   subscribeSlice(key, fn) {
     (this._sliceSubs[key] || (this._sliceSubs[key] = [])).push(fn);
@@ -83,13 +85,42 @@ const Store = {
       if (arr) { const i = arr.indexOf(fn); if (i >= 0) arr.splice(i, 1); }
     };
   },
+  // 批量通知（C4 v2）：Store.batch(() => { set(a); set(b); set(c); }) → 合并一次 flush
+  // 防同帧多个 set 触发 N 次渲染（如 selectKey 同时改 selectedKey/selectedSegId/selectedMaterialUid）
+  batch(fn) {
+    if (this._batchDepth > 0) { fn(); return; }     // 嵌套 batch 直接执行（不重复排队）
+    this._batchDepth = 1;
+    this._batchQueue = [];
+    try { fn(); } catch (e) { this._batchDepth = 0; this._batchQueue = []; throw e; }
+    this._batchDepth = 0;
+    if (this._batchQueue.length) {
+      const merged = Object.assign({}, ...this._batchQueue);   // 合并 patch
+      this._batchQueue = [];
+      this._applySet(merged);
+    }
+  },
   // 合并补丁并触发渲染（切片订阅者必通知；legacy 模式额外全量 _emit）
   set(patch) {
+    if (this._batchDepth > 0) {
+      Object.assign(this.state, patch);    // state 立即生效（渲染读最新值）
+      this._batchQueue.push(patch);        // 通知延迟到 batch 结束统一 flush
+      return;
+    }
+    this._applySet(patch);
+  },
+  _applySet(patch) {
     const changed = Object.keys(patch);
     Object.assign(this.state, patch);
+    // C4 v2：同一订阅者注册多个 key（如 selRender 注册 selectedKey/selectedKeys/selectedSegId）
+    // 一次 patch 涉及多 key 时只调一次——batch 合并 + selectKey 单次 set 多 key 都受益
+    const seen = new Set();
     for (const k of changed) {
       const fns = this._sliceSubs[k];
-      if (fns) for (const fn of fns) { try { fn(this.state[k], this.state); } catch (e) { console.error("[Store] 切片订阅者异常:", e); } }
+      if (fns) for (const fn of fns) {
+        if (seen.has(fn)) continue;
+        seen.add(fn);
+        try { fn(this.state[k], this.state); } catch (e) { console.error("[Store] 切片订阅者异常:", e); }
+      }
     }
     if (this.renderSliceMode !== "slice") this._emit();
   },

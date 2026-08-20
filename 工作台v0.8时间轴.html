@@ -3014,10 +3014,42 @@ function refresh() {
       selectedKey: selOk ? Store.state.selectedKey : null,
       bookmarks: st.bookmarks || [],
     });
+    // C4.4（2026-08-20）：refresh 显式全量渲染——不依赖 Store.set 的 _emit
+    // （slice 模式下 set 不广播，refresh 若靠 _emit 会白屏；renderAll 保留为"保险路径"）。
+    renderAll(Store.state);
     updateToolbarState();
     if (!_suppressPanelRender) renderKfPanelPF();   // 选中态/状态刷新后同步关键帧面板（后台轮询冻结时跳过，避免吞 click）
     applyCanvasRatio();   // 画幅同步（人工切换 / 素材自动匹配 / 外部 Agent 修改后刷新）
   });
+}
+
+/* ---------- C4 订阅切片注册（ADR-2026-08-20 v2 / C4 方案） ----------
+ * 依赖审计（C4.0，grep 实证）：
+ *   renderTimeline    ← draft/drag/groupScale/selectedKey/selectedKeys/selectedSegId/thumbMap/waveMap/bookmarks/pxPerSec
+ *   renderPropertyPanel ← selectedKey/selectedKeys/selectedSegId/selectedMaterialUid/playheadUs
+ *   updateToolbarState ← selectedKey/selectedSegId/selectedMaterialUid/draft/materials/meta/bookmarks
+ *   renderMedia       ← materials/thumbMap/waveMap/filter/selectedMaterialUid（素材卡选中才需要）
+ *   renderPreviewMaybe ← playheadUs/draft（5.2 已切片）
+ * 切片后：set({selectedKey}) 只跑时间轴高亮+面板+工具栏；素材框/播放器不动（GPT 定案：选中是 UI 态不是内容态）。
+ * legacy 模式双跑（与 renderAll 对照）；slice 模式只跑切片订阅者。
+ */
+function initSubscriptionSlices() {
+  // C4.1 选中态：时间轴选中 → 时间轴高亮 + 参数面板 + 工具栏
+  const selRender = () => { renderTimeline(); renderPropertyPanel(); updateToolbarState(); };
+  Store.subscribeSlice("selectedKey", selRender);
+  Store.subscribeSlice("selectedKeys", selRender);
+  Store.subscribeSlice("selectedSegId", selRender);
+  // 素材卡选中 → 素材面板 + 工具栏（素材库随素材选中刷新）
+  Store.subscribeSlice("selectedMaterialUid", () => { renderMedia(); updateToolbarState(); });
+  // C4.2 拖拽临时态（时间轴拖动/框选/整组缩放）→ 只渲染时间轴
+  Store.subscribeSlice("drag", () => { renderTimeline(); });
+  Store.subscribeSlice("pendingDrag", () => { renderTimeline(); });
+  Store.subscribeSlice("pendingBox", () => { renderTimeline(); });
+  Store.subscribeSlice("groupScale", () => { renderTimeline(); });
+  // C4.3 低频切片
+  Store.subscribeSlice("pxPerSec", () => { renderTimeline(); });
+  Store.subscribeSlice("filter", () => { renderMedia(); });
+  Store.subscribeSlice("bookmarks", () => { renderTimeline(); });
 }
 
 /* ---------- 启动 ---------- */
@@ -3038,10 +3070,10 @@ function boot() {
   // 先拿本地 HTTP 服务器地址，素材才能走 http（WebView2 下 video/audio 不能读 file://）
   call("get_server_url").then(url => {
     if (url) window.MEDIA_BASE = url;
-    try { bindEvents(); initSplit(); initHSplit("L"); initHSplit("R"); refresh(); call("get_effect_registry").then(r => { if (r && r.ok) Store.set({ effects: r.meta }); }); }
+    try { bindEvents(); initSplit(); initHSplit("L"); initHSplit("R"); initSubscriptionSlices(); refresh(); call("get_effect_registry").then(r => { if (r && r.ok) Store.set({ effects: r.meta }); }); }
     catch (e) { showFatal("init: " + (e && e.stack || e)); }
   }).catch(() => {
-    try { bindEvents(); initSplit(); initHSplit("L"); initHSplit("R"); refresh(); call("get_effect_registry").then(r => { if (r && r.ok) Store.set({ effects: r.meta }); }); }
+    try { bindEvents(); initSplit(); initHSplit("L"); initHSplit("R"); initSubscriptionSlices(); refresh(); call("get_effect_registry").then(r => { if (r && r.ok) Store.set({ effects: r.meta }); }); }
     catch (e) { showFatal("init(fallback): " + (e && e.stack || e)); }
   });
 }
