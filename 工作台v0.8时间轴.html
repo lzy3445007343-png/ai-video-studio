@@ -2074,7 +2074,68 @@ function onPointerUp() {
 function isTrackLocked(type, ti) {
   return !!trackMeta(type, ti).locked;
 }
+/* B3 菱形拖拽（2026-08-20，对齐 OpenCut keyframe-drag-controller.ts）：
+ * 时间轴白菱形（.kf-marker）——所有动画通道通用（positionX/Y、scaleX/Y、rotate、opacity、volume 的 KF 都能拖）
+ *   单击 → 播放头 seek 到该 KF 时间（帧吸附）
+ *   拖动（>4px）→ 改 KF 时间（帧吸附 + clamp 段内 + 一次 undo）
+ *   拖拽中只改视觉（临时态，不落库）——符合 C2/C3"交互过程临时态、动作结束才 Command"
+ * 多选整组移动 = 第二阶段缺口 1（OpenCut 已有，分阶段做） */
+function startKfMarkerDrag(e) {
+  const marker = e.target.closest(".kf-marker");
+  const segEl = e.target.closest(".seg");
+  if (!marker || !segEl || !segEl.dataset.key) return;
+  e.preventDefault();
+  e.stopPropagation();   // 拦截 onTimelineDown 的段移动/裁剪
+  const path = marker.dataset.path;
+  const kid = marker.dataset.kid;
+  const t0 = +marker.dataset.kftime;              // local us（拖拽基准，不改）
+  const key = segEl.dataset.key;
+  const k = key.split(":");
+  const seg = findSegByKey(key);
+  if (!seg || !kid) return;
+  const x0 = e.clientX;
+  let active = false;
+  // 帧吸附（项目 30fps，与后端导出一致）：拖拽时间 round 到 1/30s 倍数
+  const frameUs = Math.round(1e6 / 30);
+  const dtUs = dx => Math.round(dx / pps() * 1e6);
+  const snapFrame = us => Math.round(us / frameUs) * frameUs;
+  const move = ev => {
+    const dx = ev.clientX - x0;
+    if (!active && Math.abs(dx) < 4) return;      // 阈值 4px（对齐 OpenCut TIMELINE_DRAG_THRESHOLD_PX）
+    active = true;
+    let nt = t0 + snapFrame(dtUs(dx));
+    nt = Math.max(0, Math.min(seg.duration, nt)); // clamp 段内
+    marker.style.left = (nt / 1e6 * pps()) + "px"; // 视觉临时移动（不落库）
+  };
+  const up = ev => {
+    document.removeEventListener("mousemove", move);
+    document.removeEventListener("mouseup", up);
+    if (!active) {
+      // 单击 → 播放头 seek 到该 KF（对齐 OpenCut onKeyframeClick：帧吸附）
+      const s2 = findSegByKey(key);
+      if (s2) seekPlayhead(TimelineMapper.localToGlobal(s2, t0));
+      return;
+    }
+    const dx = ev.clientX - x0;
+    let nt = t0 + snapFrame(dtUs(dx));
+    nt = Math.max(0, Math.min(seg.duration, nt));
+    if (nt !== t0) {
+      // 一次拖动 = 一条 undo（withTx）；update_keyframe 只改 time_us，value/seg 不动
+      CommandService.withTx("kf-retime", () =>
+        CommandService.run("update_keyframe",
+          { track_type: k[0], track_index: +k[1], index: +k[2], path, keyframe_id: kid,
+            value: null, time_us: nt, seg_mode: null },
+          { actor: "ui", paths: [path] })
+      );
+    }
+  };
+  document.addEventListener("mousemove", move);
+  document.addEventListener("mouseup", up);
+}
+
 function onTimelineDown(e) {
+  // B3：先拦截关键帧菱形（拖 KF 改时间/单击 seek），别当成段移动
+  if (e.target.closest(".kf-marker")) { startKfMarkerDrag(e); return; }
   const handle = e.target.closest(".handle");
   const seg = e.target.closest(".seg");
   if (handle && seg) {

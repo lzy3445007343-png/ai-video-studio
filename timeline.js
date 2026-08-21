@@ -457,7 +457,7 @@ function makeSeg(s, type, ti, idx, overrideLeftUs, forceDragging) {
       for (const k of ch.keys) {
         const tSec = Math.max(0, Math.min(durSec, (k.t || 0) / 1e6));
         const xPx = tSec * pps();
-        kfMarkersHtml += '<div class="kf-marker" data-path="' + path + '" data-kftime="' + (k.t || 0) + '" style="left:' + xPx + 'px"></div>';
+        kfMarkersHtml += '<div class="kf-marker" data-path="' + path + '" data-kftime="' + (k.t || 0) + '" data-kid="' + k.id + '" style="left:' + xPx + 'px"></div>';
       }
     }
   }
