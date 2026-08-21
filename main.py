@@ -1488,6 +1488,48 @@ def _hex_to_rgb01(hex_str):
         return (1.0, 1.0, 1.0)
 
 
+# 素材尺寸缓存（导出时 ffprobe/PIL 探测成本高，同素材多段复用）
+_MEDIA_DIM_CACHE = {}
+
+
+def _media_dims_cached(path):
+    """取素材像素宽高 (w, h)，带模块级缓存。失败返回 (None, None)。"""
+    if not path:
+        return None, None
+    if path not in _MEDIA_DIM_CACHE:
+        _MEDIA_DIM_CACHE[path] = get_media_dimensions(path)
+    return _MEDIA_DIM_CACHE[path]
+
+
+def _video_clip_settings(seg, W, H):
+    """把视频/图片段的静态 transform 换算成 pyJianYingDraft ClipSettings（2026-08-21，B5 登记缺口修复）。
+
+    背景：之前视频/图片段导出不传 clip_settings → 拖了位置/改了缩放（静态 transform，seg.transform）
+    但不打关键帧时，导出剪映后位置/缩放/旋转/透明度全丢（素材回画布中心原始大小）。
+    本函数与 KF 导出（_apply_keyframes_to_segment）同源换算：
+      - transform_x = x/(W/2)、transform_y = -y/(H/2)（中心原点像素 → 半个画布宽/高单位，y 取反）
+      - rotation/opacity 直传
+      - scale 关键：前端预览 scale=1 = 素材 contain 到画布（renderer.js _applyVisualSize:
+        min(cp.W/mw, cp.H/mh)）；剪映 scale=1 = 原始分辨率。所以导出 scale = 用户scale × contain 系数，
+        保证剪映里 scale=1 的素材正好铺满画布（与预览一致）。素材尺寸探测失败时 contain=1（退化可接受）。
+    """
+    tf = seg.get("transform") if isinstance(seg.get("transform"), dict) else {}
+    half_w = (W / 2.0) or 1.0
+    half_h = (H / 2.0) or 1.0
+    mw, mh = _media_dims_cached(seg.get("path"))
+    contain = 1.0
+    if mw and mh:
+        contain = min(W / float(mw), H / float(mh))
+    return ClipSettings(
+        alpha=float(tf.get("opacity", 1.0)),
+        rotation=float(tf.get("rotation", 0.0)),
+        scale_x=float(tf.get("scaleX", 1.0)) * contain,
+        scale_y=float(tf.get("scaleY", 1.0)) * contain,
+        transform_x=float(tf.get("x", 0.0)) / half_w,
+        transform_y=-(float(tf.get("y", 0.0))) / half_h,
+    )
+
+
 def _seg_clip_settings(seg, W, H):
     """把贴纸段的 transform 换算成 pyJianYingDraft ClipSettings。
 
@@ -4577,7 +4619,7 @@ class Api:
                         if abs(speed - 1.0) > 1e-6:
                             kwargs["speed"] = speed
                             kwargs["change_pitch"] = bool(seg.get("change_pitch", False))
-                        vseg = VideoSegment(seg["path"], t, **kwargs)
+                        vseg = VideoSegment(seg["path"], t, clip_settings=_video_clip_settings(seg, W, H), **kwargs)
                         # 关键帧：段级动画曲线映射到剪映关键帧（对齐 OpenCut 导出）
                         if _seg_anims(seg):
                             _apply_keyframes_to_segment(vseg, _seg_anims(seg), W, H)
