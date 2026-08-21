@@ -2119,12 +2119,20 @@ function collectSelKf(seg, segKey) {
  *   单击 → 播放头 seek 到该 KF 时间（帧吸附）+ 单选/增选
  *   拖动（>4px）→ 改 KF 时间（帧吸附 + clamp 段内 + 一次 undo）；选中多个则整组移动
  *   拖拽中只改视觉（临时态，不落库）——符合 C2/C3"交互过程临时态、动作结束才 Command" */
+// ★ 2026-08-21 B3.4b：KF 拖拽 Refresh Lock（对齐 preview-drag 的 InteractionManager）。
+//   旧实现裸 document 监听，没进 Refresh Lock → 拖动期间 500ms 轮询 refresh() 照常跑：
+//   ① renderTimeline 每 0.5s 重建 → 拖拽中 marker 被重置（"拖不动/弹回"）
+//   ② renderMedia 反复跑 → 命中脏数据时素材库"全消失"（B12 复发）
+//   ③ renderKfPanelPF 按新 KF 时间刷新面板 → "拖的时候参数被改"
+//   锁期间 refresh 被跳过（与 _kfEditing 同机制），松手 withTx 自动补刷。
+let _kfDragActive = false;
 function startKfMarkerDrag(e) {
   const marker = e.target.closest(".kf-marker");
   const segEl = e.target.closest(".seg");
   if (!marker || !segEl || !segEl.dataset.key) return;
   e.preventDefault();
   e.stopPropagation();   // 拦截 onTimelineDown 的段移动/裁剪
+  _kfDragActive = true;  // 锁 refresh：拖动期间禁止 500ms 轮询重建 timeline/刷新面板（B3.4b）
   // B3.2：marker = 同时间点多通道 KF 合并（对齐 OpenCut KeyframeIndicator.keyframes 数组）
   const kids = (marker.dataset.kids || "").split(",").filter(Boolean);
   const paths = (marker.dataset.paths || "").split(",").filter(Boolean);
@@ -2159,13 +2167,17 @@ function startKfMarkerDrag(e) {
     const delta = snapFrame(dtUs(dx));            // 同一 delta → 相对间隔保持
     for (const t of targets) {
       const nt = clampSeg(t.t + delta);
-      const m = segEl.querySelector('.kf-marker[data-kid="' + t.kid + '"]');
+      // ★ 2026-08-21 B3.4b 修复：B3.2 后 marker 属性是 data-kids（复数，逗号分隔），
+      //   旧代码用 data-kid（单数）永远查不到 → 拖动中菱形视觉不动（"拖不动/弹回"）。
+      //   改用包含匹配（kid 是 uuid 不会互相包含，安全）。
+      const m = segEl.querySelector('.kf-marker[data-kids*="' + t.kid + '"]');
       if (m) m.style.left = (nt / 1e6 * pps()) + "px";  // 视觉临时移动（不落库）
     }
   };
   const up = ev => {
     document.removeEventListener("mousemove", move);
     document.removeEventListener("mouseup", up);
+    _kfDragActive = false;   // 释放 Refresh Lock（B3.4b：单击 seek / 拖动 withTx 都会自行补刷）
     if (!active) {
       // 单击 → 播放头 seek 到该 KF（对齐 OpenCut onKeyframeClick：帧吸附）
       if (seg) seekPlayhead(TimelineMapper.localToGlobal(seg, t0));
@@ -3194,6 +3206,12 @@ function refresh() {
   // B1（GPT 定案）：KF 面板输入框聚焦期间暂停 refresh——本地临时态（KfChannel.upsertLocal/setProperty）
   // 在 blur 提交前不能被 500ms 轮询的后端 draft 覆盖，否则"预览跟手"瞬间弹回。blur 后恢复+withTx 已自动 refresh。
   if (typeof _kfEditing !== "undefined" && _kfEditing) {
+    return Promise.resolve();
+  }
+  // B3.4b（2026-08-21）：KF 菱形拖拽期间暂停 refresh——500ms 轮询会重建 timeline（拖拽中的
+  // marker 被重置→"拖不动/弹回"）、反复触发 renderMedia（素材库"全消失" B12）、刷新面板值
+  // （"拖的时候参数被改"）。松手后 withTx / seekPlayhead 自动补刷。
+  if (_kfDragActive) {
     return Promise.resolve();
   }
   return call("get_state").then(st => {
