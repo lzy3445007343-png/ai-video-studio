@@ -460,8 +460,12 @@ function makeSeg(s, type, ti, idx, overrideLeftUs, forceDragging) {
       if (!ch || !ch.keys || !ch.keys.length) continue;
       for (const k of ch.keys) {
         const t = k.t || 0;
-        if (!byTime.has(t)) byTime.set(t, { kids: [], paths: [] });
-        const g = byTime.get(t);
+        // ★ ±1ms 容差合并（对齐后端 add_keyframe）：X/Y 同点打帧的 t 可能差 1ms
+        //   （面板两次 add_keyframe 的 local 微有出入），严格相等会拆成两个重叠 marker
+        //   → 拖拽只命中上层一个 → "拖走 X 留 Y"（用户反馈 B13 真根因）
+        let g = null;
+        for (const [kt, val] of byTime) { if (Math.abs(kt - t) <= 1000) { g = val; break; } }
+        if (!g) { g = { kids: [], paths: [] }; byTime.set(t, g); }
         g.kids.push(k.id);
         g.paths.push(path);
       }
