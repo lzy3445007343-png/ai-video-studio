@@ -2089,11 +2089,14 @@ function isTrackLocked(type, ti) {
 let _selKf = new Set();   // 选中 KF：Set<"path|kid">（同段假设）
 const _kfSelKey = (path, kid) => path + "|" + kid;
 
-/* 刷新全部 marker 的选中态（renderTimeline 重建后 / 选择变化后调用） */
+/* 刷新全部 marker 的选中态（renderTimeline 重建后 / 选择变化后调用）
+ * B3.2：marker 是"同时间点多通道 KF"合并的（data-kids/data-paths），任一 kid 选中即亮 */
 function refreshKfMarkerSelection() {
   document.querySelectorAll("#tlContent .kf-marker").forEach(m => {
-    const k = _kfSelKey(m.dataset.path, m.dataset.kid);
-    m.classList.toggle("is-selected", _selKf.has(k));
+    const kids = (m.dataset.kids || "").split(",");
+    const paths = (m.dataset.paths || "").split(",");
+    const sel = kids.some((kid, i) => _selKf.has(_kfSelKey(paths[i], kid)));
+    m.classList.toggle("is-selected", sel);
   });
 }
 
@@ -2122,23 +2125,26 @@ function startKfMarkerDrag(e) {
   if (!marker || !segEl || !segEl.dataset.key) return;
   e.preventDefault();
   e.stopPropagation();   // 拦截 onTimelineDown 的段移动/裁剪
-  const path = marker.dataset.path;
-  const kid = marker.dataset.kid;
+  // B3.2：marker = 同时间点多通道 KF 合并（对齐 OpenCut KeyframeIndicator.keyframes 数组）
+  const kids = (marker.dataset.kids || "").split(",").filter(Boolean);
+  const paths = (marker.dataset.paths || "").split(",").filter(Boolean);
   const t0 = +marker.dataset.kftime;              // local us（拖拽基准，不改）
   const key = segEl.dataset.key;
   const k = key.split(":");
   const seg = findSegByKey(key);
-  if (!seg || !kid) return;
+  if (!seg || !kids.length) return;
+  // 该时间点全部 KF 的选择键（同点多通道 = 一组，OpenCut keyframes 数组语义）
+  const selKeys = kids.map((kid, i) => _kfSelKey(paths[i] || "?", kid));
   // B3.1 选择逻辑（对齐 OpenCut onKeyframeMouseDown）：
-  //   未选中且无修饰键 → 单选；修饰键点未选中 → 增选；已选中 → 保持（拖全组）
-  const selKey = _kfSelKey(path, kid);
+  //   该组未选中且无修饰键 → 单选该组；修饰键点未选中组 → 增选该组；已选中 → 保持（拖全组）
+  const anySel = selKeys.some(sk => _selKf.has(sk));
   const isMod = e.shiftKey || e.ctrlKey || e.metaKey;
-  if (!_selKf.has(selKey) && !isMod) _selKf = new Set([selKey]);
-  else if (isMod && !_selKf.has(selKey)) _selKf.add(selKey);
+  if (!anySel && !isMod) _selKf = new Set(selKeys);
+  else if (isMod && !anySel) selKeys.forEach(sk => _selKf.add(sk));
   refreshKfMarkerSelection();
-  // 拖拽目标 = 选中集合里属于本段的 KF；空兜底 = 仅当前点
+  // 拖拽目标 = 选中集合里属于本段的 KF（组移动）；空兜底 = 该时间点全部
   let targets = collectSelKf(seg, key);
-  if (!targets.length) targets = [{ path, kid, t: t0 }];
+  if (!targets.length) targets = kids.map((kid, i) => ({ path: paths[i] || "?", kid, t: t0 }));
   const x0 = e.clientX;
   let active = false;
   // 帧吸附（项目 30fps，与后端导出一致）：拖拽时间 round 到 1/30s 倍数

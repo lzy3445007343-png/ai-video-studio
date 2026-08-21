@@ -451,14 +451,25 @@ function makeSeg(s, type, ti, idx, overrideLeftUs, forceDragging) {
   let kfMarkersHtml = "";
   if (s.animations) {
     const durSec = (s.duration || 0) / 1e6;
+    // B3.2（2026-08-21，对齐 OpenCut getKeyframeIndicators）：按时间分组合并——
+    //   同一时间点的多通道 KF（如 X+Y 同点打）渲染【一个】菱形，data-kids/data-paths 存全部。
+    //   否则多个重叠 marker 只会命中上层一个 → 拖拽"复制移动一个、另一个原地"（用户反馈 B13）。
+    const byTime = new Map();
     for (const path in s.animations) {
       const ch = s.animations[path];
       if (!ch || !ch.keys || !ch.keys.length) continue;
       for (const k of ch.keys) {
-        const tSec = Math.max(0, Math.min(durSec, (k.t || 0) / 1e6));
-        const xPx = tSec * pps();
-        kfMarkersHtml += '<div class="kf-marker" data-path="' + path + '" data-kftime="' + (k.t || 0) + '" data-kid="' + k.id + '" style="left:' + xPx + 'px"></div>';
+        const t = k.t || 0;
+        if (!byTime.has(t)) byTime.set(t, { kids: [], paths: [] });
+        const g = byTime.get(t);
+        g.kids.push(k.id);
+        g.paths.push(path);
       }
+    }
+    for (const [t, g] of byTime) {
+      const tSec = Math.max(0, Math.min(durSec, t / 1e6));
+      const xPx = tSec * pps();
+      kfMarkersHtml += '<div class="kf-marker" data-kftime="' + t + '" data-kids="' + g.kids.join(",") + '" data-paths="' + g.paths.join(",") + '" style="left:' + xPx + 'px"></div>';
     }
   }
   seg.innerHTML =
