@@ -1012,7 +1012,11 @@ function renderMedia(s) {
     renderEffectLibrary(s, $("mediaList")); return;
   }
   _effectSig = "";   // 切离特效 → 下次回特效时强制重建
-  const list = (s.filter === "media" ? s.materials.filter(m => m.type === "video" || m.type === "image") : s.materials.filter(m => m.type === s.filter));
+  // B12 防御（2026-08-21 用户反馈：拖 KF 后素材库"全清空"复发）：
+  //   s.materials 若含 null/undefined 元素（后端脏数据），m.type 抛错 → renderMedia 中断 → 卡片不渲染"看着全空"。
+  //   过滤非对象 + 兜底空数组，杜绝脏数据崩渲染。
+  const mats = Array.isArray(s.materials) ? s.materials.filter(Boolean) : [];
+  const list = (s.filter === "media" ? mats.filter(m => m.type === "video" || m.type === "image") : mats.filter(m => m.type === s.filter));
   const sig = s.filter + "|" + list.map(m => (m.uid || m.path) + ":" + m.name + ":" + m.type).join(",");
   // 仅在素材列表/筛选真正变化时重建 DOM；平时轮询只刷新选中态。
   // 否则每 500ms 把卡片 innerHTML 清空重建，会导致 +/删除 按钮闪烁、且点击时的 DOM 被替换使 click 丢失（加号点了没反应）。
