@@ -579,6 +579,8 @@ function renderTimeline(s) {
   }
   labels.scrollTop = savedTop;
   renderGroupBox();   // 选中≥1 段时绘制整组缩放包围盒（含左右把手）
+  // B3.1：renderTimeline 重建 DOM 后恢复 KF 菱形选中态（is-selected 蓝）
+  if (typeof refreshKfMarkerSelection === "function") refreshKfMarkerSelection();
 }
 function positionPlayhead() { $("playhead").style.left = (Store.state.playheadUs / 1e6 * pps()) + "px"; ensurePlayheadVisible(); if (!isPlaying) updateKfLiveValues(); }
 // 播放头导航统一入口：clamp 到 [0, 总时长] 后改 Store 并立即重绘蓝线+时间码（对齐 OpenCut playback.seek）。
