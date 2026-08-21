@@ -1939,8 +1939,28 @@ function onPointerMove(e) {
   } else if (d.side === "left") {
     const right = d.s0.start + d.s0.duration;
     const speed = d.s0.speed || 1;
-    // 素材头对应时间轴位置：src_start=0 处（再往左没有素材可补，对齐后端 _trim_core clamp）
-    const minLeft = d.s0.start - (d.s0.src_start || 0) / speed;
+    // ★ 2026-08-21 修复：isMedia 必须按【段类型】判断（d.s0.type），不能用轨类型（d.type）——
+    //    main 轨的图片段轨 type 是 "video"，用 d.type 会把图片误判为媒体 → 走 src_start 限制 → 左拖卡死
+    //    （right 分支同 bug 一并修，见下）。
+    const isMedia = d.s0.type === "video" || d.s0.type === "audio";
+    // 2026-08-21 修复（对齐 OpenCut computeGroupResize.getMinimumAllowedDeltaTime）：
+    //   媒体：minLeft = start - src_start/speed（拉到源开头，补回被裁帧）
+    //   无源（image/text/sticker）：minLeft = 左邻居结束（无邻居=0）——图片左拖可自由拉长开头。
+    //   之前无源段也走 src_start=0 → minLeft=start → 左拖被卡死（只能往右裁、拖不回来），
+    //   后端 _trim_core 无源分支本已支持（left_limit=max(0,-start)），是前端挡死了后端。
+    let minLeft;
+    if (isMedia) {
+      minLeft = d.s0.start - (d.s0.src_start || 0) / speed;
+    } else {
+      let nb = 0;
+      forEachSeg((s2, t2, ti2, idx2) => {
+        if (t2 === d.type && ti2 === d.ti && s2.id !== d.s0.id && (s2.start + s2.duration) <= d.s0.start) {
+          const e2 = s2.start + s2.duration;
+          if (e2 > nb) nb = e2;
+        }
+      });
+      minLeft = nb;   // 左邻居结束（不重叠），无邻居=0
+    }
     let left = Math.max(minLeft, Math.min(right - 0.2e6, d.s0.start + dUs));
     if (Store.state.snapOn) {
       const r = resolveSnap(left, buildSnapPoints(d.key, false));
@@ -1958,7 +1978,8 @@ function onPointerMove(e) {
     //   视频/音频：maxRight = start + (src_full - src_start)/speed → 可一路拖回原素材末尾，补回被裁帧；
     //   图片/文本：无源素材，不限长度（仍可自由拉长）。
     //   缺失 src_full 的媒体也放宽为无限，交给后端 _trim_core 按真实时长 clamp（自动自愈）。
-    const isMedia = d.type === "video" || d.type === "audio";
+    // ★ 2026-08-21：同 left 分支——isMedia 按【段类型】判断（轨类型会误判 main 轨图片段）
+    const isMedia = d.s0.type === "video" || d.s0.type === "audio";
     const full = isMedia ? (d.s0.src_full || 0) : 0;
     const maxRight = (isMedia && full)
       ? d.s0.start + (full - ss) / speed
