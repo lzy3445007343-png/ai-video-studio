@@ -2942,6 +2942,22 @@ class Api:
         dur = int(seg.get("duration", 0))
         t = max(0, min(int(time_us), dur))
         anims = _seg_anims(seg)
+        # ★ 跨通道打点对齐（2026-08-21 B3.4，用户真机反馈根因）：
+        #   用户打 X 和打 Y 时播放头微动（差 >1ms 甚至几十 ms），同一点的两通道 KF 时间戳不同
+        #   → 渲染拆成两个独立 marker（视觉重叠/相邻）→ 拖动只动一个通道 → "拖走 X 留 Y / 只剩一个轴"。
+        #   对齐规则：若其他通道在 ±1 帧（33333us，30fps）内已有 KF，把本次打点 t 对齐到那个 KF 的时间，
+        #   保证"同一点打 X+Y"严格同 t（渲染合并成一个 marker，拖动整组动）。
+        #   故意错开 >1 帧的 KF 不受影响（不误对齐）。
+        align_t = None
+        for _op, _och in anims.items():
+            if _op == path or not isinstance(_och, dict):
+                continue
+            for _ok in (_och.get("keys") or []):
+                if abs(_ok["t"] - t) <= 33333:
+                    if align_t is None or abs(_ok["t"] - t) < abs(align_t - t):
+                        align_t = _ok["t"]
+        if align_t is not None:
+            t = align_t
         ch = anims.get(path) if isinstance(anims.get(path), dict) else {"keys": []}
         keys = list(ch.get("keys", []))
         existing = next((k for k in keys if abs(k["t"] - t) <= 1000), None)

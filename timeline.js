@@ -460,11 +460,15 @@ function makeSeg(s, type, ti, idx, overrideLeftUs, forceDragging) {
       if (!ch || !ch.keys || !ch.keys.length) continue;
       for (const k of ch.keys) {
         const t = k.t || 0;
-        // ★ ±1ms 容差合并（对齐后端 add_keyframe）：X/Y 同点打帧的 t 可能差 1ms
-        //   （面板两次 add_keyframe 的 local 微有出入），严格相等会拆成两个重叠 marker
-        //   → 拖拽只命中上层一个 → "拖走 X 留 Y"（用户反馈 B13 真根因）
+        // ★ 合并容差 1 帧（33333us，30fps）——2026-08-21 B3.4 修正：
+        //   原 ±1ms 容差太苛刻。用户打 X 和打 Y 时播放头微动（>1ms，比如差 2~30ms），
+        //   X/Y 的 KF 时间戳就不同 → 渲染拆成两个独立 marker（视觉重叠/相邻）→
+        //   拖其中一个只动一个通道 → "拖走 X 留 Y / 只剩一个轴"（用户真机反馈）。
+        //   KF2/KF3 同点是因为那两次打点播放头恰好没动，KF1 差 366ms=11帧是拖动后分离。
+        //   容差 1 帧：打点微差 ≤1帧 的 X/Y 强制合并成一个 marker → 拖动全通道动；
+        //   故意错开 >1帧 的 KF 仍保持独立（不误合并）。
         let g = null;
-        for (const [kt, val] of byTime) { if (Math.abs(kt - t) <= 1000) { g = val; break; } }
+        for (const [kt, val] of byTime) { if (Math.abs(kt - t) <= 33333) { g = val; break; } }
         if (!g) { g = { kids: [], paths: [] }; byTime.set(t, g); }
         g.kids.push(k.id);
         g.paths.push(path);
