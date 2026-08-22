@@ -2159,25 +2159,30 @@ function startKfMarkerDrag(e) {
   //   语义：拖时间只改 t，绝不改 v（commit 时 update_keyframe value 恒为 null）。
   const editCtx = (typeof createEditContext === "function") ? createEditContext(key, { lockTime: false }) : null;
   if (editCtx) editCtx.lockSelectedKeys(targets.map(t => ({ path: t.path, kid: t.kid, t: t.t })));
-  const x0 = e.clientX;
+  // ★ A3（2026-08-22 对齐新版 keyframe-drag-controller）：
+  //   ① session 持有【单一 deltaTicks】——move 与 up 用同一个值（视觉与提交一致，
+  //      旧代码 move/up 各算一次，可能不一致）
+  //   ② pointerdown 缓存目标 marker 的 DOM 引用——move 里不再 querySelector
+  //      （旧代码每次拖动都重新查 DOM：B3.2 改 data-kids 后曾查不到→"拖不动"；
+  //       组拖多 marker 时查询脆弱→"只动一个/复制感"）
+  //   ③ 视觉 px 纯计算：(t.t + deltaTicks)/1e6*pps —— 对齐新版 getVisualOffsetPx 思路
+  targets.forEach(t => { t.el = segEl.querySelector('.kf-marker[data-kids*="' + t.kid + '"]'); });
+  const session = { targets, startMouseX: e.clientX, deltaTicks: 0 };
   let active = false;
   // 帧吸附（项目 30fps，与后端导出一致）：拖拽时间 round 到 1/30s 倍数
   const frameUs = Math.round(1e6 / 30);
   const dtUs = dx => Math.round(dx / pps() * 1e6);
   const snapFrame = us => Math.round(us / frameUs) * frameUs;
   const clampSeg = t => Math.max(0, Math.min(seg.duration, t));
+  // 纯计算：目标 KF 的视觉 px（对齐新版 getVisualOffsetPx——视觉 = 数据位置 + delta）
+  const visualPx = t => clampSeg(t.t + session.deltaTicks) / 1e6 * pps();
   const move = ev => {
-    const dx = ev.clientX - x0;
+    const dx = ev.clientX - session.startMouseX;
     if (!active && Math.abs(dx) < 4) return;      // 阈值 4px（对齐 OpenCut TIMELINE_DRAG_THRESHOLD_PX）
     active = true;
-    const delta = snapFrame(dtUs(dx));            // 同一 delta → 相对间隔保持
-    for (const t of targets) {
-      const nt = clampSeg(t.t + delta);
-      // ★ 2026-08-21 B3.4b 修复：B3.2 后 marker 属性是 data-kids（复数，逗号分隔），
-      //   旧代码用 data-kid（单数）永远查不到 → 拖动中菱形视觉不动（"拖不动/弹回"）。
-      //   改用包含匹配（kid 是 uuid 不会互相包含，安全）。
-      const m = segEl.querySelector('.kf-marker[data-kids*="' + t.kid + '"]');
-      if (m) m.style.left = (nt / 1e6 * pps()) + "px";  // 视觉临时移动（不落库）
+    session.deltaTicks = snapFrame(dtUs(dx));     // 单一 delta → 相对间隔保持 + 视觉/提交一致
+    for (const t of session.targets) {
+      if (t.el) t.el.style.left = visualPx(t) + "px";   // 视觉临时移动（不落库），纯计算
     }
   };
   const up = ev => {
@@ -2189,13 +2194,12 @@ function startKfMarkerDrag(e) {
       if (seg) seekPlayhead(TimelineMapper.localToGlobal(seg, t0));
       return;
     }
-    const dx = ev.clientX - x0;
-    const delta = snapFrame(dtUs(dx));
+    const delta = session.deltaTicks;   // ★ 与视觉同一值（不再重算）
     if (delta !== 0) {
       // 一次拖动 = 一条 undo（withTx 批量）；★ jobs 必须在 withTx 的 fn 内构造——
       // 否则 CommandService.run 在 begin_transaction 之前立即执行，事务包不住（B3.1 首版 bug）
       CommandService.withTx("kf-retime-group", () =>
-        Promise.all(targets.map(t => CommandService.run("update_keyframe",
+        Promise.all(session.targets.map(t => CommandService.run("update_keyframe",
           { track_type: k[0], track_index: +k[1], index: +k[2], path: t.path, keyframe_id: t.kid,
             value: null, time_us: clampSeg(t.t + delta), seg_mode: null },
           { actor: "ui", paths: [t.path] }))).then(rs => {

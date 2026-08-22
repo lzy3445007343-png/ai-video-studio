@@ -1405,6 +1405,18 @@ def _seg_anims(seg):
     return a if isinstance(a, dict) else {}
 
 
+def _frame_snap_us(t):
+    """把微秒时间吸附到整帧（30fps，帧长 33333us）。
+
+    对齐新版 OpenCut `roundFrameTicks`（keyframe-drag-controller.ts / wasm）：
+    —— 打点时间统一吸到整帧，保证"同一播放头打的 X/Y 严格同帧"——
+    这是 A1/A2 的基石：帧吸附后，同一点的 X/Y 传入微差（几 us）也会落同一帧，
+    配合 existing 严格相等（A1）即可正确合并，绝不误改 v。
+    """
+    frame_us = 33333
+    return ((t + frame_us // 2) // frame_us) * frame_us
+
+
 def _seg_masks(seg):
     if not isinstance(seg, dict):
         return []
@@ -2941,6 +2953,9 @@ class Api:
             seg_mode = "linear"
         dur = int(seg.get("duration", 0))
         t = max(0, min(int(time_us), dur))
+        # ★ A2（2026-08-22 对齐新版 OpenCut roundFrameTicks）：打点时间吸附到整帧。
+        #   保证同一播放头打的 X/Y 严格同帧 → A1 严格相等合并才可靠，绝不误改 v。
+        t = max(0, min(_frame_snap_us(t), dur))
         anims = _seg_anims(seg)
         # ── KF-AUDIT（2026-08-22，GPT 评审要求的时间链路审计）──────────────
         # 打印"后端实际收到的时间"：time_us（前端发送）→ t（clamp 后）→ dur。
@@ -2971,7 +2986,11 @@ class Api:
                 t = align_t
         ch = anims.get(path) if isinstance(anims.get(path), dict) else {"keys": []}
         keys = list(ch.get("keys", []))
-        existing = next((k for k in keys if abs(k["t"] - t) <= 1000), None)
+        # ★ A1（2026-08-22 对齐新版 isNearlySameTime）：existing 匹配从 ±1ms 改【严格相等】。
+        #   旧行为：±1ms 内任意打点都合并 → 拖素材/打点落在已有 KF 附近会误改 v（用户反馈"拖的时候改数值"）。
+        #   新行为：只有精确同帧才更新 v——配合 A2 帧吸附，同一点的 X/Y 严格同帧 → 正确合并；
+        #   不同帧的 KF 绝不互相覆盖（对齐新版 `leftTime === rightTime` 哲学：时间精确，绝不猜测）。
+        existing = next((k for k in keys if k["t"] == t), None)
         if _audit:
             print(f"[KF-AUDIT] add_keyframe store: path={path} t={t} mode={'UPDATE' if existing else 'NEW'}")
         if existing:
