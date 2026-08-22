@@ -88,6 +88,13 @@ class DragSession extends GestureSession {
     const paths = ["transform.positionX", "transform.positionY"];
     if (c.hasAnimX || c.hasAnimY) {
       // 有动画通道 → 在当前 localSnap 处打关键帧（事务：一次拖动 = 一条 undo）
+      // ── KF-AUDIT：打印 X/Y 实际发送给后端的 time_us（应相等，若不等即根因）──
+      console.log("[KF-AUDIT] preview-drag commit", JSON.stringify({
+        gestureId: c.gestureId || "?", localSnap: c.localSnap,
+        xTimeUs: c.localSnap, yTimeUs: c.localSnap,
+        hasAnimX: c.hasAnimX, hasAnimY: c.hasAnimY,
+      }));
+      // ────────────────────────────────────────────────────────────────────
       const jobs = [];
       if (c.hasAnimX) jobs.push(CommandService.run("add_keyframe", Object.assign({}, args, {
         path: "transform.positionX", time_us: c.localSnap, value: nx, seg_mode: "linear",
@@ -145,15 +152,25 @@ function onPreviewDragDown(e) {
   if (Store.state.selectedKey !== rec.key) selectKey(rec.key);
   const tr = resolveTransform(seg, _previewLocalUs(seg));
   const rect = wrap.getBoundingClientRect();
+  // ── KF-AUDIT（2026-08-22，GPT 评审要求的时间链路审计）──────────────
+  // 一次 preview-drag 手势的"唯一时间 ID"：pointerdown 时锁定，全程不变。
+  // 目的：证明 X/Y 两个 add_keyframe 用的是不是同一个 localSnap / playheadUs。
+  const gestureId = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  const _localDown = _previewLocalUs(seg);
+  console.log("[KF-AUDIT] preview-drag pointerdown", JSON.stringify({
+    gestureId, segStart: seg.start, segDur: seg.duration,
+    playheadUs: Store.state.playheadUs, localSnap: _localDown,
+  }));
+  // ────────────────────────────────────────────────────────────────────
   // v2 ctx 三层：pointer（鼠标）/ target（操作对象）/ snapshot（事务前 path 快照）
   // DragSession 专属引用（seg/el/key/localSnap/hasAnimX/Y）放 ctx 顶层
   const ctx = {
     pointer: { id: e.pointerId, startX: e.clientX, startY: e.clientY, currentX: e.clientX, currentY: e.clientY },
     target: { type: "segment", id: seg.id },
-    seg, el: wrap, key: rec.key,
+    seg, el: wrap, key: rec.key, gestureId,
     offX: e.clientX - rect.left, offY: e.clientY - rect.top,   // 抓哪拖哪
     snapshot: { "transform.positionX": tr.x, "transform.positionY": tr.y },
-    localSnap: _previewLocalUs(seg),
+    localSnap: _localDown,
     hasAnimX: _previewHasAnim(seg, "transform.positionX"),
     hasAnimY: _previewHasAnim(seg, "transform.positionY"),
   };

@@ -2942,25 +2942,38 @@ class Api:
         dur = int(seg.get("duration", 0))
         t = max(0, min(int(time_us), dur))
         anims = _seg_anims(seg)
-        # ★ 跨通道打点对齐（2026-08-21 B3.4，用户真机反馈根因）：
-        #   用户打 X 和打 Y 时播放头微动（差 >1ms 甚至几十 ms），同一点的两通道 KF 时间戳不同
-        #   → 渲染拆成两个独立 marker（视觉重叠/相邻）→ 拖动只动一个通道 → "拖走 X 留 Y / 只剩一个轴"。
-        #   对齐规则：若其他通道在 ±1 帧（33333us，30fps）内已有 KF，把本次打点 t 对齐到那个 KF 的时间，
-        #   保证"同一点打 X+Y"严格同 t（渲染合并成一个 marker，拖动整组动）。
-        #   故意错开 >1 帧的 KF 不受影响（不误对齐）。
-        align_t = None
-        for _op, _och in anims.items():
-            if _op == path or not isinstance(_och, dict):
-                continue
-            for _ok in (_och.get("keys") or []):
-                if abs(_ok["t"] - t) <= 33333:
-                    if align_t is None or abs(_ok["t"] - t) < abs(align_t - t):
-                        align_t = _ok["t"]
-        if align_t is not None:
-            t = align_t
+        # ── KF-AUDIT（2026-08-22，GPT 评审要求的时间链路审计）──────────────
+        # 打印"后端实际收到的时间"：time_us（前端发送）→ t（clamp 后）→ dur。
+        # 用途：判断 X/Y 两个 add_keyframe 到底收到的是不是同一个 t。
+        import os as _os
+        _audit = _os.environ.get("KF_AUDIT", "1") == "1"
+        if _audit:
+            print(f"[KF-AUDIT] add_keyframe received: path={path} time_us={time_us} t_clamped={t} dur={dur} seg_start={seg.get('start')}")
+        # ── 跨通道打点对齐（B3.4）────────────────────────────────────────
+        # ★ 2026-08-22 GPT 评审：此逻辑可能掩盖真实根因，默认【禁用】。
+        #   开启方式：环境变量 KF_ALIGN_CROSS_CHANNEL=1（仅审计/诊断用）。
+        #   原逻辑：若其他通道 ±1帧(33333us) 内已有 KF → 本次 t 对齐到该 KF 时间。
+        #   风险（GPT 原话）："一个通道的关键帧时间，不应该偷偷决定另一个通道的时间"；
+        #   且 X=100/Y=666760 这种真实错位会被对齐掩盖，无法暴露"时间基准被复用"的根因。
+        _align = _os.environ.get("KF_ALIGN_CROSS_CHANNEL", "0") == "1"
+        if _align:
+            align_t = None
+            for _op, _och in anims.items():
+                if _op == path or not isinstance(_och, dict):
+                    continue
+                for _ok in (_och.get("keys") or []):
+                    if abs(_ok["t"] - t) <= 33333:
+                        if align_t is None or abs(_ok["t"] - t) < abs(align_t - t):
+                            align_t = _ok["t"]
+            if align_t is not None:
+                if _audit:
+                    print(f"[KF-AUDIT] add_keyframe ALIGN: path={path} t={t} → aligned_to={align_t}")
+                t = align_t
         ch = anims.get(path) if isinstance(anims.get(path), dict) else {"keys": []}
         keys = list(ch.get("keys", []))
         existing = next((k for k in keys if abs(k["t"] - t) <= 1000), None)
+        if _audit:
+            print(f"[KF-AUDIT] add_keyframe store: path={path} t={t} mode={'UPDATE' if existing else 'NEW'}")
         if existing:
             existing["v"] = float(value)
             existing["seg"] = seg_mode
@@ -2992,6 +3005,9 @@ class Api:
         target = next((k for k in keys if k.get("id") == keyframe_id), None)
         if not target:
             return {"ok": False, "error": "找不到该关键帧"}
+        import os as _os2
+        if _os2.environ.get("KF_AUDIT", "1") == "1":
+            print(f"[KF-AUDIT] update_keyframe received: path={path} id={keyframe_id} value={value} time_us={time_us} seg_mode={seg_mode} | before: t={target.get('t')} v={target.get('v')}")
         if value is not None:
             if not isinstance(value, (int, float)) or isinstance(value, bool):
                 return {"ok": False, "error": "value 必须是数字"}
@@ -3003,6 +3019,8 @@ class Api:
             if seg_mode not in ("linear", "hold"):
                 return {"ok": False, "error": "seg_mode 必须是 linear 或 hold"}
             target["seg"] = seg_mode
+        if _os2.environ.get("KF_AUDIT", "1") == "1":
+            print(f"[KF-AUDIT] update_keyframe stored: path={path} id={keyframe_id} | after: t={target.get('t')} v={target.get('v')} seg={target.get('seg')}")
         keys.sort(key=lambda k: k["t"])
         anims[path] = {"keys": keys}
         seg["animations"] = anims
