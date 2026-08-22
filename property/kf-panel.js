@@ -181,14 +181,24 @@ function buildKfRow(path, lab, step, def, anims, local) {
   // blur/Enter 才一次 Command Transaction——绝不每次 keystroke 打后端（打穿 C3"一次动作=一条 undo"）。
   // 同时 input 聚焦期间置 _kfEditing=true → refresh() 暂停 draft 替换（防本地态被 500ms 轮询覆盖）。
   let _draft = null;   // 本地临时态 {v, hasKf, local}
-  inp.addEventListener("focus", () => { _kfEditing = true; });
+  let _editCtx = null; // ★ KET（2026-08-22）：focus 锁定编辑时间（GPT §7：一次手势锁定 editTime，
+                       //   不许 blur/input 时重读 playhead——输入期间播放头漂移会让打点时间错位）
+  inp.addEventListener("focus", () => {
+    _kfEditing = true;
+    const s = selectedSeg();
+    if (s && typeof createEditContext === "function" && Store.state.selectedKey) {
+      _editCtx = createEditContext(Store.state.selectedKey);   // lockTime 默认 true
+    }
+  });
   inp.addEventListener("input", () => {
     const v = parseFloat(inp.value);
     if (isNaN(v)) return;
     const s = selectedSeg();   // 每次取最新段引用（Store 刷新替换 draft 后旧引用失效）
     if (!s) return;
     const hasKf = KfChannel.isAnimated(s, path);
-    const local = TimelineMapper.playheadLocal(s);
+    // ★ KET：优先用 focus 锁定的 localUs（一次手势一个时间基准），fallback 实时换算
+    const local = (_editCtx && _editCtx.editTime) ? _editCtx.editTime.localUs
+                : TimelineMapper.playheadLocal(s);
     _draft = { v, hasKf, local };
     if (hasKf) {
       KfChannel.upsertLocal(s, path, local, v, "linear");   // 本地打点（预览插值用，不进后端/undo）
@@ -202,6 +212,7 @@ function buildKfRow(path, lab, step, def, anims, local) {
     if (!_draft) return;
     const { v, hasKf, local } = _draft;
     _draft = null;
+    _editCtx = null;   // 手势结束，释放时间锁（下次 focus 重新锁定）
     const s = selectedSeg();
     if (!s) return;
     const k = Store.state.selectedKey ? Store.state.selectedKey.split(":") : null;

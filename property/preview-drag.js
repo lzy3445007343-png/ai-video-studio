@@ -20,7 +20,9 @@
 
 /* —— DragSession（kernel 不知道业务，DragSession 留在 preview-drag.js） —— */
 
-/* 辅助函数（C2 迁移时保留，供 DragSession 使用） */
+/* 辅助函数（C2 迁移时保留，供 DragSession 使用）
+ * ★ KET（2026-08-22）：_previewLocalUs 保留作 fallback，正式路径走 EditContext.lockEditTime()
+ *   （GPT §7/§8：一次手势只锁定一个 editTime，X/Y 都用 context.localUs） */
 function _previewLocalUs(seg) {
   // B2.1 收口：统一走 TimelineMapper（global→local 钳制），不散落手写换算
   return (typeof TimelineMapper !== "undefined") ? TimelineMapper.playheadLocal(seg)
@@ -89,18 +91,21 @@ class DragSession extends GestureSession {
     if (c.hasAnimX || c.hasAnimY) {
       // 有动画通道 → 在当前 localSnap 处打关键帧（事务：一次拖动 = 一条 undo）
       // ── KF-AUDIT：打印 X/Y 实际发送给后端的 time_us（应相等，若不等即根因）──
+      // ★ KET：time_us 用 EditContext 锁定的 localUs（GPT §8：X/Y 都用 context.localUs）
+      const _tx = (c.editCtx && c.editCtx.editTime) ? c.editCtx.editTime.localUs : c.localSnap;
       console.log("[KF-AUDIT] preview-drag commit", JSON.stringify({
-        gestureId: c.gestureId || "?", localSnap: c.localSnap,
-        xTimeUs: c.localSnap, yTimeUs: c.localSnap,
+        gestureId: c.gestureId || "?", localSnap: c.localSnap, editLocalUs: _tx,
+        xTimeUs: _tx, yTimeUs: _tx,
         hasAnimX: c.hasAnimX, hasAnimY: c.hasAnimY,
       }));
       // ────────────────────────────────────────────────────────────────────
       const jobs = [];
+      const _tu = (c.editCtx && c.editCtx.editTime) ? c.editCtx.editTime.localUs : c.localSnap;
       if (c.hasAnimX) jobs.push(CommandService.run("add_keyframe", Object.assign({}, args, {
-        path: "transform.positionX", time_us: c.localSnap, value: nx, seg_mode: "linear",
+        path: "transform.positionX", time_us: _tu, value: nx, seg_mode: "linear",
       }), { actor: "ui", paths: ["transform.positionX"] }));
       if (c.hasAnimY) jobs.push(CommandService.run("add_keyframe", Object.assign({}, args, {
-        path: "transform.positionY", time_us: c.localSnap, value: ny, seg_mode: "linear",
+        path: "transform.positionY", time_us: _tu, value: ny, seg_mode: "linear",
       }), { actor: "ui", paths: ["transform.positionY"] }));
       CommandService.withTx("drag-transform-kf", () => Promise.all(jobs).then(rs => {
         const bad = rs.find(r => !r || r.ok === false);
@@ -156,10 +161,15 @@ function onPreviewDragDown(e) {
   // 一次 preview-drag 手势的"唯一时间 ID"：pointerdown 时锁定，全程不变。
   // 目的：证明 X/Y 两个 add_keyframe 用的是不是同一个 localSnap / playheadUs。
   const gestureId = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-  const _localDown = _previewLocalUs(seg);
+  // ★ KET（2026-08-22）：EditContext 统一入口——lockEditTime() 锁定 immutable 时间基准，
+  //   X/Y 都用 ctx.localUs（GPT §8：一次 Gesture 只产生一个 EditTimeContext）。
+  //   fallback：旧版无 EditContext 时退回 _previewLocalUs（jsdom 冒烟兼容）。
+  const editCtx = (typeof createEditContext === "function") ? createEditContext(rec.key) : null;
+  const _localDown = editCtx ? editCtx.editTime.localUs : _previewLocalUs(seg);
   console.log("[KF-AUDIT] preview-drag pointerdown", JSON.stringify({
     gestureId, segStart: seg.start, segDur: seg.duration,
     playheadUs: Store.state.playheadUs, localSnap: _localDown,
+    editCtx: !!editCtx,
   }));
   // ────────────────────────────────────────────────────────────────────
   // v2 ctx 三层：pointer（鼠标）/ target（操作对象）/ snapshot（事务前 path 快照）
@@ -167,7 +177,7 @@ function onPreviewDragDown(e) {
   const ctx = {
     pointer: { id: e.pointerId, startX: e.clientX, startY: e.clientY, currentX: e.clientX, currentY: e.clientY },
     target: { type: "segment", id: seg.id },
-    seg, el: wrap, key: rec.key, gestureId,
+    seg, el: wrap, key: rec.key, gestureId, editCtx,
     offX: e.clientX - rect.left, offY: e.clientY - rect.top,   // 抓哪拖哪
     snapshot: { "transform.positionX": tr.x, "transform.positionY": tr.y },
     localSnap: _localDown,
