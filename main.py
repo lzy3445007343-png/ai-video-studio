@@ -1212,6 +1212,120 @@ def _verify_saved(state, path, serialized=None):
     return True, None
 
 
+# 4a（M4，2026-08-23）：document-changed 事件载荷。
+# save_state 成功写盘后对比「写前/写后」草稿，产出紧凑变更描述，两种消费通道共用：
+#   ① 桌面即时推：同进程 save_state 成功后 evaluate_js 调 window.__onDocumentChanged（<100ms），
+#      仅用于桌面进程内、且非 execute 调用链中的「带外」保存（execute 链由前端 API 返回后自行重绘，
+#      走 evaluate_js 反有重入风险，故跳过）；
+#   ② 富化轮询：get_state 在全量分支用「上次轮询草稿」diff 当前草稿，把 payload 挂 meta.documentChanged
+#      返回（MCP 经 2s version 门控轮询即见；桌面前端也靠它做差量渲染，覆盖 MCP/另一窗口的跨进程改动）。
+# 重型派生字段 peaks/src_full 一律排除——非语义编辑且体积巨大，既避假阳性也避 payload 爆炸。
+_CHANGE_EXCLUDE_FIELDS = ("peaks", "src_full")
+_CHANGE_CONTAINER_KEYS = ("main", "overlay", "audio", "text", "materials")
+
+
+def _seg_light(seg):
+    """段的最小比较体：去掉重型派生字段，其余语义字段全留（位置/时长/变换/关键帧/速度/音量/文本）。"""
+    if not isinstance(seg, dict):
+        return seg
+    return {k: v for k, v in seg.items() if k not in _CHANGE_EXCLUDE_FIELDS}
+
+
+def _iter_seg_index(draft):
+    """{seg_id: (light_seg, track_type)} 覆盖 main/overlay/audio/text 全部轨道。"""
+    idx = {}
+    if not isinstance(draft, dict):
+        return idx
+    main = draft.get("main")
+    if isinstance(main, dict):
+        for s in (main.get("segs") or []):
+            if isinstance(s, dict) and s.get("id") is not None:
+                idx[s["id"]] = (_seg_light(s), "main")
+    for tr in (draft.get("overlay") or []):
+        if isinstance(tr, dict):
+            ttype = tr.get("type") or "overlay"
+            for s in (tr.get("segs") or []):
+                if isinstance(s, dict) and s.get("id") is not None:
+                    idx[s["id"]] = (_seg_light(s), ttype)
+    for tr in (draft.get("audio") or []):
+        if isinstance(tr, dict):
+            for s in (tr.get("segs") or []):
+                if isinstance(s, dict) and s.get("id") is not None:
+                    idx[s["id"]] = (_seg_light(s), "audio")
+    for tr in (draft.get("text") or []):
+        if isinstance(tr, dict):
+            for s in (tr.get("segs") or []):
+                if isinstance(s, dict) and s.get("id") is not None:
+                    idx[s["id"]] = (_seg_light(s), "text")
+    return idx
+
+
+def _mat_id(m):
+    return m.get("uid") or m.get("id")
+
+
+def _compute_change_payload(before_draft, after_draft, actor="system", version=None):
+    """返回变更载荷 dict；无变化则 {"empty": True}（供调用方跳过发布，防爆炸）。
+    payload = {version, changedSegIds, changedSegOps, changedMaterials, changedKeys, actor, ts}"""
+    bi = _iter_seg_index(before_draft)
+    ai = _iter_seg_index(after_draft)
+    changed_seg_ids, changed_seg_ops, changed_keys = [], {}, set()
+    for sid, (seg, ttype) in ai.items():
+        if sid not in bi:
+            changed_seg_ids.append(sid); changed_seg_ops[sid] = "added"; changed_keys.add(ttype)
+        elif bi[sid][0] != seg:
+            changed_seg_ids.append(sid); changed_seg_ops[sid] = "modified"; changed_keys.add(ttype)
+    for sid, (seg, ttype) in bi.items():
+        if sid not in ai:
+            changed_seg_ids.append(sid); changed_seg_ops[sid] = "removed"; changed_keys.add(ttype)
+    bm = {_mat_id(m) for m in (before_draft or {}).get("materials", []) if _mat_id(m)}
+    am = {_mat_id(m) for m in (after_draft or {}).get("materials", []) if _mat_id(m)}
+    changed_materials = sorted((am - bm) | (bm - am))
+    for k in set((before_draft or {})) | set((after_draft or {})):
+        if k in _CHANGE_CONTAINER_KEYS:
+            continue
+        if (before_draft or {}).get(k) != (after_draft or {}).get(k):
+            changed_keys.add(k)
+    if not (changed_seg_ids or changed_materials or changed_keys):
+        return {"empty": True}
+    return {
+        "version": version if version is not None else (after_draft or {}).get("version"),
+        "changedSegIds": changed_seg_ids,
+        "changedSegOps": changed_seg_ops,
+        "changedMaterials": changed_materials,
+        "changedKeys": sorted(changed_keys),
+        "actor": actor,
+        "ts": int(time.time() * 1000),
+    }
+
+
+# 同进程内「上次发布的变更载荷」缓存（evaluate_js 推 + 兜底读取）。跨进程不可见，真消费以 get_state 轮询为准。
+LAST_DOCUMENT_CHANGE = None
+# save_state 发布时的 actor：execute/undo/redo 写入，区分「桌面用户 / 外部 Agent / 系统」三类来源。
+DOCUMENT_CHANGE_ACTOR = "system"
+
+
+def _publish_document_change(before_draft, state):
+    """4a：写盘成功后发布变更载荷（仅同进程生效；跨进程靠 get_state 轮询 diff）。
+
+    - 缓存到模块级 LAST_DOCUMENT_CHANGE（同一进程内后续 get_state 可直接复用其 actor）；
+    - 桌面进程内、且非 execute 调用链中（避免重入死锁）时，evaluate_js 即时推 window.__onDocumentChanged。
+    """
+    payload = _compute_change_payload(before_draft, state["draft"], DOCUMENT_CHANGE_ACTOR, state.get("version"))
+    if payload.get("empty"):
+        return
+    global LAST_DOCUMENT_CHANGE
+    LAST_DOCUMENT_CHANGE = payload
+    if webview is not None and getattr(webview, "windows", None):
+        # 仅在「带外」保存时即时推：execute 链由前端 API 返回后自行重绘，重入 evaluate_js 有风险，跳过。
+        if not Api._in_execute:
+            try:
+                js = "(window.__onDocumentChanged||function(){})(%s)" % json.dumps(payload, ensure_ascii=False)
+                webview.windows[0].evaluate_js(js)
+            except Exception:
+                pass
+
+
 def save_state(state, record=True):
     """把状态写回 draft_state.json，并打上版本时间戳（前端靠 version 判断是否变化）。
 
@@ -1225,6 +1339,9 @@ def save_state(state, record=True):
     加文件锁防竞态：如果 MCP 进程正在写，桌面进程会等待它写完再写，反之亦然。
     无 portalocker 时回退到无锁写（单进程场景够用，多进程有低概率互踩）。"""
     global FAILED_SAVE, SAVE_LAST_CONFLICT
+    # 4a：捕获「写前」已提交草稿（仅引用，不复制；行 1238 会把它整体深拷贝成新基线，此处引用不受影响）。
+    # 用于成功后 diff 产出变更载荷。
+    before_committed = Api.last_committed
     if record and Api.last_committed is not None and state["draft"] != Api.last_committed:
         # 2b 双轨收敛：标记本次操作真实变更；仅当「未走 execute」(直接调用)时才压兜底快照，
         # 走 execute 的路径由 CommandManager.execute 统一压带语义的 Command（避免双步 / 无 cmd_id）。
@@ -1282,6 +1399,8 @@ def save_state(state, record=True):
             print("[SAVE-VERIFY-FAIL] " + detail)
             FAILED_SAVE = True
             return False
+        # 4a：成功写盘 → 计算并发布 document-changed 载荷（同进程 evaluate_js 推 + 轮询 diff 两通道）。
+        _publish_document_change(before_committed, state)
         return True
     except Exception as e:
         # 2026-08-19：写盘失败必须可见（之前静默 return False → add 照常 ok=true → 段在内存但没落盘
@@ -2711,6 +2830,8 @@ class Api:
             Api.cmd_mgr = CommandManager()
         # 记录「已提交」基线，供 save_state 判断真实变更（undo 快照自动记录机制依赖此）。
         Api.last_committed = copy.deepcopy(self.draft)
+        # 4a：上次轮询时见过的草稿（深拷贝快照），供 get_state 计算 documentChanged 差量。
+        self._last_seen_draft = None
 
     def _reload(self):
         """修改状态前先从文件重载最新状态。
@@ -2757,6 +2878,9 @@ class Api:
         # 2b：UI 直调未带 meta 时补默认上下文（actor=user / source=ui），Agent/MCP 自带 meta 覆盖。
         if meta is None:
             meta = {"actor": "user", "source": "ui", "reversible": True}
+        # 4a：把本次操作 actor 写入模块级，save_state 发布 document-changed 载荷时携带（区分人/AI/系统）。
+        global DOCUMENT_CHANGE_ACTOR
+        DOCUMENT_CHANGE_ACTOR = (meta or {}).get("actor") or "user"
         # 2d：事务进行中时跳过 _reload——事务内多步在内存态累积，避免每次重载覆盖中间态 /
         # 重复磁盘 IO（大事务 / AI 批量场景）。事务外仍先 reload 保证看到最新磁盘态。
         if Api.cmd_mgr._tx is None:
@@ -2774,6 +2898,8 @@ class Api:
         2c：selection=撤销前前端选中快照，传给 cmd_mgr 记为本命令「操作后选中」，供 redo 还原。"""
         if Api.cmd_mgr is None:
             return {"ok": False, "error": "撤销系统未就绪"}
+        global DOCUMENT_CHANGE_ACTOR
+        DOCUMENT_CHANGE_ACTOR = "user"
         self._reload()
         return Api.cmd_mgr.undo(self, selection)
 
@@ -2782,6 +2908,8 @@ class Api:
         2c：selection=重做前前端选中快照，传给 cmd_mgr 记为本命令「撤销后选中」，供下次 undo 还原。"""
         if Api.cmd_mgr is None:
             return {"ok": False, "error": "重做系统未就绪"}
+        global DOCUMENT_CHANGE_ACTOR
+        DOCUMENT_CHANGE_ACTOR = "user"
         self._reload()
         return Api.cmd_mgr.redo(self, selection)
 
@@ -5342,6 +5470,18 @@ class Api:
         # 新素材建段即带 src_full；纯读轮询不再触发探测。get_state 只负责读最新磁盘态。
         mcp_state = load_mcp_state()
         self.state["meta"] = {"mcp": mcp_state}
+        # 4a：富化轮询——diff「上次轮询草稿」与当前草稿，把变更载荷挂 meta.documentChanged 返回。
+        # 覆盖 MCP/另一窗口的跨进程改动（save_state 的 evaluate_js 推仅同进程）。首次轮询(_last_seen_draft
+        # 为 None)不挂——前端本就全量渲染。若同进程刚发布过且版本一致，复用其 actor（更准）。
+        if self._last_seen_draft is not None:
+            actor = "system"
+            if LAST_DOCUMENT_CHANGE is not None and LAST_DOCUMENT_CHANGE.get("version") == ondisk_version:
+                actor = LAST_DOCUMENT_CHANGE.get("actor", "system")
+            dc = _compute_change_payload(self._last_seen_draft, self.draft, actor, ondisk_version)
+            self.state["meta"]["documentChanged"] = None if dc.get("empty") else dc
+        else:
+            self.state["meta"]["documentChanged"] = None
+        self._last_seen_draft = copy.deepcopy(self.draft)
         # 注意：version 只反映草稿真实变化（save_state 打的时间戳），不要并入 MCP 心跳时间戳，
         # 否则心跳每 3s 更新 updated_at 会让 version 常变，前端每 3s 强重渲染整条时间轴（卡顿/打断）。
         # MCP 灰/绿点由前端每次轮询单独调 renderMcpStatus 更新，不靠 version 变化触发。
