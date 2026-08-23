@@ -160,36 +160,38 @@ def delete_text_track(track_index: int) -> str:
 
 @mcp.tool()
 def add_effect(track_index: int, effect_type: str, target: dict = None, start_us: int = 0,
-               duration_us: int = 2000000, params: dict = None, keyframes: list = None, name: str = None) -> str:
+               duration_us: int = 2000000, params: dict = None, keyframes: list = None, name: str = None, seg_id: str = None) -> str:
     """新增一个特效段到特效轨（Effect DSL 节点，预览=导出同源）。
 
     effect_type: 注册表 key（blur/brightness/contrast/saturate/hue_rotate/grayscale/sepia/invert/opacity）。
     target: {"type":"clip","track":int,"ti":int,"si":int} 绑素材段；省略=调整层（盖整栈）。
+            09 M1-1b：target 也可带 "seg_id" 按稳定段 id 绑定（与 track/ti/si 二选一）。
     start_us/duration_us: 微秒（段在特效轨上的时间区间）。
     params: 该 effect_type 的原语参数 dict（如 blur→{"radius":12}，brightness→{"value":1.2}）。
     keyframes: 参数时间曲线 [{param,time(us,相对段起点),value,easing}]，省略=静态。
     返回结果 JSON（含新建段的 id）。"""
     return _exec("add_effect", {"track_index": track_index, "effect_type": effect_type, "target": target,
                                 "start_us": start_us, "duration_us": duration_us, "params": params,
-                                "keyframes": keyframes, "name": name})
+                                "keyframes": keyframes, "name": name, "seg_id": seg_id})
 
 
 @mcp.tool()
-def update_effect(track_index: int, index: int, patch: dict = None) -> str:
-    """更新特效段：patch 可含 effect_type/target/params(合并)/keyframes/range{startUs,endUs}/start/duration/name/hidden。"""
-    return _exec("update_effect", {"track_index": track_index, "index": index, "patch": patch})
+def update_effect(track_index: int, index: int, patch: dict = None, seg_id: str = None) -> str:
+    """更新特效段：patch 可含 effect_type/target/params(合并)/keyframes/range{startUs,endUs}/start/duration/name/hidden。
+    seg_id：09 M1-1b 稳定段 id，优先于 (track_index,index) 定位目标段。"""
+    return _exec("update_effect", {"track_index": track_index, "index": index, "patch": patch, "seg_id": seg_id})
 
 
 @mcp.tool()
-def remove_effect(track_index: int, index: int) -> str:
-    """删除特效轨第 index 段。"""
-    return _exec("remove_effect", {"track_index": track_index, "index": index})
+def remove_effect(track_index: int, index: int, seg_id: str = None) -> str:
+    """删除特效轨第 index 段。seg_id：09 M1-1b 稳定段 id，优先于 (track_index,index) 定位。"""
+    return _exec("remove_effect", {"track_index": track_index, "index": index, "seg_id": seg_id})
 
 
 @mcp.tool()
-def duplicate_effect(track_index: int, index: int) -> str:
-    """复制特效段到同轨紧接其后（重发 id）。"""
-    return _exec("duplicate_effect", {"track_index": track_index, "index": index})
+def duplicate_effect(track_index: int, index: int, seg_id: str = None) -> str:
+    """复制特效段到同轨紧接其后（重发 id）。seg_id：09 M1-1b 稳定段 id，优先于 (track_index,index) 定位。"""
+    return _exec("duplicate_effect", {"track_index": track_index, "index": index, "seg_id": seg_id})
 
 
 @mcp.tool()
@@ -247,11 +249,11 @@ def audit_log(limit: int = 100, actor: str = None) -> str:
 
 
 @mcp.tool()
-def set_segment_flag(track_type: str, track_index: int, index: int, flag: str, value: bool) -> str:
+def set_segment_flag(track_type: str, track_index: int, index: int, flag: str, value: bool, seg_id: str = None) -> str:
     """段级静音/隐藏（OpenCut: toggle-elements-muted-selected / visibility-selected）。
     flag 取值：muted（该段静音：视频内嵌音频/音频段不出声）/ hidden（该段隐藏：画面不渲染）。
-    value: true/false。影响预览与导出。返回结果 JSON。"""
-    return _exec("set_segment_flag", {"track_type": track_type, "track_index": track_index, "index": index, "flag": flag, "value": value})
+    value: true/false。影响预览与导出。seg_id：09 M1-1b 稳定段 id，优先于 (track_type,track_index,index) 定位。返回结果 JSON。"""
+    return _exec("set_segment_flag", {"track_type": track_type, "track_index": track_index, "index": index, "flag": flag, "value": value, "seg_id": seg_id})
 
 
 # ---------------------------------------------------------------------------

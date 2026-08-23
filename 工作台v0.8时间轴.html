@@ -1139,7 +1139,7 @@ function addEffectFromLibrary(type, drop) {
     }
   }
   // 拖到空白新建特效轨：传 insertIndex 让后端在指定显示位插入（与 computeDrop/预览同源）
-  call("add_effect", trackIndex, type, target, startUs, null, null, null, null, insertIndex).then(r => {
+  call("add_effect", trackIndex, type, target, startUs, null, null, null, null, insertIndex, sel && sel.id).then(r => {
     if (r && r.ok) { refresh(); selectKey("effect:" + r.track_index + ":" + r.index); showToolTab("effects"); scrollToSegmentUs(startUs || 0); }
     else alert("添加特效失败：" + (r && r.error ? r.error : "未知"));
   });
@@ -1444,7 +1444,7 @@ function freshRefs() { return buildSegRefs(); }
 function callKVF(refs, path, local, v, mode) {
   const ka = kfSegArgs();
   const args = (ka && ka[0]) ? ka : [refs[0].type, refs[0].ti, refs[0].idx];
-  return call("add_keyframe", ...args, path, local, v, mode);
+  return call("add_keyframe", ...args, path, local, v, mode, Store.state.selectedSegId);
 }
 
 // 分贝 ↔ 音量倍率（volume 0~2 = -∞~+6dB；0.0dB = 100% = volume 1.0，对齐 OpenCut AudioTab）
@@ -1636,13 +1636,13 @@ function renderKfSel(s) {
     + '<div class="row"><span>插值</span><select data-f="seg"><option value="linear"' + (k.seg !== 'hold' ? ' selected' : '') + '>线性</option><option value="hold"' + (k.seg === 'hold' ? ' selected' : '') + '>台阶</option></select></div>'
     + '<div class="row"><button class="del" data-act="delkf">删除关键帧</button></div>';
   selEl.querySelector('[data-f="t"]').addEventListener("change", e =>
-    call("update_keyframe", ...kfSegArgs(), selectedKf.path, selectedKf.id, null, Math.round(+e.target.value), null).then(() => refresh()));
+    call("update_keyframe", ...kfSegArgs(), selectedKf.path, selectedKf.id, null, Math.round(+e.target.value), null, Store.state.selectedSegId).then(() => refresh()));
   selEl.querySelector('[data-f="v"]').addEventListener("change", e =>
-    call("update_keyframe", ...kfSegArgs(), selectedKf.path, selectedKf.id, +e.target.value, null, null).then(() => refresh()));
+    call("update_keyframe", ...kfSegArgs(), selectedKf.path, selectedKf.id, +e.target.value, null, null, Store.state.selectedSegId).then(() => refresh()));
   selEl.querySelector('[data-f="seg"]').addEventListener("change", e =>
-    call("update_keyframe", ...kfSegArgs(), selectedKf.path, selectedKf.id, null, null, e.target.value).then(() => refresh()));
+    call("update_keyframe", ...kfSegArgs(), selectedKf.path, selectedKf.id, null, null, e.target.value, Store.state.selectedSegId).then(() => refresh()));
   selEl.querySelector('[data-act="delkf"]').addEventListener("click", () => {
-    call("remove_keyframe", ...kfSegArgs(), selectedKf.path, selectedKf.id).then(() => { selectedKf = { path: null, id: null }; refresh(); });
+    call("remove_keyframe", ...kfSegArgs(), selectedKf.path, selectedKf.id, Store.state.selectedSegId).then(() => { selectedKf = { path: null, id: null }; refresh(); });
   });
 }
 
@@ -1663,7 +1663,7 @@ function onKfDiamondDown(e, path, id, dur) {
     const rect = graphEl.getBoundingClientRect();
     let x = (ev.clientX - rect.left) / rect.width; x = Math.max(0, Math.min(1, x));
     const t = Math.round(x * dur);
-    call("update_keyframe", ...kfSegArgs(), path, id, null, t, null).then(() => refresh());
+    call("update_keyframe", ...kfSegArgs(), path, id, null, t, null, Store.state.selectedSegId).then(() => refresh());
   };
   document.addEventListener("mousemove", move);
   document.addEventListener("mouseup", up);
@@ -1676,14 +1676,20 @@ function toggleKf(path) {
   // 绝不 clear_channel()（否则三个点被一次点击全删，反直觉）
   const s = selectedSeg(); if (!s) return;
   const local = TimelineMapper.playheadLocal(s);
+  // P0① 动态验证（2026-08-22，疑点 C）：◆ 打点是否实时读播放头——两次点击间播放头微动→X/Y 错位。
+  // 复现：打 X ◆ → 再打 Y ◆，对比两次日志的 playheadUs；若不同 → C 确诊。
+  console.log("[KF-AUDIT] toggleKf", JSON.stringify({
+    path, playheadUs: Store.state.playheadUs, local,
+    segStart: s.start, segDur: s.duration,
+  }));
   const anims = s.animations || {};
   const keys = (anims[path] && anims[path].keys) ? anims[path].keys : [];
   const hitKey = keys.find(k => Math.abs((k.t || 0) - local) <= 1000);
   if (hitKey) {
-    call("remove_keyframe", ...kfSegArgs(), path, hitKey.id).then(() => { selectedKf = { path: null, id: null }; refresh(); });
+    call("remove_keyframe", ...kfSegArgs(), path, hitKey.id, Store.state.selectedSegId).then(() => { selectedKf = { path: null, id: null }; refresh(); });
   } else {
     const v = getEffectivePropertyValue(s, path, local).value;
-    call("add_keyframe", ...kfSegArgs(), path, local, v, "linear").then(() => refresh());
+    call("add_keyframe", ...kfSegArgs(), path, local, v, "linear", Store.state.selectedSegId).then(() => refresh());
   }
 }
 
@@ -1691,7 +1697,7 @@ function addKfAtPlayhead(path, valStr) {
   const s = selectedSeg(); if (!s) return;
   const local = TimelineMapper.playheadLocal(s);
   let v = parseFloat(valStr); if (isNaN(v)) v = KF_PATHS.find(p => p[0] === path)[3];
-  call("add_keyframe", ...kfSegArgs(), path, local, v, "linear").then(() => refresh());
+  call("add_keyframe", ...kfSegArgs(), path, local, v, "linear", Store.state.selectedSegId).then(() => refresh());
 }
 
 
@@ -2010,7 +2016,7 @@ function onPointerUp() {
             .then(() => { selectKey(null); refresh(); });
         } else if (d.targetDataTi === d.ti) {
           // 同特效轨内只改时间
-          call("update_effect", d.ti, d.idx, { range: { startUs: Math.round(d.curLeftUs), endUs: Math.round(d.curLeftUs + d.s0.duration) } }).then(refresh);
+          call("update_effect", d.ti, d.idx, { range: { startUs: Math.round(d.curLeftUs), endUs: Math.round(d.curLeftUs + d.s0.duration) } }, d.segId).then(refresh);
         } else {
           // 特效段拖到另一条已有特效轨；A3：目标轨带稳定 tid（后端 to_track_tid 优先）
           call("relocate_segment", "effect", d.ti, d.idx, d.targetDataTi, Math.round(d.curLeftUs), null, d.segId, trackTidOf("effect", d.targetDataTi))
@@ -2066,7 +2072,7 @@ function onPointerUp() {
         // 特效段裁剪走 update_effect(range)：左拖改 start，右拖改 duration（endUs-start）
         const startUs = d.side === "left" ? Math.round(d.curLeftUs) : d.s0.start;
         const endUs = d.side === "left" ? (d.s0.start + d.s0.duration) : Math.round(d.curRightUs);
-        call("update_effect", d.ti, d.idx, { range: { startUs, endUs } }).then(refresh);
+        call("update_effect", d.ti, d.idx, { range: { startUs, endUs } }, d.segId).then(refresh);
       } else {
         const val = d.side === "left" ? Math.round(d.curLeftUs) : Math.round(d.curRightUs);
         call("trim_segment", d.type, d.ti, d.idx, d.side, val, Store.state.rippleOn).then(refresh);
@@ -2142,6 +2148,8 @@ function startKfMarkerDrag(e) {
   const k = key.split(":");
   const seg = findSegByKey(key);
   if (!seg || !kids.length) return;
+  // P0① 动态验证（2026-08-22，疑点 D）：锁是否正常释放——若只 lock 无 unlock → 锁死 → UI 卡死。
+  console.log("[KF-AUDIT] kf-drag-lock", JSON.stringify({ key, kid: kids[0] }));
   // 该时间点全部 KF 的选择键（同点多通道 = 一组，OpenCut keyframes 数组语义）
   const selKeys = kids.map((kid, i) => _kfSelKey(paths[i] || "?", kid));
   // B3.1 选择逻辑（对齐 OpenCut onKeyframeMouseDown）：
@@ -2189,6 +2197,7 @@ function startKfMarkerDrag(e) {
     document.removeEventListener("mousemove", move);
     document.removeEventListener("mouseup", up);
     _kfDragActive = false;   // 释放 Refresh Lock（B3.4b：单击 seek / 拖动 withTx 都会自行补刷）
+    console.log("[KF-AUDIT] kf-drag-unlock", JSON.stringify({ key, active: ev.type }));
     if (!active) {
       // 单击 → 播放头 seek 到该 KF（对齐 OpenCut onKeyframeClick：帧吸附）
       if (seg) seekPlayhead(TimelineMapper.localToGlobal(seg, t0));
@@ -2672,7 +2681,7 @@ function doDuplicate() {
   Object.keys(groups).forEach(gk => {
     const [t, ti] = gk.split(":");
     [...groups[gk]].sort((a, b) => b - a).forEach(idx => {
-      chain = chain.then(() => call("duplicate_segment", t, +ti, idx));
+      chain = chain.then(() => call("duplicate_segment", t, +ti, idx, (findSeg(t, +ti, idx) || {}).id));
     });
   });
   chain.then(refresh);
@@ -2828,9 +2837,9 @@ function bindEvents() {
     const [type, ti, idx] = k.split(":");
     if (act === "split") call("split_segment", type, +ti, +idx, Math.round(Store.state.playheadUs)).then(refresh);
     else if (act === "copy") call("copy_to_buffer", [k]);
-    else if (act === "dup") call("duplicate_segment", type, +ti, +idx).then(refresh);
-    else if (act === "mute") { const s = findSeg(type, +ti, idx); call("set_segment_flag", type, +ti, +idx, "muted", !(s && s.muted)).then(refresh); }
-    else if (act === "hide") { const s = findSeg(type, +ti, idx); call("set_segment_flag", type, +ti, +idx, "hidden", !(s && s.hidden)).then(refresh); }
+    else if (act === "dup") call("duplicate_segment", type, +ti, +idx, (findSeg(type, +ti, +idx) || {}).id).then(refresh);
+    else if (act === "mute") { const s = findSeg(type, +ti, idx); call("set_segment_flag", type, +ti, +idx, "muted", !(s && s.muted), s && s.id).then(refresh); }
+    else if (act === "hide") { const s = findSeg(type, +ti, idx); call("set_segment_flag", type, +ti, +idx, "hidden", !(s && s.hidden), s && s.id).then(refresh); }
     else if (act === "del") call("remove_segments", [k], Store.state.rippleOn).then(() => { selectKey(null); refresh(); });
     else if (act === "clear") clearSelection();
   });
@@ -2842,7 +2851,7 @@ function bindEvents() {
     const b = e.target.closest("button[data-type]"); if (!b) return;
     const k = Store.state.selectedKey; if (!k) return;
     const [type, ti, idx] = k.split(":");
-    call("set_mask", type, +ti, +idx, b.dataset.type, {}).then(refresh);
+    call("set_mask", type, +ti, +idx, b.dataset.type, {}, (findSeg(type, +ti, +idx) || {}).id).then(refresh);
   });
   // 遮罩面板：滑块（input 实时预览，change 提交后端）/ 反转 / 删除
   const maskCtrls = $("maskCtrls");
@@ -2857,7 +2866,7 @@ function bindEvents() {
     renderPreview(); renderMaskOverlay();
     clearTimeout(maskCtrls._t);
     maskCtrls._t = setTimeout(() => {
-      call("update_mask_param", type, +ti, +idx, s.masks[0].id, key, val).then(refresh);
+      call("update_mask_param", type, +ti, +idx, s.masks[0].id, key, val, s.id).then(refresh);
     }, 250);
   });
   maskCtrls.addEventListener("change", e => {
@@ -2865,20 +2874,20 @@ function bindEvents() {
     const s = selectedSeg(); if (!s || !s.masks || !s.masks.length) return;
     const k = Store.state.selectedKey; if (!k) return;
     const [type, ti, idx] = k.split(":");
-    call("update_mask_param", type, +ti, +idx, s.masks[0].id, r.dataset.k, parseFloat(r.value)).then(refresh);
+    call("update_mask_param", type, +ti, +idx, s.masks[0].id, r.dataset.k, parseFloat(r.value), s.id).then(refresh);
   });
   maskCtrls.addEventListener("click", e => {
     const cb = e.target.closest("#maskInv"); if (cb) {
       const s = selectedSeg(); if (!s || !s.masks || !s.masks.length) return;
       const k = Store.state.selectedKey; if (!k) return;
       const [type, ti, idx] = k.split(":");
-      call("toggle_mask_inverted", type, +ti, +idx, s.masks[0].id).then(refresh); return;
+      call("toggle_mask_inverted", type, +ti, +idx, s.masks[0].id, s.id).then(refresh); return;
     }
     const rm = e.target.closest("button[data-act=remove]"); if (rm) {
       const s = selectedSeg(); if (!s || !s.masks || !s.masks.length) return;
       const k = Store.state.selectedKey; if (!k) return;
       const [type, ti, idx] = k.split(":");
-      call("remove_mask", type, +ti, +idx, s.masks[0].id).then(refresh); return;
+      call("remove_mask", type, +ti, +idx, s.masks[0].id, s.id).then(refresh); return;
     }
   });
   // 遮罩把手拖拽（预览叠加层）

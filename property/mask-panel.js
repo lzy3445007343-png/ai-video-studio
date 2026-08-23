@@ -129,5 +129,5 @@ function previewMaskParam(k, v) {
 function commitMaskParam(k, v) {
   const m = maskRef(); if (!m) return;
   const [type, ti, idx] = m.key.split(":");
-  call("update_mask_param", type, +ti, +idx, m.s.masks[0].id, k, v).then(refresh);
+  call("update_mask_param", type, +ti, +idx, m.s.masks[0].id, k, v, m.s.id).then(refresh);
 }

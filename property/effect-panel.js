@@ -76,7 +76,7 @@ function buildEffectFields(c) {
           if (ti == null || idx == null) return;
           clearTimeout(_effTimers[pname]);
           _effTimers[pname] = setTimeout(() => {
-            call("update_effect", ti, idx, { params: { [pname]: v } }).then(refresh);
+            call("update_effect", ti, idx, { params: { [pname]: v } }, Store.state.selectedSegId).then(refresh);
           }, 250);
         },
       }));
@@ -100,7 +100,7 @@ function buildEffectFields(c) {
     bind: (fld) => {
       fld.on(fld.el, "click", () => {
         if (ti == null || idx == null) return;
-        call("remove_effect", ti, idx).then(() => { selectKey(null); refresh(); });
+        call("remove_effect", ti, idx, Store.state.selectedSegId).then(() => { selectKey(null); refresh(); });
       });
     },
   }));

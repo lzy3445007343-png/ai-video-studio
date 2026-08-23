@@ -2924,8 +2924,16 @@ class Api:
         return {"ok": True, "segid": seg.get("id"), "transform": seg["transform"]}
 
     # ---------- 关键帧 / 动画 CRUD（对齐 OpenCut upsertKeyframe / removeKeyframe / retimeKeyframe） ----------
-    def _kf_resolve_seg(self, track_type, track_index, index):
-        """取关键帧编辑目标段，返回 (seg, None) 或 (None, error)。"""
+    def _kf_resolve_seg(self, track_type, track_index, index, seg_id=None):
+        """取关键帧编辑目标段，返回 (seg, None) 或 (None, error)。
+
+        传 seg_id（稳定段 id）时优先按 id 定位（不受 ti 漂移影响，对齐 remove_segment 的 A 方案）；
+        不传则回退 (track_type, track_index, index)。"""
+        if seg_id:
+            seg = _seg_by_id(self.draft, seg_id)
+            if seg is None:
+                return None, f"未找到段 id={seg_id}"
+            return seg, None
         segs = _track_segs(self.draft, track_type, track_index)
         if segs is None:
             return None, f"{track_type} 没有第 {track_index} 条轨道"
@@ -2933,7 +2941,7 @@ class Api:
             return None, f"{track_type}[{track_index}] 没有第 {index} 段（共 {len(segs)} 段）"
         return segs[index], None
 
-    def add_keyframe(self, track_type, track_index, index, path, time_us, value, seg_mode="linear"):
+    def add_keyframe(self, track_type, track_index, index, path, time_us, value, seg_mode="linear", seg_id=None):
         """在段内局部时间 time_us（微秒）为属性 path 添加一个关键帧。
 
         - path 必须是 KF_KEYFRAMEABLE 之一。
@@ -2942,7 +2950,7 @@ class Api:
         返回 {ok, path, keyframes}（keyframes 为该 path 下全部键，供前端重绘）。"""
         self._reload()
         self._push_undo()
-        seg, err = self._kf_resolve_seg(track_type, track_index, index)
+        seg, err = self._kf_resolve_seg(track_type, track_index, index, seg_id)
         if err:
             return {"ok": False, "error": err}
         if path not in KF_KEYFRAMEABLE:
@@ -3007,11 +3015,11 @@ class Api:
         return {"ok": True, "path": path, "keyframe_id": kid, "keyframes": keys}
 
     def update_keyframe(self, track_type, track_index, index, path, keyframe_id,
-                        value=None, time_us=None, seg_mode=None):
+                        value=None, time_us=None, seg_mode=None, seg_id=None):
         """更新某关键帧的 value / 时间(time_us) / 插值方式。未传的字段保持不变。"""
         self._reload()
         self._push_undo()
-        seg, err = self._kf_resolve_seg(track_type, track_index, index)
+        seg, err = self._kf_resolve_seg(track_type, track_index, index, seg_id)
         if err:
             return {"ok": False, "error": err}
         if path not in KF_KEYFRAMEABLE:
@@ -3046,11 +3054,11 @@ class Api:
         save_state(self.state)
         return {"ok": True, "path": path, "keyframes": keys}
 
-    def remove_keyframe(self, track_type, track_index, index, path, keyframe_id):
+    def remove_keyframe(self, track_type, track_index, index, path, keyframe_id, seg_id=None):
         """删除一个关键帧；若该属性键被删空，则移除整条通道。"""
         self._reload()
         self._push_undo()
-        seg, err = self._kf_resolve_seg(track_type, track_index, index)
+        seg, err = self._kf_resolve_seg(track_type, track_index, index, seg_id)
         if err:
             return {"ok": False, "error": err}
         anims = _seg_anims(seg)
@@ -3144,7 +3152,7 @@ class Api:
         save_state(self.state)
         return {"ok": True, "muted": m["muted"]}
 
-    def set_segment_flag(self, track_type, track_index, index, flag, value):
+    def set_segment_flag(self, track_type, track_index, index, flag, value, seg_id=None):
         """段级静音/隐藏（OpenCut: toggle-elements-muted-selected / visibility-selected）。
 
         flag ∈ muted（静音：视频内嵌音频/音频段不出声）/ hidden（隐藏：画面不渲染）。
@@ -3154,12 +3162,18 @@ class Api:
             return {"ok": False, "error": "flag 必须是 muted 或 hidden"}
         self._reload()
         self._push_undo()
-        segs = _track_segs(self.draft, track_type, track_index)
-        if segs is None:
-            return {"ok": False, "error": f"{track_type} 没有第 {track_index} 条轨道"}
-        if not isinstance(index, int) or index < 0 or index >= len(segs):
-            return {"ok": False, "error": f"{track_type}[{track_index}] 没有第 {index} 段（共 {len(segs)} 段）"}
-        segs[index][flag] = bool(value)
+        if seg_id:
+            seg = _seg_by_id(self.draft, seg_id)
+            if seg is None:
+                return {"ok": False, "error": f"未找到段 id={seg_id}"}
+        else:
+            segs = _track_segs(self.draft, track_type, track_index)
+            if segs is None:
+                return {"ok": False, "error": f"{track_type} 没有第 {track_index} 条轨道"}
+            if not isinstance(index, int) or index < 0 or index >= len(segs):
+                return {"ok": False, "error": f"{track_type}[{track_index}] 没有第 {index} 段（共 {len(segs)} 段）"}
+            seg = segs[index]
+        seg[flag] = bool(value)
         save_state(self.state)
         return {"ok": True, "track_type": track_type, "track_index": track_index, "index": index,
                 "flag": flag, "value": bool(value)}
@@ -3322,21 +3336,38 @@ class Api:
         save_state(self.state)
         return {"ok": True, "removed": removed}
 
-    def duplicate_segment(self, track_type, track_index, index):
+    def duplicate_segment(self, track_type, track_index, index, seg_id=None):
         """复制单段到同轨紧接其后（前端 Ctrl+D / 工具栏「复制」触发，对齐 OpenCut duplicate-selected）。
 
         - 深拷贝原段，新段 start = 原段 end（紧贴右侧），src_start/src_end 与原段一致（同一素材、内容相同）
         - 插入到 index+1；一次 undo 记录（save_state 自动入栈），一次 Ctrl+Z 回退
         返回 {"ok": True, "new": {...}} 供前端确认。
+        传 seg_id 时优先按稳定段 id 定位（对齐 remove_segment 的 A 方案）。
         """
         self._reload()
         self._push_undo()
-        segs = _track_segs(self.draft, track_type, track_index)
-        if segs is None:
-            return {"ok": False, "error": f"{track_type} 没有第 {track_index} 条轨道"}
-        if not isinstance(index, int) or index < 0 or index >= len(segs):
-            return {"ok": False, "error": f"{track_type}[{track_index}] 没有第 {index} 段"}
-        seg = segs[index]
+        if seg_id:
+            seg = _seg_by_id(self.draft, seg_id)
+            if seg is None:
+                return {"ok": False, "error": f"未找到段 id={seg_id}"}
+            # 反查段所在 segs 列表与位置，供紧贴其后插入
+            segs = None
+            for cand in ([self.draft.get("main", {}).get("segs", [])]
+                        + [tr.get("segs", []) for tr in self.draft.get("overlay", []) if isinstance(tr, dict)]
+                        + [a.get("segs", []) for a in self.draft.get("audio", []) if isinstance(a, dict)]):
+                if seg in cand:
+                    segs = cand
+                    break
+            if segs is None:
+                return {"ok": False, "error": f"段 id={seg_id} 未挂载到任何轨道"}
+            index = segs.index(seg)
+        else:
+            segs = _track_segs(self.draft, track_type, track_index)
+            if segs is None:
+                return {"ok": False, "error": f"{track_type} 没有第 {track_index} 条轨道"}
+            if not isinstance(index, int) or index < 0 or index >= len(segs):
+                return {"ok": False, "error": f"{track_type}[{track_index}] 没有第 {index} 段"}
+            seg = segs[index]
         if "src_start" not in seg:
             seg["src_start"] = 0
         if "src_end" not in seg or not seg.get("src_end"):
@@ -3670,7 +3701,10 @@ class Api:
     #   rotation(度)/scale(倍率)/feather(0..100)/inverted(bool) + stroke*(描边，预览用)
     _MASK_TYPES = ("rectangle", "ellipse", "star", "heart", "diamond", "split", "cinematic-bars")
 
-    def _seg_ref(self, track_type, track_index, index):
+    def _seg_ref(self, track_type, track_index, index, seg_id=None):
+        """取段引用（稳定段 id 优先定位，对齐 remove_segment 的 A 方案）。"""
+        if seg_id:
+            return _seg_by_id(self.draft, seg_id)
         segs = _track_segs(self.draft, track_type, track_index)
         if segs is None:
             return None
@@ -3688,12 +3722,12 @@ class Api:
         base.update(params or {})
         return base
 
-    def set_mask(self, track_type, track_index, index, mask_type, params):
+    def set_mask(self, track_type, track_index, index, mask_type, params, seg_id=None):
         """给选中段设置/替换一个遮罩（覆盖式单遮罩）。返回 {"ok": True, "mask": {...}}。"""
         if mask_type not in self._MASK_TYPES:
             return {"ok": False, "error": f"未知遮罩类型：{mask_type}"}
         self._reload()
-        seg = self._seg_ref(track_type, track_index, index)
+        seg = self._seg_ref(track_type, track_index, index, seg_id)
         if seg is None:
             return {"ok": False, "error": f"{track_type}[{track_index}] 没有第 {index} 段"}
         self._push_undo()
@@ -3706,9 +3740,9 @@ class Api:
         save_state(self.state)
         return {"ok": True, "mask": mask}
 
-    def remove_mask(self, track_type, track_index, index, mask_id):
+    def remove_mask(self, track_type, track_index, index, mask_id, seg_id=None):
         self._reload()
-        seg = self._seg_ref(track_type, track_index, index)
+        seg = self._seg_ref(track_type, track_index, index, seg_id)
         if seg is None:
             return {"ok": False, "error": f"{track_type}[{track_index}] 没有第 {index} 段"}
         self._push_undo()
@@ -3716,9 +3750,9 @@ class Api:
         save_state(self.state)
         return {"ok": True}
 
-    def toggle_mask_inverted(self, track_type, track_index, index, mask_id):
+    def toggle_mask_inverted(self, track_type, track_index, index, mask_id, seg_id=None):
         self._reload()
-        seg = self._seg_ref(track_type, track_index, index)
+        seg = self._seg_ref(track_type, track_index, index, seg_id)
         if seg is None:
             return {"ok": False, "error": f"{track_type}[{track_index}] 没有第 {index} 段"}
         self._push_undo()
@@ -3728,9 +3762,9 @@ class Api:
         save_state(self.state)
         return {"ok": True}
 
-    def update_mask_param(self, track_type, track_index, index, mask_id, key, value):
+    def update_mask_param(self, track_type, track_index, index, mask_id, key, value, seg_id=None):
         self._reload()
-        seg = self._seg_ref(track_type, track_index, index)
+        seg = self._seg_ref(track_type, track_index, index, seg_id)
         if seg is None:
             return {"ok": False, "error": f"{track_type}[{track_index}] 没有第 {index} 段"}
         self._push_undo()
@@ -3740,10 +3774,10 @@ class Api:
         save_state(self.state)
         return {"ok": True}
 
-    def update_mask(self, track_type, track_index, index, mask_id, params):
+    def update_mask(self, track_type, track_index, index, mask_id, params, seg_id=None):
         """批量合并遮罩参数（拖拽把手时一次性提交，单次 undo）。"""
         self._reload()
-        seg = self._seg_ref(track_type, track_index, index)
+        seg = self._seg_ref(track_type, track_index, index, seg_id)
         if seg is None:
             return {"ok": False, "error": f"{track_type}[{track_index}] 没有第 {index} 段"}
         self._push_undo()
@@ -4226,7 +4260,7 @@ class Api:
         return {"ok": True, "meta": EFFECT_META}
 
     def add_effect(self, track_index, effect_type, target=None, start_us=0, duration_us=2_000_000,
-                   params=None, keyframes=None, name=None, insert_index=None):
+                   params=None, keyframes=None, name=None, insert_index=None, seg_id=None):
         """新增一个特效段到特效轨（Effect DSL 节点）。
 
         effect_type: 注册表 key（blur/brightness/contrast/saturate/hue_rotate/grayscale/sepia/invert/opacity；
@@ -4249,8 +4283,15 @@ class Api:
             target = {"type": "adjustment"}
         if not isinstance(target, dict) or "type" not in target:
             return {"ok": False, "error": "target 必须是 {type:'clip'|'adjustment'|'track', ...}"}
-        if target["type"] == "clip" and not all(k in target for k in ("track", "ti", "si")):
-            return {"ok": False, "error": "target.type='clip' 需要 track/ti/si 字段"}
+        # 09 方案 M1-1b：把稳定段 id 并入 target（clip 绑定时随 target 一起存，供未来按 id 解析绑定）
+        if seg_id and isinstance(target, dict):
+            target = dict(target); target["seg_id"] = seg_id
+        if target["type"] == "clip":
+            # 09 方案 M1-1b：target 支持按稳定段 id 绑定（seg_id），同时保留 track/ti/si 兼容
+            has_tisi = all(k in target for k in ("track", "ti", "si"))
+            has_segid = "seg_id" in target
+            if not has_tisi and not has_segid:
+                return {"ok": False, "error": "target.type='clip' 需要 track/ti/si 字段或 seg_id"}
         self._reload()
         self._push_undo()
         if insert_index is not None:
@@ -4279,11 +4320,11 @@ class Api:
         save_state(self.state)
         return {"ok": True, "track_index": idx, "index": len(segs) - 1, "id": seg["id"]}
 
-    def update_effect(self, track_index, index, patch=None, **kw):
+    def update_effect(self, track_index, index, patch=None, seg_id=None, **kw):
         """更新特效段：patch 或 kwargs 可含 effect_type/target/params(合并)/keyframes/
         range{startUs,endUs}/start/duration/name/hidden。单次 undo。"""
         self._reload()
-        seg = self._seg_ref("effect", track_index, index)
+        seg = self._seg_ref("effect", track_index, index, seg_id)
         if seg is None:
             return {"ok": False, "error": f"effect[{track_index}] 没有第 {index} 段"}
         self._push_undo()
@@ -4320,13 +4361,13 @@ class Api:
         save_state(self.state)
         return {"ok": True}
 
-    def remove_effect(self, track_index, index):
-        """删除特效轨第 index 段。"""
-        return self.remove_segment("effect", track_index, index)
+    def remove_effect(self, track_index, index, seg_id=None):
+        """删除特效轨第 index 段。seg_id：09 M1-1b 稳定段 id，优先于 (track_index,index) 定位。"""
+        return self.remove_segment("effect", track_index, index, seg_id)
 
-    def duplicate_effect(self, track_index, index):
+    def duplicate_effect(self, track_index, index, seg_id=None):
         """复制特效段到同轨紧接其后（重发 effect_ 前缀 id）。"""
-        r = self.duplicate_segment("effect", track_index, index)
+        r = self.duplicate_segment("effect", track_index, index, seg_id)
         if r.get("ok"):
             ni = r["index"]
             seg = self._seg_ref("effect", track_index, ni)
@@ -5128,15 +5169,16 @@ class Api:
             return {"ok": False, "error": "未找到素材"}
         path = target.get("path")
         referenced = False
-        for t in ("video", "audio", "text"):
-            for segs in (self.state.get("draft", {}).get(t) or []):
-                for s in segs:
-                    if isinstance(s, dict) and s.get("path") == path:
-                        referenced = True
-                        break
-                if referenced:
-                    break
-            if referenced:
+        # M1-1a 修复 R2/R12：旧结构遍历（video/audio/text）在 X 模型下永不命中，
+        # 改用 _iter_all_segs 遍历 main/overlay/audio 全部段；按 material_id（同时
+        # 兼容素材 uid 与 id 两种键名）或 path 匹配，避免误删仍被引用的 assets 文件。
+        target_ids = {target.get("uid"), target.get("id")} - {None}
+        for seg in _iter_all_segs(self.state.get("draft", {})):
+            if isinstance(seg, dict) and (
+                seg.get("material_id") in target_ids
+                or seg.get("path") == path
+            ):
+                referenced = True
                 break
         self.state["materials"] = [
             m for m in mats

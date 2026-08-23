@@ -182,5 +182,5 @@ function toggleAudioMute(sw) {
   if (sw) sw.classList.toggle("on", next);
   const done = () => refresh().catch(e => console.error("[audio] mute 刷新失败:", e));
   if (refs.length > 1) call("set_segments_props", refs.map(r => ({ segid: r.segid, props: { muted: next } }))).then(done);
-  else call("set_segment_flag", refs[0].type, refs[0].ti, refs[0].idx, "muted", next).then(done);
+  else call("set_segment_flag", refs[0].type, refs[0].ti, refs[0].idx, "muted", next, refs[0].segid).then(done);
 }

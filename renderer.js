@@ -676,7 +676,7 @@ function onMaskHandleUp() {
   window.removeEventListener("pointermove", onMaskHandleMove);
   window.removeEventListener("pointerup", onMaskHandleUp);
   const finalParams = JSON.parse(JSON.stringify(d.seg.masks[0].params));
-  call("update_mask", d.type, +d.ti, +d.idx, d.maskId, finalParams).then(refresh);
+  call("update_mask", d.type, +d.ti, +d.idx, d.maskId, finalParams, d.seg && d.seg.id).then(refresh);
 }
 
 /* 关键帧动画（Step 2b 收尾：从 HTML 迁入，纯搬移）——updateKfLiveValues/applyKfTransform/applyKfLiveAll */

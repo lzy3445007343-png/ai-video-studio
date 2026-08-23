@@ -468,7 +468,11 @@ const PlayerManager = {
     const srcStartUs = seg.src_start || 0;
     // 2026-08-17 根治：源终点推导（(srcEnd-srcStart)/speed == duration 不变量，防 trim 脏 src_end 失同步）
     // C1.2：speed 走 getProperty（params → legacy fallback）
-    const srcEndUs = deriveSrcEndUs(srcStartUs, seg.duration || 0, (typeof getProperty === "function") ? getProperty(seg, "speed.rate") : (seg.speed || 1));
+    const speed = (typeof getProperty === "function") ? getProperty(seg, "speed.rate") : (seg.speed || 1);
+    const srcEndUs = deriveSrcEndUs(srcStartUs, seg.duration || 0, speed);
+    // 1c（2026-08-22）：HTMLMediaElement 必须显式设 playbackRate，否则 speed≠1 时视频按 1x 播（仅覆盖源前半段），
+    // 与导出变速（rate 语义）不一致（审计 R 点2）。配合现有 t=srcStart+localUs 公式即正确。
+    try { el.playbackRate = Math.max(0.0625, Math.min(16, speed || 1)); } catch (e) {}
     const localUs = Math.max(0, us - seg.start);
     // B2-A：上界必须是源绝对结束 srcEndUs（而非段时长）。旧写法对 src_start>0 的右段会反复从切点重播。
     const t = Math.max(srcStartUs / 1e6, Math.min(srcEndUs / 1e6, (srcStartUs + localUs) / 1e6));
