@@ -24,8 +24,15 @@ const CommandService = {
   /* 便捷事务：begin → fn() 返回 Promise → 成功 commit / 失败 abort（自动 refresh） */
   withTx(label, fn, opts) {
     opts = opts || {};
-    return this.beginTx(label, opts.meta).then(() =>
-      fn().then(
+    return this.beginTx(label, opts.meta).then(beginRes => {
+      // 2d（M2）：begin 失败（已有进行中事务 / 超时遗留被 abort 后重开）时**拒绝执行 fn**——
+      // 否则 fn 内的 execute 走「非事务」路径各自压栈，一次手势变成多条 undo，事务语义失效。
+      if (!beginRes || beginRes.ok === false) {
+        if (opts.onError) opts.onError(beginRes && beginRes.error);
+        if (opts.refresh !== false) refresh();
+        return beginRes || { ok: false, error: "begin 事务失败" };
+      }
+      return fn().then(
         res => {
           if (res && res.ok === false) {
             if (opts.onError) opts.onError(res.error);
@@ -38,7 +45,7 @@ const CommandService = {
           if (opts.onError) opts.onError(err);
           return this.abortTx().then(() => { if (opts.refresh !== false) refresh(); throw err; });
         }
-      )
-    );
+      );
+    });
   },
 };

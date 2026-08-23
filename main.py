@@ -971,18 +971,29 @@ class CommandManager:
             cmd.saved_state = copy.deepcopy(api.draft)
             cmd.dv_before = api.state.get("domain_version", 0)   # 2c：操作前领域版本
             cmd.selection_before = (meta or {}).get("selection")  # 2c：操作前选中，undo 还原
+            before_seg_map = {s.get("id"): copy.deepcopy(s) for s in _iter_all_segs_full(api.draft)}   # 2d：执行前段快照（深拷贝！否则 fn 内改动会污染 before，diff 误判"没变"）
             before = len(self.history)
             result = fn(*call_args, **call_kwargs)
             cmd.dv_after = api.state.get("domain_version", 0)    # 2c：操作后领域版本（save_state(record=True) 已 +1）
+            after_seg_map = {s.get("id"): copy.deepcopy(s) for s in _iter_all_segs_full(api.draft)}    # 2d：执行后段快照
         finally:
             Api._in_execute = False
         # 防御：result 可能不是 dict（部分方法返回列表/True）→ 安全取 ok，避免 AttributeError
         ok = isinstance(result, dict) and bool(result.get("ok"))
+        # 2d：事务内续期——**任一步**（含无改动步）都刷新 created_at，长事务/AI 批量不误 abort。
+        # 必须在 op_changed 判断之外，否则无改动的步骤不续期。
+        if self._tx is not None:
+            self._tx["created_at"] = time.time()
         if ok and Api._op_changed:
             if self._tx is not None:
                 # 事务内：只累计，不入栈（合并为一条事务 Command，undo 一次=回 begin 前）
                 self._tx["count"] += 1
                 self._tx["args"].append(copy.deepcopy(args))
+                # 2d：本事务影响的段 = 精确 diff（新增 ∪ 删除 ∪ 内容变化），绝不把「存在但没改」的段算进来，
+                # 否则 abort 会误把外部进程对同一批段的改动一起覆盖（R6 修复关键）。
+                bi, ai_ = set(before_seg_map), set(after_seg_map)
+                affected = (bi - ai_) | (ai_ - bi) | {i for i in (bi & ai_) if before_seg_map[i] != after_seg_map[i]}
+                self._tx["affected_seg_ids"] |= affected
                 if meta and meta.get("paths"):
                     for p in meta["paths"]:
                         if p not in self._tx["changed_paths"]:
@@ -1016,6 +1027,7 @@ class CommandManager:
             "label": label, "meta": meta or {},
             "saved_state": copy.deepcopy(api.draft),
             "count": 0, "changed_paths": [], "args": [], "created_at": time.time(),
+            "affected_seg_ids": set(),   # 2d：本事务真正改过的段 id 集合（abort 段级 diff 用）
         }
         return {"ok": True, "tx": True}
 
@@ -1054,8 +1066,22 @@ class CommandManager:
 
     def _abort_tx(self, api):
         tx = self._tx; self._tx = None
-        api.draft = copy.deepcopy(tx["saved_state"])
-        api.state["draft"] = api.draft
+        base = tx["saved_state"]                    # 内层 draft（begin 快照）
+        disk = load_state()                        # 完整 state
+        disk_draft = disk.get("draft", {})         # 2d：abort 时磁盘最新「内层 draft」= base + 本事务中间态 + 可能的外部(另一进程)改动
+        affected = set(tx.get("affected_seg_ids", []))
+        # 2d：段级 diff 回滚——只撤本事务真正改过的段，保留外部改动（R6 修复：
+        # 原整轨覆盖写盘会把 begin 后、abort 前外部进程的改动也清掉）。
+        result = copy.deepcopy(disk_draft)
+        base_by_id = {s.get("id"): s for s in _iter_all_segs_full(base) if isinstance(s, dict)}
+        for sid in affected:
+            if sid not in base_by_id:
+                _remove_seg_by_id(result, sid)                   # 本事务新增的段 → 移除
+            else:
+                _replace_seg_by_id(result, sid, copy.deepcopy(base_by_id[sid]))  # 修改/删除的段 → 覆盖回 base 态
+        api.draft = result
+        api.state["draft"] = result
+        Api.last_committed = copy.deepcopy(result)
         save_state(api.state, record=False)
         return {"ok": True, "count": tx["count"]}
 
@@ -1238,6 +1264,52 @@ def _ensure_seg_ids(draft):
     for seg in _iter_all_segs(draft):
         if isinstance(seg, dict) and "id" not in seg:
             seg["id"] = uuid.uuid4().hex
+
+
+# 2d（M2）：事务 abort 段级 diff 用的遍历 / 索引 / 改段 helper。
+# 覆盖 main / overlay / audio / text 全部轨道（_iter_all_segs 仅含 main/overlay/audio，
+# 故这里单独实现完整版，保证 abort 不漏 text 段）。
+def _collect_seg_tracks(draft):
+    """返回草稿中所有「段列表」的可原地修改引用（main.segs / overlay[].segs / audio[].segs / text[].segs）。"""
+    tracks = []
+    main = draft.get("main")
+    if isinstance(main, dict) and isinstance(main.get("segs"), list):
+        tracks.append(main["segs"])
+    for key in ("overlay", "audio", "text"):
+        col = draft.get(key)
+        if isinstance(col, list):
+            for tr in col:
+                if isinstance(tr, dict) and isinstance(tr.get("segs"), list):
+                    tracks.append(tr["segs"])
+    return tracks
+
+def _iter_all_segs_full(draft):
+    """同 _iter_all_segs 但含 text 轨道（2d abort diff 用）。"""
+    for tr in _collect_seg_tracks(draft):
+        for seg in tr:
+            yield seg
+
+def _all_seg_id_set(draft):
+    """草稿中所有段 id 集合。"""
+    return {s.get("id") for s in _iter_all_segs_full(draft) if isinstance(s, dict)}
+
+def _remove_seg_by_id(draft, seg_id):
+    """原地删除指定 id 的段（不存在则 no-op）。"""
+    for tr in _collect_seg_tracks(draft):
+        i = 0
+        while i < len(tr):
+            if tr[i].get("id") == seg_id:
+                tr.pop(i)
+            else:
+                i += 1
+
+def _replace_seg_by_id(draft, seg_id, new_seg):
+    """原地用 new_seg 替换指定 id 的段（找到第一个即返回）。"""
+    for tr in _collect_seg_tracks(draft):
+        for i, s in enumerate(tr):
+            if s.get("id") == seg_id:
+                tr[i] = new_seg
+                return
 
 
 # ---- Effect Registry（Effect DSL 双 adapter：预览 css + 导出 ffmpeg，读同一份 params 规格）----
@@ -2612,7 +2684,10 @@ class Api:
         # 2b：UI 直调未带 meta 时补默认上下文（actor=user / source=ui），Agent/MCP 自带 meta 覆盖。
         if meta is None:
             meta = {"actor": "user", "source": "ui", "reversible": True}
-        self._reload()
+        # 2d：事务进行中时跳过 _reload——事务内多步在内存态累积，避免每次重载覆盖中间态 /
+        # 重复磁盘 IO（大事务 / AI 批量场景）。事务外仍先 reload 保证看到最新磁盘态。
+        if Api.cmd_mgr._tx is None:
+            self._reload()
         return Api.cmd_mgr.execute(self, cmd_id, args, meta)
 
     def audit_log(self, limit=100, actor=None):
