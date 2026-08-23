@@ -6,7 +6,7 @@
  *   - seg.params[path]  = 静态值（真相源，承载层）
  *   - seg.animations[path] = 关键帧通道（动画覆盖静态）
  *   - Property Registry = 协议层（path → 属性定义：type/keyframable/interpolation/unit/group/default）
- *   - legacy mirror = 单向缓存（params → 旧字段，保证后端/导出读旧字段正常；绝不反向）
+ *   - legacy（只读兜底）= 旧字段 fallback（旧草稿兼容）；5b 起不再被前端 mirror 写入，params 为唯一真相源
  * 读取顺序：动画(可关键帧时) → params → legacy fallback → default
  * 本文件是纯新增（C1.1），不接任何业务；C1.2 迁移 renderer 读取、C1.3 迁移面板写入。
  * 依赖：kfVal（全局，HTML 内联，运行时已存在）
@@ -25,7 +25,7 @@ const PROPERTY_REGISTRY = {
   "speed.pitchCorrection": { label: "变音", type: "boolean", keyframable: false, group: "speed", default: false },
 };
 
-/* ---------- 2. legacy adapter（单向：旧字段 fallback 读 + params→旧字段 mirror 写） ---------- */
+/* ---------- 2. legacy adapter（旧字段 fallback 只读；5b 起不再 mirror 写，params 为唯一真相源） ---------- */
 const LEGACY_READ = {
   "transform.positionX": s => (s.transform && s.transform.x != null) ? s.transform.x : undefined,
   "transform.positionY": s => (s.transform && s.transform.y != null) ? s.transform.y : undefined,
@@ -38,18 +38,8 @@ const LEGACY_READ = {
   "speed.pitchCorrection": s => (s.change_pitch != null) ? s.change_pitch : undefined,
 };
 
-/* 单向 mirror：params → 旧字段缓存（保证后端/导出读旧字段正常）。绝不反向！ */
-const LEGACY_MIRROR = {
-  "transform.positionX": (s, v) => { s.transform = s.transform || {}; s.transform.x = v; },
-  "transform.positionY": (s, v) => { s.transform = s.transform || {}; s.transform.y = v; },
-  "transform.scaleX":    (s, v) => { s.transform = s.transform || {}; s.transform.scaleX = v; },
-  "transform.scaleY":    (s, v) => { s.transform = s.transform || {}; s.transform.scaleY = v; },
-  "transform.rotate":  (s, v) => { s.transform = s.transform || {}; s.transform.rotation = v; },
-  "transform.opacity":   (s, v) => { s.transform = s.transform || {}; s.transform.opacity = v; },
-  "audio.volume":        (s, v) => { s.volume = v; },
-  "speed.rate":          (s, v) => { s.speed = v; },
-  "speed.pitchCorrection": (s, v) => { s.change_pitch = v; },
-};
+/* 5b（R9）：旧字段 mirror 写入已移除——params 为唯一真相源，旧字段不再被前端同步写入；
+ * 旧草稿由 getProperty 的 LEGACY_READ 兜底读。 */
 
 /* 旧关键帧通道名兼容（C1.4 延后到 C2 前的最小兼容：resolver 读旧通道不失效） */
 const LEGACY_CHANNEL = {
@@ -67,12 +57,13 @@ function getProperty(seg, path) {
   return PROPERTY_REGISTRY[path] ? PROPERTY_REGISTRY[path].default : null;
 }
 
-/* 写入：params 是唯一真相 + 单向 mirror 旧字段 */
+/* 写入：params 是唯一真相源（5b R9 收敛，不再 mirror 旧字段）。
+ * 后端 update_segment_transform / set_segment_speed / set_segment_volume 已同步写 params，
+ * 导出 _video_clip_settings 已 params 优先 + legacy 兜底。旧 draft 经 getProperty 的 legacy 读兜底。 */
 function setProperty(seg, path, value) {
   if (!seg) return;
   seg.params = seg.params || {};
   seg.params[path] = value;
-  if (LEGACY_MIRROR[path]) LEGACY_MIRROR[path](seg, value);
 }
 
 /* 动画解析（隔离在独立函数：前/后关键帧/插值/fallback 全在这，不污染普通属性） */
