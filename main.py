@@ -28,6 +28,8 @@ import socketserver
 import threading
 import tempfile
 import re
+import functools
+import types
 # 写操作文件锁：防止桌面进程和 MCP 进程同时写 draft_state.json 导致数据互踩
 try:
     import portalocker
@@ -1045,6 +1047,12 @@ class CommandManager:
         return [{"cmd_id": r.cmd_id, "label": r.label, "meta": r.meta} for r in rows]
 
 
+# 1d（M1 收尾，2026-08-23）：写失败可见化用的「粘性」标志。
+# save_state 失败时置 True（成功不清除，保证一次调用内多次 save_state 只要有一次失败就标记）；
+# 方法级 wrapper 在返回后检测并翻转 ok。模块级全局，方法入口由 wrapper 每次调用重置为 False。
+FAILED_SAVE = False
+
+
 def save_state(state, record=True):
     """把状态写回 draft_state.json，并打上版本时间戳（前端靠 version 判断是否变化）。
 
@@ -1057,6 +1065,7 @@ def save_state(state, record=True):
 
     加文件锁防竞态：如果 MCP 进程正在写，桌面进程会等待它写完再写，反之亦然。
     无 portalocker 时回退到无锁写（单进程场景够用，多进程有低概率互踩）。"""
+    global FAILED_SAVE
     if record and Api.last_committed is not None and state["draft"] != Api.last_committed:
         # Step 5：压「快照 Command」入 Command 栈（5a 兜底；5b 包壳操作改走 CommandManager.execute）
         if Api.cmd_mgr is not None:
@@ -1086,9 +1095,11 @@ def save_state(state, record=True):
                     sum(len(t.get("segs", [])) for t in (state["draft"].get("overlay") or [])) + len((state["draft"].get("main") or {}).get("segs", [])),
                     sum(len(t.get("segs", [])) for t in (back.get("draft", {}).get("overlay") or [])) + len((back.get("draft", {}).get("main") or {}).get("segs", [])),
                 ))
+                FAILED_SAVE = True
                 return False
         except Exception as e:
             print("[SAVE-VERIFY-FAIL] 读回失败:", repr(e))
+            FAILED_SAVE = True
             return False
         return True
     except Exception as e:
@@ -1097,6 +1108,7 @@ def save_state(state, record=True):
         import traceback
         print("[SAVE-FAIL] 写盘失败:", repr(e))
         traceback.print_exc()
+        FAILED_SAVE = True
         return False
 
 
@@ -5268,3 +5280,36 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+# =====================================================================
+# 1d（M1 收尾，2026-08-23）：写失败可见化（单点收口，零逐站改动）
+# ---------------------------------------------------------------------
+# 背景：save_state 在写盘失败（[SAVE-FAIL]）或写回校验不一致（[SAVE-VERIFY-FAIL]）
+# 时返回 False，但约 68 处写方法忽略该返回值，仍向 JS/MCP 返回 {"ok": True}，
+# 导致前端误判成功、实际段只在内存没落盘 → 下一操作 _reload 读旧盘 → 段全丢
+# （"拖进去了又消失"的元凶之一）。
+# 做法：save_state 失败时置模块级「粘性」标志 FAILED_SAVE=True（成功不清除，保证
+# 一次调用内多次 save_state 只要有一次失败就标记）；统一 wrapper 在【每个 Api 方法】
+# 返回后检测——若结果仍是 {"ok": True} 则翻转为 {"ok": False, "error": ...}。
+# 覆盖 Web（pywebview 直调）与 MCP（CommandManager.execute 经 getattr 取到 wrapper）
+# 两条路径，不需要改 68 处调用点。wrapper 在模块导入时作用于 Api 类，运行时创建的
+# 实例自动继承。仅包裹「公开方法」（不以 _ 开头、且是普通函数），读类/属性/类方法不受影响。
+# =====================================================================
+def _wrap_save_failure(fn):
+    @functools.wraps(fn)
+    def _w(*args, **kwargs):
+        global FAILED_SAVE
+        FAILED_SAVE = False  # 每次调用重置，保证「粘性」只在同一调用内累积
+        res = fn(*args, **kwargs)
+        if FAILED_SAVE and isinstance(res, dict) and res.get("ok"):
+            res = dict(res)
+            res["ok"] = False
+            res["error"] = "保存草稿失败（写盘异常，看后端控制台 [SAVE-FAIL]/[SAVE-VERIFY-FAIL]）"
+        return res
+    return _w
+
+
+for _name, _attr in list(Api.__dict__.items()):
+    if not _name.startswith("_") and isinstance(_attr, types.FunctionType):
+        setattr(Api, _name, _wrap_save_failure(_attr))
