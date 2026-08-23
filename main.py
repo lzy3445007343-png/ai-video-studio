@@ -5267,19 +5267,27 @@ class Api:
         """
         return LOCAL_BASE_URL
 
-    def get_state(self):
+    def get_state(self, since_version=None):
         """返回当前完整状态（materials + draft + version）。
 
-        前端每 0.5 秒轮询它来实现「人和 AI 实时互相看到改动」；AI/MCP 也读它确认当前草稿。
+        前端每 2 秒轮询它（2f version 门控后无感知）来实现「人和 AI 实时互相看到改动」；AI/MCP 也读它确认当前草稿。
 
         注意：        AI/MCP 可能是另一个独立进程（通过 mcp_server.py 启动），它们会写同一个
         draft_state.json 文件。所以 get_state 每次都从文件重新加载，而不是返回内存缓存，
         否则桌面窗口永远看不到 AI 后台做的改动。
 
         同时把 MCP 连接状态（左上角灰/绿 + agent 名）一并带出来；状态变化时会触发前端刷新。
+
+        2f version 门控：调用方若已持有 since_version 且磁盘 version 未变，直接返回轻量
+        {"unchanged":True,"version":...}，跳过 src_full 重算 / mcp 读盘 / 整树序列化 ——
+        轮询开销从「每次全量」降到「仅他人改动时全量」，轮询间隔可放宽到 2s 无感知。
         """
         self.state = load_state()
         self.draft = self.state["draft"]  # 同步更新草稿引用，避免后续操作改到旧内存
+        ondisk_version = self.state.get("version")
+        # 2f：版本未变则短路返回，避免每轮询都重算 src_full / 读 mcp / 序列化整树草稿
+        if since_version is not None and ondisk_version is not None and str(since_version) == str(ondisk_version):
+            return {"unchanged": True, "version": ondisk_version}
         # 兼容旧项目：补 src_full（源素材真实全长，微秒）——前端右拖恢复被裁帧的上限。
         # 自限：回填后落盘（record=False），下次轮询即无缺失、不再重算 ffprobe。
         if _ensure_seg_src_full(self.draft):

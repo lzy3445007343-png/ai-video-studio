@@ -3252,8 +3252,13 @@ function refresh() {
   if (_kfDragActive) {
     return Promise.resolve();
   }
-  return call("get_state").then(st => {
+  // 2f version 门控：仅当已持有 version 且未变时向后端要轻量响应（他人改动才全量拉取）
+  const sv = (ENABLE_VERSION_GATING && _lastPolledVersion != null) ? _lastPolledVersion : null;
+  return call("get_state", sv).then(st => {
     if (!st) return;
+    // 2f：version 未变，后端返回 {unchanged:true}，跳过整树重渲染（轮询 2s 无感知的关键）
+    if (st.unchanged) { _lastPolledVersion = st.version; return; }
+    _lastPolledVersion = st.version;
     const m = {};
     const wm = {};
     (st.materials || []).forEach(x => { if (x.thumbnail) m[x.path] = x.thumbnail; else if (x.type === "image") m[x.path] = x.path; if (x.peaks) wm[x.path] = x.peaks; });
@@ -3375,7 +3380,11 @@ else document.addEventListener("DOMContentLoaded", boot);
 if (window.pywebview && window.pywebview.api) boot();
 window.addEventListener("pywebviewready", boot);
 let _w = setInterval(() => { if (api()) { clearInterval(_w); boot(); } }, 120);
-// 人和 AI 实时互看：每 0.5s 拉取后端状态。
+// 2f version 门控 feature flag：false 则每次轮询全量拉取（回退旧行为，便于排查）
+const ENABLE_VERSION_GATING = true;
+// 2f：最近一次轮询拿到的草稿 version（门控依据；他人改动使 version 变化时才全量重渲）
+let _lastPolledVersion = null;
+// 人和 AI 实时互看：每 2s 拉取后端状态（2f 门控后 2s 无感知）。
 // 关键：拉取期间冻结属性面板重建(_suppressPanelRender)，仅同步 Store 状态与播放头/时间轴；
 // 否则面板每 0.5s 被推倒重建，按钮 click 被吞 → “点不动”。用户动作(选中/tab/提交)走 refresh() 不冻结，正常重渲。
 setInterval(() => {
@@ -3383,7 +3392,7 @@ setInterval(() => {
     _suppressPanelRender = true;
     refresh().finally(() => { _suppressPanelRender = false; });
   }
-}, 500);
+}, 2000);
 </script>
 </body>
 </html>
