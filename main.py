@@ -899,7 +899,7 @@ def load_state():
 # =====================================================================
 class Command:
     """一次可审计、可回退的操作。"""
-    __slots__ = ("cmd_id", "label", "meta", "saved_state", "post_state", "changed_paths", "count")
+    __slots__ = ("cmd_id", "label", "meta", "saved_state", "post_state", "changed_paths", "count", "args")
 
     def __init__(self, cmd_id, label, meta=None):
         self.cmd_id = cmd_id
@@ -909,6 +909,7 @@ class Command:
         self.post_state = None    # undo 时记录 execute 后状态（redo 恢复）
         self.changed_paths = []   # C3 v2：本次操作改动的属性 path（属性历史/Agent 审计/增量保存用）
         self.count = 1            # 事务合并条数（普通命令=1，事务命令=N）
+        self.args = None          # 2a（M2）：本次操作的入参深拷贝，审计/回放/调试用
 
     def __repr__(self):
         return "<Command %s actor=%s>" % (self.cmd_id, self.meta.get("actor", "-"))
@@ -933,6 +934,11 @@ class CommandManager:
         if len(self.history) > self._cap:
             self.history.pop(0)
         self.redo_stack.clear()
+        _append_audit({
+            "ts": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()),
+            "cmd_id": "snapshot", "label": "自动快照",
+            "actor": None, "args": None, "meta": {},
+        })
 
     def execute(self, api, cmd_id, args=None, meta=None):
         """写操作统一入口（5b 起）。构造 Command → 执行现有方法 → 成功入栈 + 审计。
@@ -943,6 +949,7 @@ class CommandManager:
         if not callable(fn):
             return {"ok": False, "error": "未知命令 %s" % cmd_id}
         cmd = Command(cmd_id, cmd_id, meta)
+        cmd.args = copy.deepcopy(args)
         cmd.saved_state = copy.deepcopy(api.draft)
         before = len(self.history)
         result = fn(**dict(args or {}))
@@ -950,6 +957,7 @@ class CommandManager:
             if self._tx is not None:
                 # 事务内：只累计，不入栈（合并为一条事务 Command，undo 一次=回 begin 前）
                 self._tx["count"] += 1
+                self._tx["args"].append(copy.deepcopy(args))
                 if meta and meta.get("paths"):
                     for p in meta["paths"]:
                         if p not in self._tx["changed_paths"]:
@@ -961,6 +969,13 @@ class CommandManager:
                 if len(self.history) > self._cap:
                     self.history.pop(0)
                 self.redo_stack.clear()
+                _append_audit({
+                    "ts": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()),
+                    "cmd_id": cmd_id, "label": cmd_id,
+                    "actor": (meta or {}).get("actor"),
+                    "args": copy.deepcopy(args),
+                    "meta": meta or {},
+                })
         return result
 
     # ---------- C3 事务（快照合并策略：一次事务 = 一条含 begin 前快照的 Command） ----------
@@ -974,7 +989,7 @@ class CommandManager:
         self._tx = {
             "label": label, "meta": meta or {},
             "saved_state": copy.deepcopy(api.draft),
-            "count": 0, "changed_paths": [], "created_at": time.time(),
+            "count": 0, "changed_paths": [], "args": [], "created_at": time.time(),
         }
         return {"ok": True, "tx": True}
 
@@ -989,10 +1004,17 @@ class CommandManager:
         cmd.saved_state = tx["saved_state"]
         cmd.count = tx["count"]
         cmd.changed_paths = tx["changed_paths"]
+        cmd.args = tx["args"]
         self.history.append(cmd)
         if len(self.history) > self._cap:
             self.history.pop(0)
         self.redo_stack.clear()
+        _append_audit({
+            "ts": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()),
+            "cmd_id": "tx:" + tx["label"], "label": tx["label"],
+            "actor": (tx["meta"] or {}).get("actor"),
+            "args": tx["args"], "meta": tx["meta"] or {},
+        })
         return {"ok": True, "tx": True, "count": tx["count"], "paths": tx["changed_paths"]}
 
     def abort_transaction(self, api):
@@ -1044,7 +1066,7 @@ class CommandManager:
     def audit_log(self, limit=100, actor=None):
         """审计查询：谁做过什么（Agent 可审计）。"""
         rows = self.history[-limit:] if not actor else [r for r in self.history if r.meta.get("actor") == actor][-limit:]
-        return [{"cmd_id": r.cmd_id, "label": r.label, "meta": r.meta} for r in rows]
+        return [{"cmd_id": r.cmd_id, "label": r.label, "meta": r.meta, "args": r.args} for r in rows]
 
 
 # 1d（M1 收尾，2026-08-23）：写失败可见化用的「粘性」标志。
@@ -1110,6 +1132,19 @@ def save_state(state, record=True):
         traceback.print_exc()
         FAILED_SAVE = True
         return False
+
+
+# 2a（M2，2026-08-23）：append-only 审计落盘。每次领域修改（execute / 自动快照 / 事务 commit）
+# 向 audit_log.jsonl 追加一行 JSON {ts,cmd_id,label,actor,args,meta}，供 Agent 离线审计"谁在何时改了什么"。
+AUDIT_PATH = os.path.join(HERE, "audit_log.jsonl")
+
+def _append_audit(entry):
+    """向 audit_log.jsonl 追加一行审计记录（append-only；失败仅打日志，不阻塞主流程）。"""
+    try:
+        with open(AUDIT_PATH, "a", encoding="utf-8") as f:
+            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    except Exception as e:
+        print("[AUDIT-FAIL] 审计落盘失败:", repr(e))
 
 
 # =====================================================================
@@ -2485,6 +2520,10 @@ class Api:
         # 回填后落盘（record=False，避免污染撤销栈），下次重载即不再重算。
         if _ensure_seg_src_full(self.draft):
             save_state(self.state, record=False)
+        # 2a（M2，2026-08-23）：R14 修复——_reload 必须刷新「已提交」基线 last_committed，
+        # 否则跨进程（MCP）写入后，桌面进程的 last_committed 仍是内存旧值 → 自动快照压过期基线
+        # → 撤销吞掉对方进程改动。刷新后 last_committed 始终等于刚从磁盘加载的真实已提交态。
+        Api.last_committed = copy.deepcopy(self.draft)
 
     def _restore_snapshot(self, snapshot):
         """1d 导入回滚：把内存状态整体还原到导入前的快照，保证内存与磁盘（写盘失败那次没落盘）
