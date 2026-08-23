@@ -1596,6 +1596,36 @@ def _seg_speed(seg):
     return max(MIN_SPEED, min(MAX_SPEED, float(rate)))
 
 
+# ---------- 5b（R9 双真源收敛）：path-addressed 属性真相源辅助 ----------
+# 对齐 OpenCut baseTransform + animations[path] 的 path 命名空间；让 seg['params'][path]
+# 成为唯一真相源，旧字段 seg.transform/speed/volume 仅作 legacy 兜底/序列化镜像。
+def _write_param(seg, path, value):
+    """把属性写进 seg['params'][path]（唯一真相源）。"""
+    if not isinstance(seg, dict):
+        return
+    seg.setdefault("params", {})
+    if isinstance(seg.get("params"), dict):
+        seg["params"][path] = value
+
+
+def _seg_param(seg, path, default=None):
+    """从 seg['params'][path] 读属性；旧草稿无 params 时返回 default（legacy 兜底在外层做）。"""
+    if not isinstance(seg, dict):
+        return default
+    p = seg.get("params")
+    if isinstance(p, dict) and path in p and p[path] is not None:
+        return p[path]
+    return default
+
+
+# update_segment_transform 旧字段名 → params path 映射
+_FIELD_TO_PARAM = {
+    "x": "transform.positionX", "y": "transform.positionY",
+    "scaleX": "transform.scaleX", "scaleY": "transform.scaleY",
+    "rotation": "transform.rotate", "opacity": "transform.opacity",
+}
+
+
 # ===================== Playback Graph 语义层（Phase A，与 playback-graph.js 逐字段对拍） =====================
 # 规范见 docs/architecture/playback-rootfix-bundled.md §3。
 # 对拍保险丝：tools/graph_consistency.py 同一 draft 跑两端，平铺结果必须逐字段一致。
@@ -1657,7 +1687,7 @@ def _flatten_video(seg, ti, idx, track_muted, track_hidden, materials):
     src_start_us = _seg_num(seg.get("src_start"), 0)
     # 2026-08-17 根治：源终点推导（与 playback-graph.js deriveSrcEndUs 一致）——
     # (src_end - src_start) / speed == duration 不变量，杜绝 trim 累加失同步脏数据
-    speed_v = _graph_clamp_speed(seg.get("speed"))
+    speed_v = _graph_clamp_speed(_seg_param(seg, "speed.rate", seg.get("speed")))
     src_end_us = src_start_us + max(0, duration_us) * speed_v
     return {
         "key": "video:%d:%d" % (ti, idx),
@@ -1667,7 +1697,7 @@ def _flatten_video(seg, ti, idx, track_muted, track_hidden, materials):
         "srcStartUs": src_start_us,
         "srcEndUs": src_end_us,
         "speed": speed_v,
-        "gain": _graph_resolve_gain(track_muted, bool(seg.get("muted")), seg.get("volume")),
+        "gain": _graph_resolve_gain(track_muted, bool(seg.get("muted")), _seg_param(seg, "audio.volume", seg.get("volume"))),
         "muted": bool(seg.get("muted")),
         "path": _resolve_seg_path(seg, materials),
         "hidden": bool(track_hidden) or bool(seg.get("hidden")),
@@ -1682,7 +1712,7 @@ def _flatten_audio(seg, ti, idx, track_muted, materials):
     duration_us = _seg_num(seg.get("duration"), 0)
     src_start_us = _seg_num(seg.get("src_start"), 0)
     # 2026-08-17 根治：源终点推导（与 playback-graph.js deriveSrcEndUs 一致）
-    speed_v = _graph_clamp_speed(seg.get("speed"))
+    speed_v = _graph_clamp_speed(_seg_param(seg, "speed.rate", seg.get("speed")))
     src_end_us = src_start_us + max(0, duration_us) * speed_v
     return {
         "key": "audio:%d:%d" % (ti, idx),
@@ -1692,7 +1722,7 @@ def _flatten_audio(seg, ti, idx, track_muted, materials):
         "srcStartUs": src_start_us,
         "srcEndUs": src_end_us,
         "speed": speed_v,
-        "gain": _graph_resolve_gain(track_muted, bool(seg.get("muted")), seg.get("volume")),
+        "gain": _graph_resolve_gain(track_muted, bool(seg.get("muted")), _seg_param(seg, "audio.volume", seg.get("volume"))),
         "path": _resolve_seg_path(seg, materials),
     }
 
@@ -1912,13 +1942,14 @@ def _video_clip_settings(seg, W, H):
     contain = 1.0
     if mw and mh:
         contain = min(W / float(mw), H / float(mh))
+    # 5b（R9）：params 优先（前后端统一真相源），旧 seg.transform 仅兜底（旧草稿兼容）。
     return ClipSettings(
-        alpha=float(tf.get("opacity", 1.0)),
-        rotation=float(tf.get("rotation", 0.0)),
-        scale_x=float(tf.get("scaleX", 1.0)) * contain,
-        scale_y=float(tf.get("scaleY", 1.0)) * contain,
-        transform_x=float(tf.get("x", 0.0)) / half_w,
-        transform_y=-(float(tf.get("y", 0.0))) / half_h,
+        alpha=float(_seg_param(seg, "transform.opacity", tf.get("opacity", 1.0))),
+        rotation=float(_seg_param(seg, "transform.rotate", tf.get("rotation", 0.0))),
+        scale_x=float(_seg_param(seg, "transform.scaleX", tf.get("scaleX", 1.0))) * contain,
+        scale_y=float(_seg_param(seg, "transform.scaleY", tf.get("scaleY", 1.0))) * contain,
+        transform_x=float(_seg_param(seg, "transform.positionX", tf.get("x", 0.0))) / half_w,
+        transform_y=-(float(_seg_param(seg, "transform.positionY", tf.get("y", 0.0)))) / half_h,
     )
 
 
@@ -3196,6 +3227,9 @@ class Api:
         new_duration = int(round(source_span / rate))
         seg["speed"] = rate
         seg["change_pitch"] = bool(change_pitch) if change_pitch is not None else seg.get("change_pitch", False)
+        # 5b（R9）：同步写 params 真相源，对齐前端 setProperty 的 path-addressed 模型。
+        _write_param(seg, "speed.rate", rate)
+        _write_param(seg, "speed.pitchCorrection", seg["change_pitch"])
         seg["duration"] = new_duration
         # 源终点同步反算（保持不变量 (se-ss)/speed == duration）
         seg["src_end"] = ss + int(round(new_duration * rate))
@@ -3230,6 +3264,8 @@ class Api:
             seg = segs[index]
         v = max(0.0, min(2.0, float(volume)))
         seg["volume"] = round(v, 2)
+        # 5b（R9）：同步写 params 真相源。
+        _write_param(seg, "audio.volume", round(v, 2))
         save_state(self.state)
         return {"ok": True, "volume": seg["volume"]}
 
@@ -3269,6 +3305,7 @@ class Api:
             try:
                 if "volume" in props:
                     seg["volume"] = round(max(0.0, min(2.0, float(props["volume"]))), 2)
+                    _write_param(seg, "audio.volume", seg["volume"])
                 if "muted" in props:
                     seg["muted"] = bool(props["muted"])
                 if "speed" in props or "change_pitch" in props:
@@ -3285,6 +3322,9 @@ class Api:
                     seg["speed"] = rate
                     if "change_pitch" in props:
                         seg["change_pitch"] = bool(props["change_pitch"])
+                    # 5b（R9）：同步写 params 真相源。
+                    _write_param(seg, "speed.rate", rate)
+                    _write_param(seg, "speed.pitchCorrection", seg["change_pitch"])
                     seg["duration"] = new_duration
                     seg["src_end"] = ss + int(round(new_duration * rate))
                 ok_count += 1
@@ -3317,6 +3357,8 @@ class Api:
         for k in ("x", "y", "scaleX", "scaleY", "rotation", "opacity"):
             if k in transform:
                 seg["transform"][k] = transform[k]
+                # 5b（R9）：同步写 params 真相源，消除「后端只写 transform → 旧 params 漂移」的隐患。
+                _write_param(seg, _FIELD_TO_PARAM[k], transform[k])
         save_state(self.state)
         return {"ok": True, "segid": seg.get("id"), "transform": seg["transform"]}
 
@@ -4085,6 +4127,8 @@ class Api:
             sp = _seg_speed(seg) / factor   # 反向变速：时长拉伸→变慢
             sp = max(0.01, min(5.0, sp))
             seg["speed"] = sp
+            # 5b（R9）：同步写 params 真相源。
+            _write_param(seg, "speed.rate", sp)
             scaled.append({"track_type": t, "track_index": ti, "index": idx,
                            "start": seg["start"], "duration": seg["duration"], "speed": sp})
         save_state(self.state)
