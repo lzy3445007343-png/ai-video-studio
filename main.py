@@ -785,6 +785,12 @@ def _migrate_old_to_x(old):
     return out
 
 
+# 1f（M1 收尾，2026-08-23）：数据模型 schemaVersion 种子。
+# 记录草稿「数据模型」的格式版本，供 M3 迁移管线识别旧格式并迁移。
+# 注意：与 save_state 里的 version（时间戳，前端轮询判变用）是两回事，勿混淆。
+DOCUMENT_SCHEMA_VERSION = 1
+
+
 def load_state():
     """读取 draft_state.json。不存在/损坏返回空草稿。
 
@@ -805,6 +811,7 @@ def load_state():
             "_track_meta": {"overlay": [], "main": {}, "audio": [{}]},
         },
         "version": 0,
+        "schemaVersion": DOCUMENT_SCHEMA_VERSION,
     }
     if not os.path.exists(STATE_PATH):
         _ensure_track_tids(empty["draft"])   # A1：空草稿也要有 tid（统一不变量）
@@ -823,6 +830,7 @@ def load_state():
             s["draft"] = migrated
             draft = migrated
         s.setdefault("version", 0)
+        s.setdefault("schemaVersion", DOCUMENT_SCHEMA_VERSION)
         if isinstance(s["materials"], dict):
             s["materials"] = list(s["materials"].values()) if s["materials"] else []
         if not isinstance(s["materials"], list):
@@ -1059,6 +1067,7 @@ def save_state(state, record=True):
         _ensure_track_tids(state["draft"])
     Api.last_committed = copy.deepcopy(state["draft"])
     try:
+        state.setdefault("schemaVersion", DOCUMENT_SCHEMA_VERSION)
         state["version"] = int(time.time() * 1000)
         if _HAS_LOCK:
             with open(STATE_PATH, "w", encoding="utf-8") as f:
