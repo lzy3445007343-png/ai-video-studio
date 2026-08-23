@@ -1549,6 +1549,22 @@ def _load_effects():
 
 EFFECT_REGISTRY, EFFECT_META = _load_effects()
 
+def _effect_keyframes_to_anims(keyframes):
+    """5c（R18 并入统一 channel）：把扁平特效关键帧 [{param,time(us),value,easing}]
+    转成统一通道 seg['animations']['effect.{param}'] = {keys:[{t,v,seg}]}（与 transform 同源）。"""
+    anims = {}
+    for kf in (keyframes or []):
+        if not isinstance(kf, dict) or kf.get("param") is None:
+            continue
+        path = "effect." + str(kf["param"])
+        ch = anims.setdefault(path, {"keys": []})
+        ch["keys"].append({
+            "t": int(kf.get("time", 0)),
+            "v": float(kf.get("value", 0)),
+            "seg": kf.get("easing") or "linear",
+        })
+    return anims
+
 EFFECT_META_NOTE = (
     "所有特效支持 keyframes=[{param,time(us,相对段起点),value,easing}] 做时间曲线；"
     "target 省略=调整层(盖整栈预览+导出)，{type:'clip',track,ti,si}=绑素材段，{type:'track',ti}=整轨特效（v1.x）。"
@@ -4752,7 +4768,7 @@ class Api:
             "src_start": 0,
             "src_end": duration_us,
             "params": dict(params) if isinstance(params, dict) else {},
-            "keyframes": list(keyframes) if keyframes else [],
+            "animations": _effect_keyframes_to_anims(keyframes),   # 5c（R18）：统一通道，不再用扁平 seg.keyframes
             "hidden": False,
             "name": name or effect_type,
         }
@@ -4787,7 +4803,16 @@ class Api:
             seg.setdefault("params", {})
             seg["params"].update(patch["params"])
         if "keyframes" in patch:
-            seg["keyframes"] = list(patch["keyframes"]) if patch["keyframes"] else []
+            # 5c（R18）：扁平 keyframes → 统一 animations 通道（effect.{param}），移除旧扁平字段避免双真源
+            if patch["keyframes"]:
+                seg.setdefault("animations", {})
+                seg["animations"].update(_effect_keyframes_to_anims(patch["keyframes"]))
+            else:
+                if isinstance(seg.get("animations"), dict):
+                    for _p in list(seg["animations"].keys()):
+                        if _p.startswith("effect."):
+                            del seg["animations"][_p]
+            seg.pop("keyframes", None)
         # range 优先；否则 start/duration
         if "range" in patch and isinstance(patch["range"], dict):
             if "startUs" in patch["range"]:
@@ -5227,6 +5252,20 @@ class Api:
                         skipped.append({"name": seg["name"], "reason": "同轨文本重叠：" + str(e)})
                     except Exception as e:
                         skipped.append({"name": seg["name"], "reason": str(e)})
+
+            # 特效段：剪映草稿不支持任意 CSS 滤镜，特效为预览专用；明确记入 skipped（不静默丢）
+            eff_count = 0
+            for tr in overlay:
+                if tr.get("type") != "effect":
+                    continue
+                for seg in tr.get("segs", []):
+                    if not seg.get("hidden"):
+                        eff_count += 1
+            if eff_count:
+                skipped.append({
+                    "name": f"特效×{eff_count}",
+                    "reason": "特效为预览专用滤镜（剪映草稿不支持 CSS 滤镜），已跳过导出（不影响成片结构）",
+                })
 
             script.save()
             self.set_default_export_folder(folder)
