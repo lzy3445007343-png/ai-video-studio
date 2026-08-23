@@ -832,6 +832,7 @@ def load_state():
             s["draft"] = migrated
             draft = migrated
         s.setdefault("version", 0)
+        s.setdefault("domain_version", 0)   # 2c（M2）：领域改动计数（仅 record=True 时 +1），version 门控用
         s.setdefault("schemaVersion", DOCUMENT_SCHEMA_VERSION)
         if isinstance(s["materials"], dict):
             s["materials"] = list(s["materials"].values()) if s["materials"] else []
@@ -899,7 +900,8 @@ def load_state():
 # =====================================================================
 class Command:
     """一次可审计、可回退的操作。"""
-    __slots__ = ("cmd_id", "label", "meta", "saved_state", "post_state", "changed_paths", "count", "args", "source")
+    __slots__ = ("cmd_id", "label", "meta", "saved_state", "post_state", "changed_paths", "count", "args", "source",
+                 "dv_before", "dv_after", "selection_before", "selection_after")
 
     def __init__(self, cmd_id, label, meta=None):
         self.cmd_id = cmd_id
@@ -911,6 +913,10 @@ class Command:
         self.count = 1            # 事务合并条数（普通命令=1，事务命令=N）
         self.args = None          # 2a（M2）：本次操作的入参深拷贝，审计/回放/调试用
         self.source = None        # 2b（M2）：命令来源 "execute"=语义包壳 / "snapshot"=save_state 兜底快照
+        self.dv_before = 0        # 2c（M2）：操作前 domain_version（version 门控基线）
+        self.dv_after = 0         # 2c（M2）：操作后 domain_version（undo 冲突检测：≠磁盘→外部已改）
+        self.selection_before = None  # 2c（M2）：操作前选中快照，undo 还原到此
+        self.selection_after = None   # 2c（M2）：操作后选中快照，redo 还原到此
 
     def __repr__(self):
         return "<Command %s actor=%s>" % (self.cmd_id, self.meta.get("actor", "-"))
@@ -919,7 +925,7 @@ class Command:
 class CommandManager:
     """撤销/重做/审计统一入口。类级共享（桌面窗口与 MCP 进程共用同一份历史）。"""
 
-    def __init__(self, cap=100):
+    def __init__(self, cap=2000):
         self.history = []       # undo 栈：Command 对象
         self.redo_stack = []    # redo 栈
         self._cap = cap
@@ -963,8 +969,11 @@ class CommandManager:
             cmd.source = "execute"
             cmd.args = copy.deepcopy(args)
             cmd.saved_state = copy.deepcopy(api.draft)
+            cmd.dv_before = api.state.get("domain_version", 0)   # 2c：操作前领域版本
+            cmd.selection_before = (meta or {}).get("selection")  # 2c：操作前选中，undo 还原
             before = len(self.history)
             result = fn(*call_args, **call_kwargs)
+            cmd.dv_after = api.state.get("domain_version", 0)    # 2c：操作后领域版本（save_state(record=True) 已 +1）
         finally:
             Api._in_execute = False
         # 防御：result 可能不是 dict（部分方法返回列表/True）→ 安全取 ok，避免 AttributeError
@@ -1050,35 +1059,58 @@ class CommandManager:
         save_state(api.state, record=False)
         return {"ok": True, "count": tx["count"]}
 
-    def undo(self, api):
+    def undo(self, api, selection=None):
         """撤销：弹 Command → 恢复其 saved_state（操作前状态）。
-        C3：若存在未完成事务，先放弃事务（不撤销事务前的历史步），用户再按一次才撤销上一步。"""
+        C3：若存在未完成事务，先放弃事务（不撤销事务前的历史步），用户再按一次才撤销上一步。
+        2c：version 门控——若磁盘 domain_version 已 ≠ 本命令 applied 版本，说明外部进程（MCP/另一窗口）
+        在本命令应用后又改过草稿，此时撤销会丢失他人改动 → 拒绝并提示冲突（R14 防护，不误吞他人工作）。
+        选中恢复——返回执行前选中快照，前端据此还原焦点；selection 参数（本次撤销前的前端选中）记为
+        本命令的「操作后选中」，供后续 redo 还原。"""
         if self._tx is not None:
             # 拖动/操作进行中按 Ctrl+Z → 语义=放弃未完成动作（拖一半撤销=回到拖动前）
             self._abort_tx(api)
             return {"ok": True, "aborted_tx": True, "remaining": len(self.history)}
         if not self.history:
             return {"ok": False, "error": "没有可撤销的操作"}
+        cmd = self.history[-1]
+        # 2c version 门控：外部改动检测（仅 record=True 的真实领域改动会 bump domain_version；
+        # 自身 undo/redo 走 record=False 不 bump → 不匹配一定是外部写入）。
+        disk_dv = api.state.get("domain_version", 0)
+        if disk_dv != cmd.dv_after:
+            return {"ok": False, "conflict": True,
+                    "error": "外部已改动草稿，撤销会丢失他人修改（先同步/另存再撤销）",
+                    "disk_dv": disk_dv, "cmd_dv": cmd.dv_after}
         cmd = self.history.pop()
+        if selection is not None:
+            cmd.selection_after = selection   # 撤销前那一刻的选中（=本命令执行后的选中），redo 用
         cmd.post_state = copy.deepcopy(api.draft)   # undo 前 = 该命令执行后状态，redo 用
         api.draft = copy.deepcopy(cmd.saved_state)
         api.state["draft"] = api.draft
-        save_state(api.state, record=False)
+        save_state(api.state, record=False)   # record=False → 不 bump domain_version，门控基线不被自身 undo 破坏
         self.redo_stack.append(cmd)
-        return {"ok": True, "remaining": len(self.history)}
+        return {"ok": True, "remaining": len(self.history), "selection": cmd.selection_before}
 
-    def redo(self, api):
-        """重做：弹 redo 栈 → 恢复其 post_state（该命令执行后状态）。"""
+    def redo(self, api, selection=None):
+        """重做：弹 redo 栈 → 恢复其 post_state（该命令执行后状态）。
+        2c：version 门控同样适用（外部在撤销后改过 → 拒绝）；返回操作后选中供前端还原。"""
         if not self.redo_stack:
             return {"ok": False, "error": "没有可重做的操作"}
+        cmd = self.redo_stack[-1]
+        disk_dv = api.state.get("domain_version", 0)
+        if disk_dv != cmd.dv_after:
+            return {"ok": False, "conflict": True,
+                    "error": "外部已改动草稿，重做会丢失他人修改（先同步/另存再重做）",
+                    "disk_dv": disk_dv, "cmd_dv": cmd.dv_after}
         cmd = self.redo_stack.pop()
+        if selection is not None:
+            cmd.selection_before = selection  # 重做前那一刻的选中（=撤销后的选中），下次 undo 还原
         api.draft = copy.deepcopy(cmd.post_state)
         api.state["draft"] = api.draft
         save_state(api.state, record=False)
         self.history.append(cmd)
         if len(self.history) > self._cap:
             self.history.pop(0)
-        return {"ok": True, "remaining": len(self.redo_stack)}
+        return {"ok": True, "remaining": len(self.redo_stack), "selection": cmd.selection_after}
 
     def audit_log(self, limit=100, actor=None):
         """审计查询：谁做过什么（Agent 可审计）。"""
@@ -1119,6 +1151,11 @@ def save_state(state, record=True):
     try:
         state.setdefault("schemaVersion", DOCUMENT_SCHEMA_VERSION)
         state["version"] = int(time.time() * 1000)
+        if record:
+            # 2c（M2）：domain_version 仅在「真实领域改动」(record=True) 时单调 +1。
+            # undo/redo/_reload 回填均走 record=False → 不 bump → 可作为「是否被外部进程改动」的判据，
+            # 供 undo/redo 的 version 门控区分「自身历史回放」与「MCP/另一窗口的外部写入」。
+            state["domain_version"] = state.get("domain_version", 0) + 1
         if _HAS_LOCK:
             with open(STATE_PATH, "w", encoding="utf-8") as f:
                 portalocker.lock(f, portalocker.LOCK_EX)
@@ -2584,19 +2621,21 @@ class Api:
             return {"ok": False, "error": "命令系统未就绪"}
         return Api.cmd_mgr.audit_log(limit=limit, actor=actor)
 
-    def undo(self):
-        """撤销上一步：Command 栈弹栈还原（人与 AI 的编辑都记录在同一份历史里）。"""
+    def undo(self, selection=None):
+        """撤销上一步：Command 栈弹栈还原（人与 AI 的编辑都记录在同一份历史里）。
+        2c：selection=撤销前前端选中快照，传给 cmd_mgr 记为本命令「操作后选中」，供 redo 还原。"""
         if Api.cmd_mgr is None:
             return {"ok": False, "error": "撤销系统未就绪"}
         self._reload()
-        return Api.cmd_mgr.undo(self)
+        return Api.cmd_mgr.undo(self, selection)
 
-    def redo(self):
-        """重做：重做栈弹栈恢复（撤销的反操作）。"""
+    def redo(self, selection=None):
+        """重做：重做栈弹栈恢复（撤销的反操作）。
+        2c：selection=重做前前端选中快照，传给 cmd_mgr 记为本命令「撤销后选中」，供下次 undo 还原。"""
         if Api.cmd_mgr is None:
             return {"ok": False, "error": "重做系统未就绪"}
         self._reload()
-        return Api.cmd_mgr.redo(self)
+        return Api.cmd_mgr.redo(self, selection)
 
     # ---------- C3 事务桥接（UI/Agent/MCP 统一入口） ----------
     def begin_transaction(self, label="batch", meta=None):

@@ -132,13 +132,33 @@ const Store = {
 const THRESHOLD = 4; // 点击 vs 拖拽 的像素阈值（根治"点一下弹回"）
 let $ = id => document.getElementById(id);
 let api = () => (window.pywebview && window.pywebview.api) || null;
+// 2c（M2）：选中快照 / 还原——撤销时后端返回「操作前选中」，前端据此还原焦点。
+function selSnapshot() {
+  return {
+    selectedKey: Store.state.selectedKey,
+    selectedKeys: Store.state.selectedKeys,
+    selectedMaterialUid: Store.state.selectedMaterialUid,
+    selectedSegId: Store.state.selectedSegId,
+  };
+}
+function applySelection(sel) {
+  if (!sel) return;
+  Store.set({
+    selectedKey: sel.selectedKey ?? null,
+    selectedKeys: sel.selectedKeys ?? [],
+    selectedMaterialUid: sel.selectedMaterialUid ?? null,
+    selectedSegId: sel.selectedSegId ?? null,
+  });
+}
+
 function call(method, ...args) {
   const a = api();
   if (!a || typeof a[method] !== "function") { console.warn("api 未就绪:", method); return Promise.resolve(null); }
   // 2b 双轨收敛：所有写操作统一经 a.execute 走 Command 闭环（带 cmd_id/args/actor 审计 + 单步撤销）。
   // 走 execute 后方法内部 save_state 不再自动压快照，由 execute 统一压一条语义命令，撤销不再双步。
+  // 2c：写入时附当前选中快照，后端记为本命令「操作前选中」，撤销时原样还原焦点。
   if (typeof a.execute === "function") {
-    return Promise.resolve(a.execute(method, args, {actor:"user", source:"ui", reversible:true}));
+    return Promise.resolve(a.execute(method, args, {actor:"user", source:"ui", reversible:true, selection: selSnapshot()}));
   }
   return Promise.resolve(a[method](...args));
 }

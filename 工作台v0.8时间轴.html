@@ -3161,19 +3161,38 @@ function bindEvents() {
   $("dupBtn").addEventListener("click", doDuplicate);   // 复制选中段（对齐 OpenCut Ctrl+D）
   $("srcAudioBtn").addEventListener("click", doToggleSourceAudio);   // 提取原声 / 还原（对齐 OpenCut toggle-source-audio）
   $("speedBtn").addEventListener("click", doSetSpeed);   // 变速 / 重定时（对齐 OpenCut updateElementRetime）
+  // 2c（M2）：撤销/重做按钮与快捷键统一走这里——传入当前选中快照，撤销后还原焦点。
+  // 冲突（外部已改动草稿）时弹提示，不静默丢失他人修改（R14 防护）。
+  function doUndo() {
+    const a = api(); if (!a) return;
+    Promise.resolve(a.undo(selSnapshot())).then(r => {
+      if (r && r.ok) { applySelection(r.selection); }
+      else if (r && r.conflict) { alert(r.error); }
+      refresh();
+    });
+  }
+  function doRedo() {
+    const a = api(); if (!a) return;
+    Promise.resolve(a.redo(selSnapshot())).then(r => {
+      if (r && r.ok) { applySelection(r.selection); }
+      else if (r && r.conflict) { alert(r.error); }
+      refresh();
+    });
+  }
+
   $("snapBtn").addEventListener("click", toggleSnap);   // 吸附开关（对齐 OpenCut N 键）
   $("rippleBtn").addEventListener("click", toggleRipple);   // 波纹开关（对齐 OpenCut R 键）
   $("exportBtn").addEventListener("click", doExportDraft);
-  $("undoBtn").addEventListener("click", () => call("undo").then(refresh));
-  $("redoBtn").addEventListener("click", () => call("redo").then(refresh));
+  $("undoBtn").addEventListener("click", doUndo);
+  $("redoBtn").addEventListener("click", doRedo);
   document.addEventListener("dragover", e => { moveDragGhost(e.clientX, e.clientY); });
   document.addEventListener("drop", () => removeDragGhost());
   window.addEventListener("keydown", e => {
     if (e.target.tagName === "INPUT") return;
     // 撤销 / 重做：先于其它分支拦截，避免 Ctrl 组合键误触。Ctrl+Z 撤销；Ctrl+Shift+Z 或 Ctrl+Y 重做
     if (e.ctrlKey || e.metaKey) {
-      if (e.key === "z" || e.key === "Z") { e.preventDefault(); call(e.shiftKey ? "redo" : "undo").then(refresh); return; }
-      if (e.key === "y" || e.key === "Y") { e.preventDefault(); call("redo").then(refresh); return; }
+      if (e.key === "z" || e.key === "Z") { e.preventDefault(); e.shiftKey ? doRedo() : doUndo(); return; }
+      if (e.key === "y" || e.key === "Y") { e.preventDefault(); doRedo(); return; }
       if (e.key === "b" || e.key === "B") { e.preventDefault(); doSplit(); return; }
       if (e.key === "a" || e.key === "A") { e.preventDefault(); selectAll(); return; }
       if (e.key === "c" || e.key === "C") { e.preventDefault(); doCopy(); return; }
