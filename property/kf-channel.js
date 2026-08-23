@@ -21,6 +21,10 @@
  * ===================================================================== */
 
 const KfChannel = {
+  /** P-010 KF 容差统一：命中/合并容差 = 1 帧(33333us @ 30fps)。与 timeline.js:471 合并容差一致；
+   *  对齐 OpenCut roundToFrame（输入帧吸附）+ 后端 _frame_snap_us + add_keyframe 严格相等哲学。
+   *  旧 ±1ms(1000us) 太苛刻 → 打 X/Y 时播放头微动就被当两个 KF（漂移根因）。前端统一到帧级。 */
+  KF_HIT_TOLERANCE_US: 33333,
   /** 确保通道存在（空 keys 是合法态——"通道开但还没打点"） */
   ensure(seg, path) {
     if (!seg) return null;
@@ -48,12 +52,12 @@ const KfChannel = {
               seg.animations[path].keys && seg.animations[path].keys.length);
   },
 
-  /** 当前位置是否命中 KF（±1ms，与后端 add_keyframe 合并容差一致）——◆ 状态机（B2.1）
+  /** 当前位置是否命中 KF（±1帧，与 timeline.js:471 / 后端 _frame_snap_us 帧吸附一致）——◆ 状态机（B2.1）
    * 与 isAnimated 正交：isAnimated=通道激活（输入编辑语义）；hitAtPlayhead=播放头踩中（◆ 外观） */
   hitAtPlayhead(seg, path, localUs) {
     if (!seg || !seg.animations || !seg.animations[path]) return false;
     const keys = seg.animations[path].keys || [];
-    return keys.some(k => Math.abs((k.t || 0) - (localUs || 0)) <= 1000);
+    return keys.some(k => Math.abs((k.t || 0) - (localUs || 0)) <= KfChannel.KF_HIT_TOLERANCE_US);
   },
 
   /** 读取：通道开 → kfVal 插值；关 → C1 静态值（params→legacy→default） */
@@ -65,11 +69,11 @@ const KfChannel = {
     return (typeof getProperty === "function") ? getProperty(seg, path) : null;
   },
 
-  /** 前端本地打点（±1ms 合并，同点更新值）——B1 交互临时态，不进后端/undo */
+  /** 前端本地打点（±1帧 合并，同点更新值）——B1 交互临时态，不进后端/undo */
   upsertLocal(seg, path, t, v, segMode) {
     const ch = this.ensure(seg, path);
     const keys = ch.keys || (ch.keys = []);
-    const existing = keys.find(k => Math.abs((k.t || 0) - t) <= 1000);
+    const existing = keys.find(k => Math.abs((k.t || 0) - t) <= KfChannel.KF_HIT_TOLERANCE_US);
     if (existing) {
       existing.v = v;
       if (segMode) existing.seg = segMode;
@@ -81,11 +85,11 @@ const KfChannel = {
     return ch;
   },
 
-  /** 前端本地删点（±1ms 内）；删空通道自动清理 */
+  /** 前端本地删点（±1帧内）；删空通道自动清理 */
   removeLocal(seg, path, t) {
     if (!seg || !seg.animations || !seg.animations[path]) return false;
     const keys = seg.animations[path].keys || [];
-    const idx = keys.findIndex(k => Math.abs((k.t || 0) - t) <= 1000);
+    const idx = keys.findIndex(k => Math.abs((k.t || 0) - t) <= KfChannel.KF_HIT_TOLERANCE_US);
     if (idx < 0) return false;
     keys.splice(idx, 1);
     this.removeIfEmpty(seg, path);

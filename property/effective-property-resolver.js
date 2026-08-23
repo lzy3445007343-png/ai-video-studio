@@ -21,7 +21,7 @@ function getEffectivePropertyValue(seg, path, localTime) {
   // 1. animation channel（铁律：有动画就绝不回落静态）
   if (KfChannel.isAnimated(seg, path)) {
     const keys = seg.animations[path].keys;
-    const hit = keys.find(k => Math.abs((k.t || 0) - (localTime || 0)) <= 1000);
+    const hit = keys.find(k => Math.abs((k.t || 0) - (localTime || 0)) <= KfChannel.KF_HIT_TOLERANCE_US);
     if (hit) return { value: hit.v, source: "keyframe" };
     const iv = kfVal(seg.animations, path, localTime);
     return { value: iv == null ? getProperty(seg, path) : iv, source: "interpolated" };
