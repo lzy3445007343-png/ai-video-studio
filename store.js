@@ -135,6 +135,11 @@ let api = () => (window.pywebview && window.pywebview.api) || null;
 function call(method, ...args) {
   const a = api();
   if (!a || typeof a[method] !== "function") { console.warn("api 未就绪:", method); return Promise.resolve(null); }
+  // 2b 双轨收敛：所有写操作统一经 a.execute 走 Command 闭环（带 cmd_id/args/actor 审计 + 单步撤销）。
+  // 走 execute 后方法内部 save_state 不再自动压快照，由 execute 统一压一条语义命令，撤销不再双步。
+  if (typeof a.execute === "function") {
+    return Promise.resolve(a.execute(method, args, {actor:"user", source:"ui", reversible:true}));
+  }
   return Promise.resolve(a[method](...args));
 }
 

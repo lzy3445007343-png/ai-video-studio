@@ -899,7 +899,7 @@ def load_state():
 # =====================================================================
 class Command:
     """一次可审计、可回退的操作。"""
-    __slots__ = ("cmd_id", "label", "meta", "saved_state", "post_state", "changed_paths", "count", "args")
+    __slots__ = ("cmd_id", "label", "meta", "saved_state", "post_state", "changed_paths", "count", "args", "source")
 
     def __init__(self, cmd_id, label, meta=None):
         self.cmd_id = cmd_id
@@ -910,6 +910,7 @@ class Command:
         self.changed_paths = []   # C3 v2：本次操作改动的属性 path（属性历史/Agent 审计/增量保存用）
         self.count = 1            # 事务合并条数（普通命令=1，事务命令=N）
         self.args = None          # 2a（M2）：本次操作的入参深拷贝，审计/回放/调试用
+        self.source = None        # 2b（M2）：命令来源 "execute"=语义包壳 / "snapshot"=save_state 兜底快照
 
     def __repr__(self):
         return "<Command %s actor=%s>" % (self.cmd_id, self.meta.get("actor", "-"))
@@ -930,6 +931,7 @@ class CommandManager:
         5b 包壳后，写操作改走 execute()，此入口仅服务未包壳操作。"""
         cmd = Command("snapshot", "自动快照")
         cmd.saved_state = saved_state
+        cmd.source = "snapshot"
         self.history.append(cmd)
         if len(self.history) > self._cap:
             self.history.pop(0)
@@ -937,23 +939,37 @@ class CommandManager:
         _append_audit({
             "ts": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()),
             "cmd_id": "snapshot", "label": "自动快照",
-            "actor": None, "args": None, "meta": {},
+            "actor": None, "args": None, "meta": {}, "source": "snapshot",
         })
 
     def execute(self, api, cmd_id, args=None, meta=None):
         """写操作统一入口（5b 起）。构造 Command → 执行现有方法 → 成功入栈 + 审计。
-        双录防护：被调方法内部会调 save_state（5a 兜底自动压 snapshot），
-        此处执行后把多余的 snapshot 弹掉，由带语义的 cmd 统一代表本次操作。
-        C3：事务内 execute 只执行不入栈（count++），commit 时合并为一条事务 Command。"""
+        2b 双轨收敛：经 Api._in_execute 标志，方法内部 save_state 在 execute 期间不再自动压
+        snapshot（避免「2 次 save_state → 2 个快照 → 撤销双步」），改由本方法统一压一条带语义的
+        Command；仅当草稿「真实变更」(Api._op_changed) 时才入栈，无操作不留撤销步。
+        参数适配：list/tuple 走位置（前端 store.js call 传数组），dict 走关键字（Agent/MCP 传 dict）。"""
         fn = getattr(api, cmd_id, None)
         if not callable(fn):
             return {"ok": False, "error": "未知命令 %s" % cmd_id}
-        cmd = Command(cmd_id, cmd_id, meta)
-        cmd.args = copy.deepcopy(args)
-        cmd.saved_state = copy.deepcopy(api.draft)
-        before = len(self.history)
-        result = fn(**dict(args or {}))
-        if result and result.get("ok"):
+        # 参数适配：位置数组 vs 关键字 dict
+        if isinstance(args, (list, tuple)):
+            call_args, call_kwargs = args, {}
+        else:
+            call_args, call_kwargs = (), dict(args or {})
+        Api._in_execute = True
+        Api._op_changed = False
+        try:
+            cmd = Command(cmd_id, cmd_id, meta)
+            cmd.source = "execute"
+            cmd.args = copy.deepcopy(args)
+            cmd.saved_state = copy.deepcopy(api.draft)
+            before = len(self.history)
+            result = fn(*call_args, **call_kwargs)
+        finally:
+            Api._in_execute = False
+        # 防御：result 可能不是 dict（部分方法返回列表/True）→ 安全取 ok，避免 AttributeError
+        ok = isinstance(result, dict) and bool(result.get("ok"))
+        if ok and Api._op_changed:
             if self._tx is not None:
                 # 事务内：只累计，不入栈（合并为一条事务 Command，undo 一次=回 begin 前）
                 self._tx["count"] += 1
@@ -964,7 +980,7 @@ class CommandManager:
                             self._tx["changed_paths"].append(p)
             else:
                 if len(self.history) > before:
-                    self.history.pop()   # 弹掉被调方法内部 save_state 压的 snapshot
+                    self.history.pop()   # 双录防护：弹掉方法内 save_state 可能残留的 snapshot
                 self.history.append(cmd)
                 if len(self.history) > self._cap:
                     self.history.pop(0)
@@ -975,6 +991,7 @@ class CommandManager:
                     "actor": (meta or {}).get("actor"),
                     "args": copy.deepcopy(args),
                     "meta": meta or {},
+                    "source": "execute",
                 })
         return result
 
@@ -1013,7 +1030,7 @@ class CommandManager:
             "ts": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()),
             "cmd_id": "tx:" + tx["label"], "label": tx["label"],
             "actor": (tx["meta"] or {}).get("actor"),
-            "args": tx["args"], "meta": tx["meta"] or {},
+            "args": tx["args"], "meta": tx["meta"] or {}, "source": "execute",
         })
         return {"ok": True, "tx": True, "count": tx["count"], "paths": tx["changed_paths"]}
 
@@ -1066,7 +1083,7 @@ class CommandManager:
     def audit_log(self, limit=100, actor=None):
         """审计查询：谁做过什么（Agent 可审计）。"""
         rows = self.history[-limit:] if not actor else [r for r in self.history if r.meta.get("actor") == actor][-limit:]
-        return [{"cmd_id": r.cmd_id, "label": r.label, "meta": r.meta, "args": r.args} for r in rows]
+        return [{"cmd_id": r.cmd_id, "label": r.label, "meta": r.meta, "args": r.args, "source": r.source} for r in rows]
 
 
 # 1d（M1 收尾，2026-08-23）：写失败可见化用的「粘性」标志。
@@ -1089,8 +1106,10 @@ def save_state(state, record=True):
     无 portalocker 时回退到无锁写（单进程场景够用，多进程有低概率互踩）。"""
     global FAILED_SAVE
     if record and Api.last_committed is not None and state["draft"] != Api.last_committed:
-        # Step 5：压「快照 Command」入 Command 栈（5a 兜底；5b 包壳操作改走 CommandManager.execute）
-        if Api.cmd_mgr is not None:
+        # 2b 双轨收敛：标记本次操作真实变更；仅当「未走 execute」(直接调用)时才压兜底快照，
+        # 走 execute 的路径由 CommandManager.execute 统一压带语义的 Command（避免双步 / 无 cmd_id）。
+        Api._op_changed = True
+        if (not Api._in_execute) and Api.cmd_mgr is not None:
             Api.cmd_mgr.push_snapshot(copy.deepcopy(Api.last_committed))
     # A1（2026-08-19）：写盘前统一确保轨道 tid——任何途径新建的轨（_track_segs ensure /
     # _ensure_*_track / add_* 系列）落盘前自动带 tid，不依赖每个建轨点手动加。
@@ -2489,6 +2508,11 @@ class Api:
     # 上次「已提交」的草稿快照；save_state 用它判断本次是否真的发生变化，从而决定是否入撤销栈。
     # 初始化为 None（尚未加载），Api.__init__ 加载后会设为当前草稿的深拷贝。
     last_committed = None
+    # 2b 双轨收敛标志（类级，单进程内同步访问，execute 期间置位、finally 复位）：
+    #   _in_execute —— execute 执行被调方法期间为 True，save_state 据此跳过自动快照（改由 execute 统一压语义命令）；
+    #   _op_changed —— 本次操作是否真实改了草稿，execute 据此决定是否入栈（无操作不留撤销步）。
+    _in_execute = False
+    _op_changed = False
     copy_buffer = None   # 内存剪贴板：copy_to_buffer 存选中段深拷贝列表，paste_from_buffer 读取
 
     def __init__(self):
@@ -2545,9 +2569,12 @@ class Api:
     def execute(self, cmd_id, args=None, meta=None):
         """Step 5b：写操作统一入口（UI / MCP / Agent 都走这里，自动审计）。
         meta 示例：{"actor": "agent", "reason": "去掉口误", "confidence": 0.9, "source": "skill:口播精剪"}
-        返回与直接调用该方法一致。"""
+        返回与直接调用该方法一致。UI 经 store.js call() 调用时未带 meta，此处补默认 user/ui 上下文。"""
         if Api.cmd_mgr is None:
             return {"ok": False, "error": "命令系统未就绪"}
+        # 2b：UI 直调未带 meta 时补默认上下文（actor=user / source=ui），Agent/MCP 自带 meta 覆盖。
+        if meta is None:
+            meta = {"actor": "user", "source": "ui", "reversible": True}
         self._reload()
         return Api.cmd_mgr.execute(self, cmd_id, args, meta)
 
