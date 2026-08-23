@@ -132,7 +132,8 @@ function _flattenEffect(seg, ti, idx, trackHidden) {
     effectType: seg.effect_type || null,
     target: seg.target || { type: "adjustment" },   // 默认调整层(盖整栈)
     params: seg.params || {},
-    keyframes: seg.keyframes || [],
+    animations: seg.animations || {},   // 5c（R18）：统一关键帧通道（effect.{param}），与 transform 同源
+    keyframes: seg.keyframes || [],     // 旧扁平格式兜底（无 effect.* 通道时回退）
     startUs, durationUs,
     hidden: trackHidden || !!seg.hidden,
   };
