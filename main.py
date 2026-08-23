@@ -2486,6 +2486,14 @@ class Api:
         if _ensure_seg_src_full(self.draft):
             save_state(self.state, record=False)
 
+    def _restore_snapshot(self, snapshot):
+        """1d 导入回滚：把内存状态整体还原到导入前的快照，保证内存与磁盘（写盘失败那次没落盘）
+        一致。self.state / self.draft / Api.last_committed 一并复位——self.draft 只是
+        self.state["draft"] 的引用，不单独复位会指向已废弃的旧对象。"""
+        self.state = snapshot
+        self.draft = self.state["draft"]
+        Api.last_committed = copy.deepcopy(self.state["draft"])
+
     def _push_undo(self):
         """【已废弃】保留为无操作占位。
 
@@ -4825,6 +4833,7 @@ class Api:
         你只要把桌面素材路径告诉我，我调这个就能直接放进去——和手动点「导入素材」走的是同一套逻辑。
         """
         self._reload()
+        _snapshot = copy.deepcopy(self.state)   # 1d 导入回滚：导入前拍完整快照，写盘失败整体还原
         items = []
         # 去重：按 (原名, 大小) 判断，避免反复调用复制出 name_时间戳 副本、materials 无限膨胀
         existing_keys = {(m.get("name"), m.get("size")) for m in self.state.get("materials", []) if isinstance(m, dict)}
@@ -4864,7 +4873,9 @@ class Api:
             if not isinstance(self.state["materials"], list):
                 self.state["materials"] = []
             self.state["materials"].extend(items)
-            save_state(self.state)
+            if not save_state(self.state):
+                self._restore_snapshot(_snapshot)
+                return []
         return items
 
     def add_clip(self, path):
@@ -4890,6 +4901,7 @@ class Api:
         """
         import re
         self._reload()
+        _snapshot = copy.deepcopy(self.state)   # 1d 导入回滚：导入剪映草稿前拍完整快照，写盘失败整体还原
         json_path = (json_path or "").strip()
         if not json_path or not os.path.isfile(json_path):
             return {"ok": False, "error": f"草稿文件不存在：{json_path}"}
@@ -5032,7 +5044,9 @@ class Api:
         # 写状态（替换当前工程：draft 整体覆盖，素材箱只保留本次导入的剪映媒体）
         self.state["draft"] = out
         self.state["materials"] = new_materials
-        save_state(self.state)
+        if not save_state(self.state):
+            self._restore_snapshot(_snapshot)
+            return {"ok": False, "error": "导入剪映草稿失败（写盘异常，看后端控制台 [SAVE-FAIL]/[SAVE-VERIFY-FAIL]）"}
         self.draft = self.state["draft"]
         return {"ok": True, "video_tracks": len(out["video"]), "audio_tracks": len(out["audio"]),
                 "text_tracks": len(out["text"]), "sticker_tracks": len(out["sticker"]),
@@ -5124,6 +5138,7 @@ class Api:
         大文件（视频等）不建议拖，前端会过滤并提示用“导入素材”按钮。
         """
         self._reload()
+        _snapshot = copy.deepcopy(self.state)   # 1d 导入回滚：拖入导入前拍完整快照，写盘失败整体还原
         if not files:
             return []
         os.makedirs(ASSETS_DIR, exist_ok=True)
@@ -5170,7 +5185,9 @@ class Api:
             if not isinstance(self.state["materials"], list):
                 self.state["materials"] = []
             self.state["materials"].extend(items)
-            save_state(self.state)
+            if not save_state(self.state):
+                self._restore_snapshot(_snapshot)
+                return []
         return items
 
     def delete_material(self, uid):
