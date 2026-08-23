@@ -793,6 +793,69 @@ def _migrate_old_to_x(old):
 DOCUMENT_SCHEMA_VERSION = 1
 
 
+def migrate(draft, from_version, to_version):
+    """M3-3a 迁移器管线：把任意旧格式草稿收敛到 to_version 的数据模型。
+
+    幂等：重复调用无副作用；每一步都是 setdefault / 结构升级，绝不丢数据（避免「草稿清道夫」）。
+    由 load_state 按 schemaVersion 驱动（from = 草稿自带 schemaVersion，to = DOCUMENT_SCHEMA_VERSION）。
+
+    步骤（版本门控）：
+      1) 结构迁移：from_version < 1 且草稿仍是旧模型（无 overlay/main）→ _migrate_old_to_x（数据全保留）。
+      2) 轨道规范化：overlay/main/audio 默认值 + _track_meta 对齐 + muted/hidden 默认。
+      3) 字段确保：_ensure_track_tids / _ensure_seg_ids / _ensure_seg_speeds / _ensure_seg_animations。
+    注：_ensure_seg_src_full 不在本管线——它有 record=False 落盘副作用且归属 3b 热路径清理。
+    """
+    # 1) 结构迁移（旧模型 → X 模型，原地替换以保住 s["draft"] 引用）
+    if from_version < 1 and ("overlay" not in draft or "main" not in draft):
+        migrated = _migrate_old_to_x(draft)
+        draft.clear()
+        draft.update(migrated)
+    # 2) 轨道规范化
+    draft.setdefault("overlay", [])
+    draft.setdefault("main", {"segs": []})
+    draft.setdefault("audio", [{"segs": []}])
+    draft.setdefault("canvas", {"ratio": DEFAULT_CANVAS, "locked": False})
+    for i, tr in enumerate(draft["overlay"]):
+        if not isinstance(tr, dict):
+            draft["overlay"][i] = {"type": "video", "segs": []}
+        else:
+            tr.setdefault("type", "video")
+            tr.setdefault("segs", [])
+    if not isinstance(draft["main"], dict):
+        draft["main"] = {"segs": []}
+    draft["main"].setdefault("segs", [])
+    for i, a in enumerate(draft["audio"]):
+        if not isinstance(a, dict):
+            draft["audio"][i] = {"segs": []}
+        else:
+            a.setdefault("segs", [])
+    if not draft["audio"]:
+        draft["audio"] = [{"segs": []}]
+    draft.setdefault("_track_meta", {"overlay": [], "main": {}, "audio": [{}]})
+    meta = draft["_track_meta"]
+    meta.setdefault("overlay", [])
+    while len(meta["overlay"]) < len(draft["overlay"]):
+        meta["overlay"].append({})
+    meta.setdefault("main", {})
+    meta.setdefault("audio", [])
+    while len(meta["audio"]) < len(draft["audio"]):
+        meta["audio"].append({})
+    for m in meta["overlay"]:
+        m.setdefault("muted", False)
+        m.setdefault("hidden", False)
+    for m in meta["audio"]:
+        m.setdefault("muted", False)
+        m.setdefault("hidden", False)
+    meta["main"].setdefault("muted", False)
+    meta["main"].setdefault("hidden", False)
+    # 3) 字段确保（幂等）
+    _ensure_track_tids(draft)
+    _ensure_seg_ids(draft)
+    _ensure_seg_speeds(draft)
+    _ensure_seg_animations(draft)
+    return draft
+
+
 def load_state():
     """读取 draft_state.json。不存在/损坏返回空草稿。
 
@@ -824,13 +887,7 @@ def load_state():
         s.setdefault("materials", [])
         s.setdefault("draft", {})
         draft = s["draft"]
-        # 旧结构草稿（无 overlay 字段）→ 静默迁移到 X 结构（数据保留）。
-        # 2026-08-19 关键修复：原来「直接返回空」在多进程竞争（旧窗口程序 vs 新 MCP 进程）下
-        # 会变成草稿清道夫——新代码读到旧结构就清空覆盖，用户素材莫名消失/放不进。
-        if "overlay" not in draft or "main" not in draft:
-            migrated = _migrate_old_to_x(draft)
-            s["draft"] = migrated
-            draft = migrated
+        from_v = s.get("schemaVersion", 0)
         s.setdefault("version", 0)
         s.setdefault("domain_version", 0)   # 2c（M2）：领域改动计数（仅 record=True 时 +1），version 门控用
         s.setdefault("schemaVersion", DOCUMENT_SCHEMA_VERSION)
@@ -838,49 +895,10 @@ def load_state():
             s["materials"] = list(s["materials"].values()) if s["materials"] else []
         if not isinstance(s["materials"], list):
             s["materials"] = []
-        draft.setdefault("overlay", [])
-        draft.setdefault("main", {"segs": []})
-        draft.setdefault("audio", [{"segs": []}])
-        draft.setdefault("canvas", {"ratio": DEFAULT_CANVAS, "locked": False})
-        # 规范化：overlay 每条轨必须有 type/segs；main 必须有 segs；audio 每条必须有 segs
-        for i, tr in enumerate(draft["overlay"]):
-            if not isinstance(tr, dict):
-                draft["overlay"][i] = {"type": "video", "segs": []}
-            else:
-                tr.setdefault("type", "video")
-                tr.setdefault("segs", [])
-        if not isinstance(draft["main"], dict):
-            draft["main"] = {"segs": []}
-        draft["main"].setdefault("segs", [])
-        for i, a in enumerate(draft["audio"]):
-            if not isinstance(a, dict):
-                draft["audio"][i] = {"segs": []}
-            else:
-                a.setdefault("segs", [])
-        if not draft["audio"]:
-            draft["audio"] = [{"segs": []}]
-        draft.setdefault("_track_meta", {"overlay": [], "main": {}, "audio": [{}]})
-        meta = draft["_track_meta"]
-        meta.setdefault("overlay", [])
-        while len(meta["overlay"]) < len(draft["overlay"]):
-            meta["overlay"].append({})
-        meta.setdefault("main", {})
-        meta.setdefault("audio", [])
-        while len(meta["audio"]) < len(draft["audio"]):
-            meta["audio"].append({})
-        for m in meta["overlay"]:
-            m.setdefault("muted", False)
-            m.setdefault("hidden", False)
-        for m in meta["audio"]:
-            m.setdefault("muted", False)
-            m.setdefault("hidden", False)
-        meta["main"].setdefault("muted", False)
-        meta["main"].setdefault("hidden", False)
-        # A1（2026-08-19）：轨道稳定 tid——加载时给缺 tid 的轨补 uuid（含旧草稿迁移/新建轨）
-        _ensure_track_tids(draft)
-        # 兼容旧项目：给所有段补 speed/change_pitch / animations 默认值
-        _ensure_seg_speeds(draft)
-        _ensure_seg_animations(draft)
+        # M3-3a：按 schemaVersion 驱动迁移管线（结构迁移 + 轨道规范化 + 字段确保，幂等、零丢失）
+        if from_v != DOCUMENT_SCHEMA_VERSION:
+            print("[MIGRATE] from=%s to=%s" % (from_v, DOCUMENT_SCHEMA_VERSION))
+        migrate(draft, from_v, DOCUMENT_SCHEMA_VERSION)
         return s
     except Exception:
         return empty
