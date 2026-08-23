@@ -488,12 +488,111 @@ function makeSeg(s, type, ti, idx, overrideLeftUs, forceDragging) {
     (key === Store.state.selectedKey ? '<div class="handle l"></div><div class="handle r"></div>' : '');
   return seg;
 }
+// 4c keyed-diff 总开关：true=结构未变时复用段 DOM 节点做 in-place 更新（不销毁重建）；
+// false=永远走原全量重建（与改动前行为完全一致）。遇任何时间轴异常可一行关回。
+const TIMELINE_KEYED_DIFF = true;
+
+// 4c keyed-diff：结构(轨列表 + 每轨 seg id 序列)与现有 DOM 一致时，复用段 DOM 节点做 in-place 几何/内容更新，不销毁重建。
+// 返回 true=已处理（调用方跳过全量重建）；false=结构不一致（调用方走全量重建）。
+// 活动 move 拖拽会改变段跨轨归属 → 结构不一致 → 本函数返回 false → 走全量重建（拖拽行为不变）。
+function _renderTimelineKeyed(content, labels, ruler) {
+  const tracks = buildTracks();
+  const domTracks = [...content.querySelectorAll(".track")];
+  if (domTracks.length !== tracks.length) return false;
+  for (let i = 0; i < tracks.length; i++) {
+    const tr = tracks[i], dt = domTracks[i];
+    if (dt.dataset.type !== tr.type || +dt.dataset.ti !== tr.ti) return false;
+    const domSegs = [...dt.querySelectorAll(".seg")];
+    if (domSegs.length !== tr.segs.length) return false;
+    for (let j = 0; j < tr.segs.length; j++) {
+      if (domSegs[j].dataset.segid !== String(tr.segs[j].id)) return false;
+    }
+  }
+  // 结构一致 → 重建标尺 + 书签（廉价，保证与全量重建视觉一致）
+  const w = contentWidth();
+  content.style.width = w + "px";
+  ruler.style.width = w + "px";
+  ruler.innerHTML = "";
+  renderRuler(pps(), w / pps());
+  (Store.state.bookmarks || []).forEach(b => {
+    const bm = document.createElement("div");
+    bm.className = "bm-mark";
+    bm.style.left = (b.us / 1e6 * pps()) + "px";
+    bm.dataset.us = b.us;
+    bm.title = (b.name || "书签") + " · " + usToTime(b.us);
+    ruler.appendChild(bm);
+  });
+  // 重建轨道标签（廉价：轨道数少；保证静音/隐藏/锁定图标与名称实时）
+  [...labels.querySelectorAll(".track-label")].forEach(e => e.remove());
+  for (const tr of tracks) {
+    const label = document.createElement("div");
+    label.className = "track-label";
+    label.dataset.type = tr.type; label.dataset.ti = tr.ti;
+    const m = trackMeta(tr.type, tr.ti);
+    const showMute = tr.type === "video" || tr.type === "audio";
+    const showHide = tr.type === "video" || tr.type === "text" || tr.type === "sticker" || tr.type === "effect";
+    let icons = "";
+    if (showMute) { const on = !m.muted; icons += '<span class="icon' + (on ? "" : " off") + '" data-act="mute" title="静音/取消静音">' + (on ? "🔊" : "🔇") + '</span>'; }
+    if (showHide) { const on = !m.hidden; icons += '<span class="icon' + (on ? "" : " off") + '" data-act="hide" title="显示/隐藏">' + (on ? "👁" : "🚫") + '</span>'; }
+    icons += '<span class="icon' + (m.locked ? " off" : "") + '" data-act="lock" title="锁定/解锁轨道（锁定后禁止编辑该轨）">' + (m.locked ? "🔒" : "🔓") + '</span>';
+    label.innerHTML = icons + '<span class="name">' + tr.label + '</span>';
+    labels.appendChild(label);
+  }
+  // 逐轨逐段 in-place 更新（几何 + 内容），仅签名变化者才写 DOM
+  for (let i = 0; i < tracks.length; i++) {
+    const tr = tracks[i], dt = domTracks[i];
+    const m = trackMeta(tr.type, tr.ti);
+    dt.classList.toggle("track-hidden", !!m.hidden);
+    dt.classList.toggle("track-muted", !!(m.muted && (tr.type === "audio" || tr.type === "video")));
+    const domSegs = [...dt.querySelectorAll(".seg")];
+    for (let j = 0; j < tr.segs.length; j++) {
+      const seg = tr.segs[j], el = domSegs[j];
+      const g = segGeom(seg, tr.type, tr.ti, j);
+      const isSel = (Store.state.selectedSegId && seg.id && Store.state.selectedSegId === seg.id) || Store.state.selectedKeys.includes(tr.type + ":" + tr.ti + ":" + j);
+      const sig = g.leftUs + "|" + g.widthUs + "|" + (isSel ? 1 : 0) + "|" + (seg.name || "") + "|" + (seg.duration || "") + "|" + (seg.speed || "") + "|" + (seg.text || "") + "|" + (seg.animations ? JSON.stringify(seg.animations) : "") + "|" + (seg.path || "");
+      if (el.dataset._sig === sig) continue;
+      // 用 makeSeg 产出权威内容，拷贝到持久节点（不替换节点，保留 DOM 身份，避免失焦/事件重绑）
+      const tmp = makeSeg(seg, tr.type, tr.ti, j);
+      el.className = tmp.className;
+      el.style.left = tmp.style.left;
+      el.style.width = tmp.style.width;
+      el.dataset.leftUs = tmp.dataset.leftUs;
+      el.dataset.widthUs = tmp.dataset.widthUs;
+      el.dataset.key = tmp.dataset.key;
+      el.innerHTML = tmp.innerHTML;
+      el.dataset._sig = sig;
+    }
+  }
+  return true;
+}
+
 function renderTimeline(s) {
   const content = $("tlContent"), labels = $("tlLabels"), ruler = $("ruler");
   const scrollWrap = $("tlScroll");
   // 销毁前记住滚动位置，避免 refresh() 重绘后弹回顶部/左侧
   const savedTop = scrollWrap.scrollTop;
   const savedLeft = scrollWrap.scrollLeft;
+  // 4c keyed-diff 快速路径：结构(轨列表+每轨 seg id 序列)未变则 in-place 更新，跳过下方全量销毁重建（tail 共用）。
+  // 活动 move 拖拽会改变段跨轨归属 → 结构不一致 → 下方全量重建（拖拽行为不变）。
+  // 受益场景：轮询/缩放/成组缩放/选中切换/书签/静音隐藏等「结构不变仅位置或属性变」的渲染，不再销毁重建全部段 DOM。
+  if (TIMELINE_KEYED_DIFF) {
+    try {
+      if (_renderTimelineKeyed(content, labels, ruler)) {
+        positionPlayhead();
+        drawAllWaves();
+        requestAnimationFrame(drawAllWaves);
+        scrollWrap.scrollTop = savedTop;
+        scrollWrap.scrollLeft = savedLeft;
+        const scrollbarH = scrollWrap.offsetHeight - scrollWrap.clientHeight;
+        const spacer = $("labelScrollbarSpacer");
+        if (spacer) { labels.appendChild(spacer); spacer.style.height = (scrollbarH > 0 ? scrollbarH : 0) + "px"; }
+        labels.scrollTop = savedTop;
+        renderGroupBox();
+        if (typeof refreshKfMarkerSelection === "function") refreshKfMarkerSelection();
+        return;
+      }
+    } catch (e) { console.error("[renderTimeline keyed-diff 异常，回退全量]", e); }
+  }
   // 销毁旧片段/轨道/标签（标尺/播放头/落点线常驻，不碰）
   [...content.querySelectorAll(".track, .seg")].forEach(e => e.remove());
   [...labels.querySelectorAll(".track-label")].forEach(e => e.remove());
