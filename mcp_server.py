@@ -30,10 +30,26 @@ import studio_read as sr  # 细粒度读取：按需抽小数据，避免把 103
 _MCP_META = {"actor": "agent", "source": "mcp"}
 
 
+# 2e：模块级单例 Api + 写锁。原实现每个 tool 调用都 `main.Api()` 新建实例——既重复
+# load_state（昂贵），又让乐观锁的「期望版本」无法在同一进程内连续维护。
+# 单例复用 + threading.Lock 串行化，配合 main.py 的跨进程乐观锁，彻底消除 MCP/桌面互踩。
+_WRITE_LOCK = threading.Lock()
+_API = None
+
+
+def _get_api():
+    """懒加载模块级单例 Api（首次调用时构造，之后复用，免去每次 tool 调用重复 load_state）。"""
+    global _API
+    if _API is None:
+        _API = main.Api()
+    return _API
+
+
 def _exec(cmd_id, args):
     """以 Command 语义执行写操作并自动审计。cmd_id = Api 方法名，args = 关键字参数 dict。"""
-    api = main.Api()
-    r = api.execute(cmd_id, args, _MCP_META)
+    api = _get_api()
+    with _WRITE_LOCK:
+        r = api.execute(cmd_id, args, _MCP_META)
     return json.dumps(r, ensure_ascii=False, indent=2)
 
 mcp = FastMCP("ai-video-studio")
@@ -43,17 +59,19 @@ mcp = FastMCP("ai-video-studio")
 def get_state() -> str:
     """读取当前草稿状态（素材库 materials + 时间轴轨道 draft），返回 JSON 字符串。
     AI 用它"看"用户当前素材库和时间轴排了什么。"""
-    api = main.Api()
-    return json.dumps(api.get_state(), ensure_ascii=False, indent=2)
+    api = _get_api()
+    with _WRITE_LOCK:
+        return json.dumps(api.get_state(), ensure_ascii=False, indent=2)
 
 
 @mcp.tool()
 def import_media_by_paths(paths: list) -> str:
     """按文件路径直接把素材复制进工具素材库（无需弹窗，AI 专用）。
     paths: 本地文件绝对路径列表。已存在的素材会自动跳过。返回入库的素材列表 JSON。"""
-    api = main.Api()
-    items = api.import_media_by_paths(paths)
-    return json.dumps(items, ensure_ascii=False, indent=2)
+    api = _get_api()
+    with _WRITE_LOCK:
+        items = api.import_media_by_paths(paths)
+        return json.dumps(items, ensure_ascii=False, indent=2)
 
 
 @mcp.tool()
@@ -77,9 +95,10 @@ def export_draft(name: str, folder: str) -> str:
     """把当前草稿导出成标准剪映草稿文件夹（draft_content.json + draft_meta_info.json）。
     name: 草稿名（会在 folder 下建同名子文件夹）；folder: 保存目录绝对路径。
     导出成功后自动记住 folder 作为默认导出路径。返回结果 JSON（成功/路径/段落数/跳过数）。"""
-    api = main.Api()
-    r = api.export_draft(name, folder)
-    return json.dumps(r, ensure_ascii=False, indent=2)
+    api = _get_api()
+    with _WRITE_LOCK:
+        r = api.export_draft(name, folder)
+        return json.dumps(r, ensure_ascii=False, indent=2)
 
 
 @mcp.tool()
@@ -210,17 +229,19 @@ def set_track_meta(track_type: str, track_index: int, field: str, value: bool) -
 @mcp.tool()
 def undo() -> str:
     """撤销上一步编辑（删除/移动/裁剪/分割/进轨），还原草稿到上一步状态。对应前端 Ctrl+Z。返回结果 JSON（剩余可撤销步数）。"""
-    api = main.Api()
-    r = api.undo()
-    return json.dumps(r, ensure_ascii=False, indent=2)
+    api = _get_api()
+    with _WRITE_LOCK:
+        r = api.undo()
+        return json.dumps(r, ensure_ascii=False, indent=2)
 
 
 @mcp.tool()
 def redo() -> str:
     """重做（撤销的反操作），还原到被撤销前的状态。对应前端 Ctrl+Y / Ctrl+Shift+Z。返回结果 JSON（剩余可重做步数）。"""
-    api = main.Api()
-    r = api.redo()
-    return json.dumps(r, ensure_ascii=False, indent=2)
+    api = _get_api()
+    with _WRITE_LOCK:
+        r = api.redo()
+        return json.dumps(r, ensure_ascii=False, indent=2)
 
 
 @mcp.tool()
@@ -234,16 +255,17 @@ def execute(cmd_id: str, args: str = "{}", meta: str = "{}") -> str:
     示例：execute("split_segment", '{"track_type":"video","track_index":0,"index":0,"at_time_us":5000000}',
                    '{"actor":"agent","reason":"去掉口误","confidence":0.9,"source":"skill:口播精剪"}')
     返回与该操作直接调用一致的 JSON。"""
-    api = main.Api()
-    r = api.execute(cmd_id, json.loads(args or "{}"), json.loads(meta or "{}"))
-    return json.dumps(r, ensure_ascii=False, indent=2)
+    api = _get_api()
+    with _WRITE_LOCK:
+        r = api.execute(cmd_id, json.loads(args or "{}"), json.loads(meta or "{}"))
+        return json.dumps(r, ensure_ascii=False, indent=2)
 
 
 @mcp.tool()
 def audit_log(limit: int = 100, actor: str = None) -> str:
     """Step 5b：审计查询——最近的操作历史（谁做了什么）。actor 可选过滤（如 "agent"/"user"）。
     返回 [{cmd_id, label, meta}]，meta 含 actor/reason/confidence/source。"""
-    api = main.Api()
+    api = _get_api()
     r = api.audit_log(limit=limit, actor=actor)
     return json.dumps(r, ensure_ascii=False, indent=2)
 
@@ -320,8 +342,9 @@ def get_segment_peaks(track_type: str, track_index: int, index: int, max_points:
 def draft_state_resource() -> str:
     """当前共享草稿状态（素材库 + 时间轴 + meta.mcp 连接状态）。
     与 get_state tool 返回同一份数据，确保 AI 无论用 resource 还是 tool 读到的结构一致。"""
-    api = main.Api()
-    return json.dumps(api.get_state(), ensure_ascii=False, indent=2)
+    api = _get_api()
+    with _WRITE_LOCK:
+        return json.dumps(api.get_state(), ensure_ascii=False, indent=2)
 
 
 def _announce_mcp():

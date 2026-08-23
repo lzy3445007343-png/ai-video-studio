@@ -1148,6 +1148,9 @@ class CommandManager:
 # save_state 失败时置 True（成功不清除，保证一次调用内多次 save_state 只要有一次失败就标记）；
 # 方法级 wrapper 在返回后检测并翻转 ok。模块级全局，方法入口由 wrapper 每次调用重置为 False。
 FAILED_SAVE = False
+# 2e：乐观锁冲突透传——save_state 检测到跨进程 version 冲突时存入此处，
+# 由 _wrap_save_failure 在 Api 方法返回后注入 conflict 错误，使桌面/MCP 两路径都能看到冲突码。
+SAVE_LAST_CONFLICT = None
 
 
 def save_state(state, record=True):
@@ -1162,7 +1165,7 @@ def save_state(state, record=True):
 
     加文件锁防竞态：如果 MCP 进程正在写，桌面进程会等待它写完再写，反之亦然。
     无 portalocker 时回退到无锁写（单进程场景够用，多进程有低概率互踩）。"""
-    global FAILED_SAVE
+    global FAILED_SAVE, SAVE_LAST_CONFLICT
     if record and Api.last_committed is not None and state["draft"] != Api.last_committed:
         # 2b 双轨收敛：标记本次操作真实变更；仅当「未走 execute」(直接调用)时才压兜底快照，
         # 走 execute 的路径由 CommandManager.execute 统一压带语义的 Command（避免双步 / 无 cmd_id）。
@@ -1174,21 +1177,42 @@ def save_state(state, record=True):
     if isinstance(state.get("draft"), dict):
         _ensure_track_tids(state["draft"])
     Api.last_committed = copy.deepcopy(state["draft"])
+    expected_version = state.get("version")   # 本进程期望磁盘当前的 version（乐观锁比较值）
     try:
         state.setdefault("schemaVersion", DOCUMENT_SCHEMA_VERSION)
-        state["version"] = int(time.time() * 1000)
         if record:
             # 2c（M2）：domain_version 仅在「真实领域改动」(record=True) 时单调 +1。
             # undo/redo/_reload 回填均走 record=False → 不 bump → 可作为「是否被外部进程改动」的判据，
             # 供 undo/redo 的 version 门控区分「自身历史回放」与「MCP/另一窗口的外部写入」。
             state["domain_version"] = state.get("domain_version", 0) + 1
-        if _HAS_LOCK:
-            with open(STATE_PATH, "w", encoding="utf-8") as f:
+        # 2e：乐观锁——用 r+（不截断）在文件锁内「先读盘比对，再决定写不写」。
+        # 原 open("w") 先截断再上锁会在加锁前清空磁盘，等于把乐观锁的读盘时机让给竞态窗口；
+        # 改用 r+ 在读盘比对通过后才 seek(0)+truncate 写回，保证「读-比-写」原子于锁内。
+        if not os.path.exists(STATE_PATH):
+            with open(STATE_PATH, "w", encoding="utf-8") as _f0:
+                json.dump({}, _f0)
+        with open(STATE_PATH, "r+", encoding="utf-8") as f:
+            if _HAS_LOCK:
                 portalocker.lock(f, portalocker.LOCK_EX)
-                json.dump(state, f, ensure_ascii=False, indent=2)
-        else:
-            with open(STATE_PATH, "w", encoding="utf-8") as f:
-                json.dump(state, f, ensure_ascii=False, indent=2)
+            # 读盘当前 version
+            ondisk_version = None
+            try:
+                f.seek(0)
+                _ondisk = json.load(f)
+                ondisk_version = _ondisk.get("version")
+            except Exception:
+                ondisk_version = None   # 读不到（首存/损坏）按无冲突处理
+            # 乐观锁比对：期望版本与磁盘不一致 → 被另一进程（桌面/MCP）改过 → 拒绝覆盖
+            if expected_version is not None and ondisk_version is not None and ondisk_version != expected_version:
+                print("[SAVE-CONFLICT] 乐观锁冲突：期望磁盘version=%s，实际=%s（record=%s）" % (expected_version, ondisk_version, record))
+                if record:
+                    SAVE_LAST_CONFLICT = {"expected": expected_version, "actual": ondisk_version}
+                return {"ok": False, "conflict": True, "expected": expected_version, "actual": ondisk_version}
+            # 通过：写回（seek 0 覆盖，不再先清空再上锁）
+            f.seek(0); f.truncate()
+            state["version"] = int(time.time() * 1000)
+            json.dump(state, f, ensure_ascii=False, indent=2)
+            f.flush(); os.fsync(f.fileno())
         # 2026-08-19 读回验证：堵死「假成功」——写盘没抛异常但内容不对（磁盘缓存/另一个进程抢写）
         # 返回 True 但段没落盘 = "动一下但没素材"的另一条路。读回不一致 → 明确 [SAVE-VERIFY-FAIL]。
         try:
@@ -5496,9 +5520,20 @@ if __name__ == "__main__":
 def _wrap_save_failure(fn):
     @functools.wraps(fn)
     def _w(*args, **kwargs):
-        global FAILED_SAVE
+        global FAILED_SAVE, SAVE_LAST_CONFLICT
         FAILED_SAVE = False  # 每次调用重置，保证「粘性」只在同一调用内累积
+        SAVE_LAST_CONFLICT = None  # 每次调用重置，避免上一轮的冲突码泄漏到本轮
         res = fn(*args, **kwargs)
+        # 2e：乐观锁冲突透传——save_state 若在本次调用内检测到跨进程 version 冲突，
+        # 把冲突码注入返回值，使桌面 UI / MCP 都能看到「未保存，请重新加载」而非静默成功。
+        if SAVE_LAST_CONFLICT is not None and isinstance(res, dict) and res.get("ok"):
+            res = dict(res)
+            res["ok"] = False
+            res["conflict"] = True
+            res["error"] = "乐观锁冲突：草稿已被其他进程(桌面/MCP)改动，本操作未保存。请重新加载草稿后再试。"
+            res["expected"] = SAVE_LAST_CONFLICT["expected"]
+            res["actual"] = SAVE_LAST_CONFLICT["actual"]
+        SAVE_LAST_CONFLICT = None
         if FAILED_SAVE and isinstance(res, dict) and res.get("ok"):
             res = dict(res)
             res["ok"] = False
