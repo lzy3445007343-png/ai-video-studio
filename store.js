@@ -74,7 +74,12 @@ const Store = {
    * - renderAll 保留不删（debug/导入/MCP 大批量/恢复路径显式调用，非广播订阅）。
    */
   _sliceSubs: {},
-  renderSliceMode: "legacy",
+  // 4b（M4）：翻转 slice 模式——切片订阅者接管渲染，不再 _emit 全量 renderAll。
+  // 安全前提（已枚举全部 Store.set 键交叉核对）：交互键(selectedKey/Keys/SegId/selectedMaterialUid/
+  // drag/pendingDrag/pendingBox/groupScale/pxPerSec/filter/bookmarks/playheadUs/effects)均有切片订阅者；
+  // 数据键(draft/materials/thumbMap/waveMap/meta)仅由 refresh() 显式 renderAll 覆盖（C4.4 已硬化，见 HTML:3284）。
+  // 回退：改回 "legacy" 即恢复全量广播。Store.subscribe(renderAll) 作为 dormant 安全网保留（slice 下 _emit 不触发，故不会双跑）。
+  renderSliceMode: "slice",
   _batchDepth: 0,          // C4 v2（GPT 建议留接口）：批量通知——同帧多个 set 合并一次 flush
   _batchQueue: [],
   subscribe(fn) { this._subs.push(fn); },

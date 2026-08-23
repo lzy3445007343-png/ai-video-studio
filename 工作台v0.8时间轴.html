@@ -3344,10 +3344,19 @@ function initSubscriptionSlices() {
   Store.subscribeSlice("filter", (v, s) => { renderMedia(s); });
   Store.subscribeSlice("bookmarks", () => { renderTimeline(); });
   // B2（GPT 定案）：播放头切片独立订阅者——拖播放头 → KF 面板值实时更新
-  // 不挂 renderPlayheadUI（UI 层不互相调，防耦合）；updateKfPanelValues 内部跳过编辑中的 input
+  // 不挂 renderPlayheadUI（UI 层不互相调，防耦合，见 1167 行独立订阅）；updateKfPanelValues 内部跳过编辑中的 input
   if (typeof updateKfPanelValues === "function") {
     Store.subscribeSlice("playheadUs", updateKfPanelValues);
   }
+  // 4b：播放头变化还需同步「预览帧(renderPreviewMaybe) + 时间码(renderTimecode)」——
+  // 这两者在 legacy 由 _emit→renderAll 覆盖，slice 模式必须显式补上，否则拖播放头预览不跟手/时间码不刷新。
+  Store.subscribeSlice("playheadUs", (v, s) => {
+    if (typeof renderPreviewMaybe === "function") renderPreviewMaybe(s);
+    if (typeof renderTimecode === "function") renderTimecode(s);
+  });
+  // 4b：特效注册表回填(effects)→ 技能面板重渲（legacy 由 _emit→renderAll 覆盖，slice 模式需显式订阅；
+  // effects 在 boot 与 renderMedia 懒加载处 Store.set，不经 refresh，故不能依赖 renderAll 保险路径）。
+  Store.subscribeSlice("effects", (v, s) => { if (typeof renderSkill === "function") renderSkill(s); });
 }
 
 /* ---------- 启动 ---------- */
