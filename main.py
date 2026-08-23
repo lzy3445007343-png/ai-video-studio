@@ -2389,19 +2389,6 @@ CANVAS_BASE = 1080
 # 默认画布比例（未手动选择、也无素材时）。
 DEFAULT_CANVAS = "16:9"
 
-# 画布（画幅）比例预设：剪映式。键为比例名，值为 (宽, 高) 相对值（导出时乘 BASE 得真实像素）。
-# 数值比例 = w/h，用于「素材比例自动匹配画布」时比对。
-CANVAS_PRESETS = {
-    "16:9":  {"w": 16, "h": 9,  "ratio": 16 / 9},
-    "9:16":  {"w": 9,  "h": 16, "ratio": 9 / 16},
-    "4:3":   {"w": 4,  "h": 3,  "ratio": 4 / 3},
-    "3:4":   {"w": 3,  "h": 4,  "ratio": 3 / 4},
-    "1:1":   {"w": 1,  "h": 1,  "ratio": 1.0},
-}
-# 导出画布基准边长：选较长边作为基准像素，保证分辨率在剪映里够用（1080 级）。
-CANVAS_BASE = 1080
-# 默认画布比例（未手动选择、也无素材时）。
-DEFAULT_CANVAS = "16:9"
 
 
 def classify(path):
@@ -3379,7 +3366,7 @@ class Api:
         # 打印"后端实际收到的时间"：time_us（前端发送）→ t（clamp 后）→ dur。
         # 用途：判断 X/Y 两个 add_keyframe 到底收到的是不是同一个 t。
         import os as _os
-        _audit = _os.environ.get("KF_AUDIT", "1") == "1"
+        _audit = _os.environ.get("KF_AUDIT", "0") == "1"
         if _audit:
             print(f"[KF-AUDIT] add_keyframe received: path={path} time_us={time_us} t_clamped={t} dur={dur} seg_start={seg.get('start')}")
         # ── 跨通道打点对齐（B3.4）────────────────────────────────────────
