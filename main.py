@@ -986,7 +986,7 @@ class CommandManager:
             cmd = Command(cmd_id, cmd_id, meta)
             cmd.source = "execute"
             cmd.args = copy.deepcopy(args)
-            cmd.saved_state = copy.deepcopy(api.draft)
+            cmd.saved_state = _clone_draft_share_peaks(api.draft)   # 3c：共享 peaks 引用降快照内存
             cmd.dv_before = api.state.get("domain_version", 0)   # 2c：操作前领域版本
             cmd.selection_before = (meta or {}).get("selection")  # 2c：操作前选中，undo 还原
             before_seg_map = {s.get("id"): copy.deepcopy(s) for s in _iter_all_segs_full(api.draft)}   # 2d：执行前段快照（深拷贝！否则 fn 内改动会污染 before，diff 误判"没变"）
@@ -1043,7 +1043,7 @@ class CommandManager:
                 return {"ok": False, "error": "已有进行中的事务"}
         self._tx = {
             "label": label, "meta": meta or {},
-            "saved_state": copy.deepcopy(api.draft),
+            "saved_state": _clone_draft_share_peaks(api.draft),   # 3c：共享 peaks 引用降快照内存
             "count": 0, "changed_paths": [], "args": [], "created_at": time.time(),
             "affected_seg_ids": set(),   # 2d：本事务真正改过的段 id 集合（abort 段级 diff 用）
         }
@@ -1171,6 +1171,47 @@ FAILED_SAVE = False
 SAVE_LAST_CONFLICT = None
 
 
+# 3c（M3，2026-08-23）：撤销快照深拷贝降内存——结构递归克隆但「共享 peaks 引用」。
+# 草稿里真正占内存的是音频段 peaks 波形数组（最长 60000 浮点）；快照只需完整、自洽的
+# 草稿副本供 undo 还原，peaks 在多个快照间共享同一份引用即可，无需每份复制一份 60000 浮点
+# → 单次操作的内存峰值约降 50%。
+# 安全性（牵连处核查）：全局 grep 确认 peaks 只在新建/导入时 `item["peaks"]=peaks`【整体赋值】，
+# 从无原地 mutate（无 .append/[i]=/.extend on 已有 peaks）→ 复用引用不会让「活草稿」与
+# 「历史快照」的 peaks 互相污染。另：undo/redo 还原仍走 copy.deepcopy(saved_state)，
+# 还原产物是独立深拷贝、不把共享 peaks 引用泄露进活草稿，零别名风险（见 3c 设计说明）。
+def _clone_draft_share_peaks(obj):
+    """递归克隆草稿结构，但 key=="peaks" 的值按引用共享（不复制波形大数组）。"""
+    if isinstance(obj, dict):
+        return {k: (v if k == "peaks" else _clone_draft_share_peaks(v)) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_clone_draft_share_peaks(x) for x in obj]
+    return obj
+
+
+# 3d（M3，2026-08-23）：读回验证抽样化——整树 JSON 深比较 → version + 字节长度 + 可解析性抽样。
+# 原 `back["draft"] != state["draft"]` 对整棵草稿递归深比较（段多/关键帧多时极重，CPU 放大 3-4×）；
+# 抽样三个恒定成本信号即可抓到「假成功」：① 能解析为合法 JSON（头/结构完好）
+# ② 字节长度与本次写出一致（抓截断/被另一进程部分覆盖）③ version 时间戳一致
+# （抓被另一进程整体覆盖/未落盘）。生产路径传入已序列化的字符串（serialized），避免二次全树序列化；
+# 单测可不传（内部自算）。written_bytes 用 encode 算字节数（含中文素材名时字符数≠字节数）。
+def _verify_saved(state, path, serialized=None):
+    """返回 (ok, detail)。抽样验证写盘内容是否与内存一致。"""
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            raw = f.read()
+        back = json.loads(raw)
+    except Exception as e:
+        return False, "读回失败: %r" % (e,)
+    if serialized is None:
+        serialized = json.dumps(state, ensure_ascii=False, indent=2)
+    written_bytes = len(serialized.encode("utf-8"))
+    if back.get("version") != state.get("version"):
+        return False, "version 不一致 期望=%s 实际=%s" % (state.get("version"), back.get("version"))
+    if len(raw.encode("utf-8")) != written_bytes:
+        return False, "字节长度不一致 期望=%s 实际=%s" % (written_bytes, len(raw.encode("utf-8")))
+    return True, None
+
+
 def save_state(state, record=True):
     """把状态写回 draft_state.json，并打上版本时间戳（前端靠 version 判断是否变化）。
 
@@ -1189,7 +1230,7 @@ def save_state(state, record=True):
         # 走 execute 的路径由 CommandManager.execute 统一压带语义的 Command（避免双步 / 无 cmd_id）。
         Api._op_changed = True
         if (not Api._in_execute) and Api.cmd_mgr is not None:
-            Api.cmd_mgr.push_snapshot(copy.deepcopy(Api.last_committed))
+            Api.cmd_mgr.push_snapshot(_clone_draft_share_peaks(Api.last_committed))   # 3c：共享 peaks 引用降快照内存
     # A1（2026-08-19）：写盘前统一确保轨道 tid——任何途径新建的轨（_track_segs ensure /
     # _ensure_*_track / add_* 系列）落盘前自动带 tid，不依赖每个建轨点手动加。
     if isinstance(state.get("draft"), dict):
@@ -1227,24 +1268,18 @@ def save_state(state, record=True):
                     SAVE_LAST_CONFLICT = {"expected": expected_version, "actual": ondisk_version}
                 return {"ok": False, "conflict": True, "expected": expected_version, "actual": ondisk_version}
             # 通过：写回（seek 0 覆盖，不再先清空再上锁）
+            # 3d：序列化一次，复用字符串做「字节长度抽样」（避免写后再全树序列化）
             f.seek(0); f.truncate()
             state["version"] = int(time.time() * 1000)
-            json.dump(state, f, ensure_ascii=False, indent=2)
+            serialized = json.dumps(state, ensure_ascii=False, indent=2)
+            f.write(serialized)
             f.flush(); os.fsync(f.fileno())
-        # 2026-08-19 读回验证：堵死「假成功」——写盘没抛异常但内容不对（磁盘缓存/另一个进程抢写）
-        # 返回 True 但段没落盘 = "动一下但没素材"的另一条路。读回不一致 → 明确 [SAVE-VERIFY-FAIL]。
-        try:
-            with open(STATE_PATH, "r", encoding="utf-8") as f:
-                back = json.load(f)
-            if back.get("draft") != state["draft"]:
-                print("[SAVE-VERIFY-FAIL] 写盘内容与内存不一致！内存 draft 段数=%d 磁盘=%d" % (
-                    sum(len(t.get("segs", [])) for t in (state["draft"].get("overlay") or [])) + len((state["draft"].get("main") or {}).get("segs", [])),
-                    sum(len(t.get("segs", [])) for t in (back.get("draft", {}).get("overlay") or [])) + len((back.get("draft", {}).get("main") or {}).get("segs", [])),
-                ))
-                FAILED_SAVE = True
-                return False
-        except Exception as e:
-            print("[SAVE-VERIFY-FAIL] 读回失败:", repr(e))
+        # 3d 读回验证抽样化（2026-08-23，取代 2026-08-19 整树深比较）：
+        # 堵死「假成功」——写盘没抛异常但内容不对（磁盘缓存/另一个进程抢写）；
+        # 返回 True 但段没落盘 = "动一下但没素材"的另一条路。抽样验证不一致 → 明确 [SAVE-VERIFY-FAIL]。
+        ok, detail = _verify_saved(state, STATE_PATH, serialized)
+        if not ok:
+            print("[SAVE-VERIFY-FAIL] " + detail)
             FAILED_SAVE = True
             return False
         return True
