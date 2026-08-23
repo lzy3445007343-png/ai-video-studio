@@ -2686,13 +2686,9 @@ class Api:
         """
         self.state = load_state()
         self.draft = self.state["draft"]
-        # 波纹引擎依赖段 id 配对 before/after，重载时顺手给缺 id 的段补上
-        _ensure_seg_ids(self.draft)
-        # 兼容旧项目：补 speed/change_pitch 默认值
-        _ensure_seg_speeds(self.draft)
-        _ensure_seg_animations(self.draft)
+        # 3b（M3）：ids/speeds/animations 已由上方 load_state→migrate 统一补，此处不再重复；
+        # 仅保留 src_full 回填（含 record=False 落盘，避免污染撤销栈）。
         # 兼容旧项目：补 src_full（源素材真实全长，微秒）——右拖恢复被裁帧的上限。
-        # 回填后落盘（record=False，避免污染撤销栈），下次重载即不再重算。
         if _ensure_seg_src_full(self.draft):
             save_state(self.state, record=False)
         # 2a（M2，2026-08-23）：R14 修复——_reload 必须刷新「已提交」基线 last_committed，
@@ -5306,10 +5302,9 @@ class Api:
         # 2f：版本未变则短路返回，避免每轮询都重算 src_full / 读 mcp / 序列化整树草稿
         if since_version is not None and ondisk_version is not None and str(since_version) == str(ondisk_version):
             return {"unchanged": True, "version": ondisk_version}
-        # 兼容旧项目：补 src_full（源素材真实全长，微秒）——前端右拖恢复被裁帧的上限。
-        # 自限：回填后落盘（record=False），下次轮询即无缺失、不再重算 ffprobe。
-        if _ensure_seg_src_full(self.draft):
-            save_state(self.state, record=False)
+        # 3b（M3）：src_full 回填已移出轮询路径（修 R13，避免每次轮询 ffprobe 阻塞）。
+        # 它改由 _reload（所有写操作/导入前统一调用）补并落盘(record=False)，
+        # 新素材建段即带 src_full；纯读轮询不再触发探测。get_state 只负责读最新磁盘态。
         mcp_state = load_mcp_state()
         self.state["meta"] = {"mcp": mcp_state}
         # 注意：version 只反映草稿真实变化（save_state 打的时间戳），不要并入 MCP 心跳时间戳，
