@@ -450,6 +450,7 @@
     <span class="spacer"></span>
     <span class="mcp-pill"><span class="mcp-dot" id="mcpDot"></span><span id="mcpName">未连接</span></span>
     <button class="btn" id="skillBtn">Skill</button>
+    <button class="btn" id="presetBtn">模板</button>
     <button class="btn primary" id="exportBtn">导出剪映草稿</button>
   </div>
 
@@ -739,6 +740,13 @@
     <div class="modal">
       <div class="modal-head">Skill 区 <button class="x" id="skillClose" title="关闭">×</button></div>
       <div class="modal-body" id="skillModalBody">暂未接入 Skill<br><br>选中素材后，这里会列出可一键执行的剪辑 Skill（去水印 / 自动字幕 / 智能配乐 等）。当前由 MCP 连接后填充。</div>
+    </div>
+  </div>
+
+  <div class="modal-mask" id="presetModal" style="display:none">
+    <div class="modal">
+      <div class="modal-head">模板库 <button class="x" id="presetClose" title="关闭">×</button></div>
+      <div class="modal-body" id="presetModalBody">模板库建设中…<br><br>这里会列出可一键套用的排版模板（口播精剪 / 小红书图文 / 基础文字排版 等）。点模板即整批执行排版，Ctrl+Z 一次回滚。模板由 presets/ 目录提供，剪不同视频可换不同模板。</div>
     </div>
   </div>
 
@@ -2938,6 +2946,29 @@ function bindEvents() {
   $("skillBtn").addEventListener("click", () => { skillModal.style.display = "flex"; });
   $("skillClose").addEventListener("click", () => { skillModal.style.display = "none"; });
   skillModal.addEventListener("click", e => { if (e.target === skillModal) skillModal.style.display = "none"; });
+
+  // ---- 模板库弹窗（M6-6c 入口；内容由 presets/ 目录 + get_presets 填充，v0 先占位） ----
+  const presetModal = $("presetModal");
+  $("presetBtn").addEventListener("click", () => { presetModal.style.display = "flex"; loadPresets(); });
+  $("presetClose").addEventListener("click", () => { presetModal.style.display = "none"; });
+  presetModal.addEventListener("click", e => { if (e.target === presetModal) presetModal.style.display = "none"; });
+  // 模板库加载钩子（v0 占位）：后端 get_presets 就绪后填充卡片；未就绪时保持「建设中」文案不报错。
+  function loadPresets() {
+    try {
+      if (window.pywebview && pywebview.api && pywebview.api.get_presets) {
+        pywebview.api.get_presets().then(r => {
+          const body = $("presetModalBody");
+          if (r && r.ok && r.presets && r.presets.length) {
+            body.innerHTML = r.presets.map(p =>
+              `<div class="skill-item" style="margin-bottom:8px;padding:10px;background:var(--panel-2);border:1px solid var(--border);border-radius:8px;cursor:pointer">
+                 <div class="t">${p.label || p.id}</div>
+                 <div class="d">${p.desc || ""}</div>
+               </div>`).join("");
+          }
+        });
+      }
+    } catch (e) { /* v0：后端未就绪保持占位文案 */ }
+  }
 
   // ---- 贴纸面板：新建轨 / 选图 / 添加到播放头 ----
   $("stAddTrack").addEventListener("click", () => call("add_sticker_track").then(r => { if (r && r.ok) refresh(); }));
