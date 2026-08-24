@@ -20,8 +20,8 @@
  *      但 localUs 是锁定值，不随刷新变
  * ===================================================================== */
 
-/* 帧长常量（项目 30fps，与后端导出 / timeline 吸附一致）。用 Math.round 对齐后端 int() 截断语义。 */
-const KF_FRAME_US = Math.round(1e6 / 30);
+/* 帧长常量（M7-7c 统一入口：TimelineMapper.frameUs，与后端 snap_frame 同口径，不再散落 Math.round(1e6/30)）。 */
+const KF_FRAME_US = TimelineMapper.frameUs(30);
 
 class EditContext {
   constructor({ key, seg }) {

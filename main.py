@@ -1911,16 +1911,22 @@ def _seg_anims(seg):
     return a if isinstance(a, dict) else {}
 
 
-def _frame_snap_us(t):
-    """把微秒时间吸附到整帧（30fps，帧长 33333us）。
+# M7-7c：时间统一收口——所有微秒换算的基准常量（对齐前端 timeline-mapper.js TICKS_PER_SECOND）。
+TICKS_PER_SECOND = 1_000_000
 
-    对齐新版 OpenCut `roundFrameTicks`（keyframe-drag-controller.ts / wasm）：
-    —— 打点时间统一吸到整帧，保证"同一播放头打的 X/Y 严格同帧"——
-    这是 A1/A2 的基石：帧吸附后，同一点的 X/Y 传入微差（几 us）也会落同一帧，
-    配合 existing 严格相等（A1）即可正确合并，绝不误改 v。
+
+def snap_frame(us, fps=30):
+    """帧吸附：把微秒时间吸附到 fps 整帧（后端统一入口，与前端 TimelineMapper.snapFrame 同语义）。
+
+    对齐新版 OpenCut `roundFrameTicks`：打点时间统一吸到整帧，保证"同一播放头打的 X/Y 严格同帧"。
     """
-    frame_us = 33333
-    return ((t + frame_us // 2) // frame_us) * frame_us
+    frame_us = int(round(TICKS_PER_SECOND / (fps or 30)))
+    return int((int(us) + frame_us // 2) // frame_us) * frame_us
+
+
+def _frame_snap_us(t):
+    """【5d 兼容别名】30fps 帧吸附 = snap_frame(t, 30)。新代码请直接调 snap_frame。"""
+    return snap_frame(t, 30)
 
 
 def _seg_masks(seg):

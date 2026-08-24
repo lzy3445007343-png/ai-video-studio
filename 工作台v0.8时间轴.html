@@ -2184,8 +2184,8 @@ function startKfMarkerDrag(e) {
   targets.forEach(t => { t.el = segEl.querySelector('.kf-marker[data-kids*="' + t.kid + '"]'); });
   const session = { targets, startMouseX: e.clientX, deltaTicks: 0 };
   let active = false;
-  // 帧吸附（项目 30fps，与后端导出一致）：拖拽时间 round 到 1/30s 倍数
-  const frameUs = Math.round(1e6 / 30);
+  // 帧吸附（M7-7c 统一入口：TimelineMapper.frameUs，与后端 snap_frame 同口径）
+  const frameUs = TimelineMapper.frameUs(30);
   const dtUs = dx => Math.round(dx / pps() * 1e6);
   const snapFrame = us => Math.round(us / frameUs) * frameUs;
   const clampSeg = t => Math.max(0, Math.min(seg.duration, t));
@@ -3262,7 +3262,7 @@ function bindEvents() {
         seekPlayhead(Store.state.playheadUs + dir * 5e6);   // Shift+方向：跳 5 秒（对齐 OpenCut jump-forward/backward）
       } else {
         const fps = (Store.state.meta && Store.state.meta.fps) || 30;   // 剪映默认 30fps
-        const frameUs = 1e6 / fps;
+        const frameUs = TimelineMapper.frameUs(fps);   // 帧步进（M7-7c 统一入口；对齐 OpenCut frame-step）
         seekPlayhead(Store.state.playheadUs + dir * frameUs);   // 帧步进（对齐 OpenCut frame-step-forward/backward）
       }
     }
