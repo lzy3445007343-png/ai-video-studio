@@ -65,37 +65,24 @@ HTML_PATH = os.path.join(HERE, "工作台v0.8时间轴.html")
 FILE_URL = "file:///" + HTML_PATH.replace("\\", "/")
 
 # ---------------------------------------------------------------------------
-# 日志 tee（2026-08-24 验收准备增强）：所有 print 同时落 logs/app.log ——
-# 验收/排查不再依赖 start.bat 的 cmd 黑窗口（一最小化/关闭就丢日志）。
-# 纯 tee：窗口照样显示，文件留底；失败静默（绝不影响启动）。
+# 日志 fd 级别重定向（2026-08-24 验收准备 v2）：所有 print 落 logs/app.log ——
+# 用 os.dup2 重定向 fd 1/2 到文件，**不依赖 sys.stdout**（pywebview 启动后劫持 sys.stdout
+# 会让 v1 tee 失效，logs/app.log 变 0 字节——本次修复）。fd 级别 C 层 print 强制落文件。
+# 验收/排查：直接看 logs/app.log，不依赖 cmd 黑窗口。失败静默不影响启动。
 # ---------------------------------------------------------------------------
 LOG_DIR = os.path.join(HERE, "logs")
 try:
     os.makedirs(LOG_DIR, exist_ok=True)
-    _LOG_FILE = open(os.path.join(LOG_DIR, "app.log"), "a", encoding="utf-8")
+    _LOG_FD = os.open(os.path.join(LOG_DIR, "app.log"),
+                      os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
+    os.dup2(_LOG_FD, 1)   # stdout
+    os.dup2(_LOG_FD, 2)   # stderr
     import sys as _sys_mod
-
-    class _TeeStream:
-        def __init__(self, *streams):
-            self._streams = streams
-
-        def write(self, s):
-            for st in self._streams:
-                try:
-                    st.write(s)
-                except Exception:
-                    pass
-            return len(s)
-
-        def flush(self):
-            for st in self._streams:
-                try:
-                    st.flush()
-                except Exception:
-                    pass
-
-    _sys_mod.stdout = _TeeStream(_sys_mod.stdout, _LOG_FILE)
-    _sys_mod.stderr = _TeeStream(_sys_mod.stderr, _LOG_FILE)
+    try:
+        _sys_mod.stdout.reconfigure(line_buffering=True)
+        _sys_mod.stderr.reconfigure(line_buffering=True)
+    except Exception:
+        pass
 except Exception:
     pass
 
