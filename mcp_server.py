@@ -128,6 +128,34 @@ def submit_intents(intents: list, meta: dict = None) -> str:
         return json.dumps(api.submit_intents(intents, meta), ensure_ascii=False, indent=2)
 
 
+# ---------- M7-7b D5 最小任务队列（异步入口） ----------
+@mcp.tool()
+def get_task_status(task_id: str) -> str:
+    """查询后台任务状态（异步转写/导入提交后轮询用）。
+    返回 {ok, task_id, status: running|done|error, result, error}。"""
+    api = _get_api()
+    return json.dumps(api.get_task_status(task_id), ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
+def submit_transcribe(path: str, language: str = "auto", model_size: str = "small", style: dict = None) -> str:
+    """异步转写音频/视频为字幕（Whisper CPU 推理慢，走后台不阻塞）。
+    path: 媒体文件绝对路径；language: auto/zh/en/ja/ko...；model_size: tiny/small/base。
+    立即返回 task_id，轮询 get_task_status；完成后 result 含字幕段信息。"""
+    api = _get_api()
+    with _WRITE_LOCK:
+        return json.dumps(api.submit_transcribe(path, language, model_size, style), ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
+def submit_import_media(paths: list) -> str:
+    """异步导入素材（复制文件+抽缩略图在后台，不阻塞）。
+    paths: 本地文件绝对路径列表。立即返回 task_id，轮询 get_task_status。"""
+    api = _get_api()
+    with _WRITE_LOCK:
+        return json.dumps(api.submit_import_media(paths), ensure_ascii=False, indent=2)
+
+
 @mcp.tool()
 def import_media_by_paths(paths: list) -> str:
     """按文件路径直接把素材复制进工具素材库（无需弹窗，AI 专用）。

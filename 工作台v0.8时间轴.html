@@ -2970,6 +2970,21 @@ function bindEvents() {
     } catch (e) { /* v0：后端未就绪保持占位文案 */ }
   }
 
+  // M7-7b：后台任务轮询基础设施（异步转写/导入提交后轮询状态；done 回传 result，error 回传失败）。
+  function pollTask(taskId, onDone, onError, intervalMs) {
+    const iv = intervalMs || 1000;
+    const timer = setInterval(() => {
+      if (!window.pywebview || !pywebview.api || !pywebview.api.get_task_status) {
+        clearInterval(timer); onError && onError("get_task_status 不可用"); return;
+      }
+      pywebview.api.get_task_status(taskId).then(r => {
+        if (!r || !r.ok) { clearInterval(timer); onError && onError(r); return; }
+        if (r.status === "done") { clearInterval(timer); onDone && onDone(r.result); }
+        else if (r.status === "error") { clearInterval(timer); onError && onError(r); }
+      }).catch(e => { clearInterval(timer); onError && onError(e); });
+    }, iv);
+  }
+
   // ---- 贴纸面板：新建轨 / 选图 / 添加到播放头 ----
   $("stAddTrack").addEventListener("click", () => call("add_sticker_track").then(r => { if (r && r.ok) refresh(); }));
   $("stPick").addEventListener("click", () => {

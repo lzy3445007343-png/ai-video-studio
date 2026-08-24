@@ -1540,6 +1540,41 @@ def _track_exists(draft, track_type):
     return False
 
 
+# ---------- M7-7b D5 最小任务队列（threading + task_id + 状态登记） ----------
+# 长任务（转写/导入/peaks）后台线程执行，js_api 只提交返回 task_id，前端轮询 get_task_status。
+# 不阻塞 UI 与 MCP 通道；失败状态登记 error，由调用方决定重试/回退同步。
+_TASKS = {}
+_TASK_LOCK = threading.Lock()
+_TASK_SEQ = [0]
+
+
+def _submit_task(fn, *args, **kwargs):
+    """提交后台任务，立即返回 task_id。fn 在 daemon 线程执行，状态登记 _TASKS。"""
+    with _TASK_LOCK:
+        _TASK_SEQ[0] += 1
+        task_id = "task_%d" % _TASK_SEQ[0]
+        _TASKS[task_id] = {"status": "running", "created_at": time.time(),
+                           "result": None, "error": None}
+
+    def _runner():
+        try:
+            result = fn(*args, **kwargs)
+            with _TASK_LOCK:
+                t = _TASKS.get(task_id)
+                if t:
+                    t["status"] = "done"
+                    t["result"] = result
+        except Exception as e:
+            with _TASK_LOCK:
+                t = _TASKS.get(task_id)
+                if t:
+                    t["status"] = "error"
+                    t["error"] = repr(e)
+
+    threading.Thread(target=_runner, daemon=True).start()
+    return task_id
+
+
 # ---- Effect Registry（Effect DSL 双 adapter：预览 css + 导出 ffmpeg，读同一份 params 规格）----
 # 单一真源：项目根目录 effects.json。main.py 启动时加载，生成 EFFECT_REGISTRY（函数）和 EFFECT_META（自描述）。
 # 新增/修改特效只需改 effects.json；预览 css 适配器仍需在 effects.js 同步镜像（下一阶段可也 JSON 化）。
@@ -3136,6 +3171,28 @@ class Api:
                 pass
             return {"ok": False, "error": "意图执行中断（已整体回滚）: %s" % e,
                     "plan": plan, "applied": applied}
+
+    # ---------- M7-7b D5 最小任务队列（异步入口 + 状态查询） ----------
+    def get_task_status(self, task_id):
+        """查询后台任务状态：{status: running|done|error, result, error}。前端轮询用。"""
+        with _TASK_LOCK:
+            t = _TASKS.get(task_id)
+            if t is None:
+                return {"ok": False, "error": "未知任务 %s" % task_id}
+            return {"ok": True, "task_id": task_id, "status": t["status"],
+                    "result": t["result"], "error": t["error"]}
+
+    def submit_transcribe(self, path, language="auto", model_size="small", style=None):
+        """异步转写：立即返回 task_id（轮询 get_task_status），不阻塞 UI/MCP。
+        后台跑 transcribe_media（Whisper CPU 推理慢，10 分钟音频可能几十秒~几分钟）。"""
+        if not path or not isinstance(path, str) or not os.path.isfile(path):
+            return {"ok": False, "error": "媒体文件不存在：%s" % path}
+        task_id = _submit_task(self.transcribe_media, path, language, model_size, style)
+        return {"ok": True, "task_id": task_id, "hint": "轮询 get_task_status 查进度"}
+
+    def submit_import_media(self, paths):
+        """异步导入素材：立即返回 task_id（复制文件+抽缩略图在后台，不阻塞）。"""
+        return {"ok": True, "task_id": _submit_task(self.import_media_by_paths, paths)}
 
     def undo(self, selection=None):
         """撤销上一步：Command 栈弹栈还原（人与 AI 的编辑都记录在同一份历史里）。
