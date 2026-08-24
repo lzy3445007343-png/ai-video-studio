@@ -32,6 +32,7 @@ import functools
 import types
 from doc_protocol.schema import validate_document, load_document as _load_document_proto
 from plugin.plugin import PluginManager, builtin_effects_manifest
+from presets.preset import load_presets as _load_presets, get_presets as _get_presets, plan_preset as _plan_preset
 # 写操作文件锁：防止桌面进程和 MCP 进程同时写 draft_state.json 导致数据互踩
 try:
     import portalocker
@@ -1526,6 +1527,18 @@ def _replace_seg_by_id(draft, seg_id, new_seg):
                 return
 
 
+def _track_exists(draft, track_type):
+    """M6-6c Preset ensure_track 辅助：该类型轨道是否已存在。
+    video/main 主视频轨恒定存在；text/sticker/effect 查 overlay 池；audio 查 audio 数组。"""
+    if track_type in ("video", "main"):
+        return True
+    if track_type == "audio":
+        return bool(draft.get("audio") or [])
+    if track_type in ("text", "sticker", "effect"):
+        return any(t.get("type") == track_type for t in (draft.get("overlay") or []) if isinstance(t, dict))
+    return False
+
+
 # ---- Effect Registry（Effect DSL 双 adapter：预览 css + 导出 ffmpeg，读同一份 params 规格）----
 # 单一真源：项目根目录 effects.json。main.py 启动时加载，生成 EFFECT_REGISTRY（函数）和 EFFECT_META（自描述）。
 # 新增/修改特效只需改 effects.json；预览 css 适配器仍需在 effects.js 同步镜像（下一阶段可也 JSON 化）。
@@ -2999,6 +3012,58 @@ class Api:
         self.state.setdefault("metadata", {})
         self.state["metadata"]["updated_at"] = now
         return self.state
+
+    # ---------- M6-6c Preset v0（模板库：一键排版，事务包批） ----------
+    def get_presets(self):
+        """模板库目录（前端「模板」弹窗填充用）：[{id, label, desc, categories, kind}]。"""
+        return {"ok": True, "presets": _get_presets()}
+
+    def apply_preset(self, preset_id, args=None, meta=None):
+        """Preset v0：按模板一键排版，undo 一次=整批回滚。
+
+        preset_id: presets/{id}.json；args: 模板变量 dict（如 cues/subtitle_style/text）。
+        事务语义：begin → 逐 step 经 execute（事务内只累计不入栈）→ commit（合并一条事务
+        Command）。不走外层 execute 包装（避免嵌套双录）。
+        步级保护：ensure_track 步在轨道已存在时跳过；{{var}} 缺失（填充后残留）自动跳过该步。
+        """
+        presets = _load_presets()
+        preset = presets.get(preset_id)
+        if not preset:
+            return {"ok": False, "error": "未知模板 %s（可用：%s）" % (preset_id, ", ".join(sorted(presets)) or "无")}
+        steps = _plan_preset(preset, args)
+        if not steps:
+            return {"ok": False, "error": "模板 %s 没有可执行步骤" % preset_id}
+        if Api.cmd_mgr is None:
+            return {"ok": False, "error": "命令系统未就绪"}
+        self._reload()
+        m = {"actor": (meta or {}).get("actor") or "preset",
+             "reason": "preset:" + preset_id, "reversible": True}
+        r = self.begin_transaction("preset:" + preset_id, m)
+        if not r.get("ok"):
+            return {"ok": False, "error": r.get("error", "事务开启失败")}
+        applied, skipped = [], []
+        try:
+            for step in steps:
+                if step.get("ensure_track") and _track_exists(self.draft, step["ensure_track"]):
+                    skipped.append(step["cmd"] + "(轨已存在)")
+                    continue
+                if "{{" in json.dumps(step["args"], ensure_ascii=False):
+                    skipped.append(step["cmd"] + "(缺变量)")
+                    continue
+                res = self.execute(step["cmd"], step["args"], m)
+                if isinstance(res, dict) and res.get("ok") is False:
+                    raise Exception("%s: %s" % (step["cmd"], res.get("error")))
+                applied.append(step["cmd"])
+            cr = self.commit_transaction()
+            return {"ok": bool(cr.get("ok")), "plan": steps, "applied": applied,
+                    "skipped": skipped, "count": len(applied), "tx": cr}
+        except Exception as e:
+            try:
+                self.abort_transaction()
+            except Exception:
+                pass
+            return {"ok": False, "error": "模板执行中断（已整体回滚）: %s" % e,
+                    "plan": steps, "applied": applied, "skipped": skipped}
 
     def undo(self, selection=None):
         """撤销上一步：Command 栈弹栈还原（人与 AI 的编辑都记录在同一份历史里）。

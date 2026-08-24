@@ -1,0 +1,12 @@
+{
+  "id": "xhs",
+  "label": "小红书图文",
+  "kind": "layout",
+  "categories": ["xhs", "image"],
+  "desc": "小红书图文排版：3:4 画布 + 文字轨（适合图文笔记封面/竖版图文）",
+  "defaults": {},
+  "steps": [
+    {"cmd": "set_canvas", "args": {"ratio": "3:4"}},
+    {"cmd": "add_text_track", "args": {}, "ensure_track": "text"}
+  ]
+}

@@ -1,0 +1,15 @@
+{
+  "id": "koubo",
+  "label": "口播精剪",
+  "kind": "layout",
+  "categories": ["vlog", "speech"],
+  "desc": "口播视频标准排版：16:9 画布 + 文字轨 + 字幕（适合口播/书单号/知识类）",
+  "defaults": {
+    "subtitle_style": {"font_size": 60, "color": "#FFFFFF", "position": "bottom"}
+  },
+  "steps": [
+    {"cmd": "set_canvas", "args": {"ratio": "16:9"}},
+    {"cmd": "add_text_track", "args": {}, "ensure_track": "text"},
+    {"cmd": "add_subtitles", "args": {"track_index": 0, "cues": "{{cues}}", "style": "{{subtitle_style}}"}, "optional": true}
+  ]
+}

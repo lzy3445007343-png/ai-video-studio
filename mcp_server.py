@@ -93,6 +93,26 @@ def save_document() -> str:
         return json.dumps(api.save_document(), ensure_ascii=False, indent=2)
 
 
+# ---------- M6-6c Preset v0（模板库：一键排版） ----------
+@mcp.tool()
+def get_presets() -> str:
+    """列出模板库目录（有哪些排版模板：口播精剪/小红书图文/基础文字排版等）。
+    返回 [{id, label, desc, categories, kind}]。AI 据此选模板传给 preset_apply。"""
+    api = _get_api()
+    return json.dumps(api.get_presets(), ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
+def preset_apply(preset_id: str, args: dict = None) -> str:
+    """按模板一键排版（事务包批：undo 一次整批回滚）。
+    preset_id: get_presets 返回的 id（koubo/xhs/text_base）；args: 模板变量 dict
+    （如 koubo 的 cues=[{text,start(秒),duration(秒)}]、text_base 的 text）。
+    返回 {ok, plan(命令计划), applied, skipped, count}。"""
+    api = _get_api()
+    with _WRITE_LOCK:
+        return json.dumps(api.apply_preset(preset_id, args), ensure_ascii=False, indent=2)
+
+
 @mcp.tool()
 def import_media_by_paths(paths: list) -> str:
     """按文件路径直接把素材复制进工具素材库（无需弹窗，AI 专用）。

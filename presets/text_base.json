@@ -1,0 +1,15 @@
+{
+  "id": "text_base",
+  "label": "基础文字排版",
+  "kind": "layout",
+  "categories": ["text"],
+  "desc": "基础文字排版：建文字轨 + 加一段文字（适合任何需要文字说明的视频）",
+  "defaults": {
+    "text": "点击修改文字",
+    "duration_s": 3
+  },
+  "steps": [
+    {"cmd": "add_text_track", "args": {}, "ensure_track": "text"},
+    {"cmd": "add_subtitles", "args": {"track_index": 0, "cues": [{"start": 0, "duration": "{{duration_s}}", "text": "{{text}}"}], "style": {}}}
+  ]
+}
