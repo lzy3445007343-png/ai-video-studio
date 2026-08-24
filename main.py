@@ -65,26 +65,28 @@ HTML_PATH = os.path.join(HERE, "工作台v0.8时间轴.html")
 FILE_URL = "file:///" + HTML_PATH.replace("\\", "/")
 
 # ---------------------------------------------------------------------------
-# 日志 fd 级别重定向（2026-08-24 验收准备 v2）：所有 print 落 logs/app.log ——
-# 用 os.dup2 重定向 fd 1/2 到文件，**不依赖 sys.stdout**（pywebview 启动后劫持 sys.stdout
-# 会让 v1 tee 失效，logs/app.log 变 0 字节——本次修复）。fd 级别 C 层 print 强制落文件。
-# 验收/排查：直接看 logs/app.log，不依赖 cmd 黑窗口。失败静默不影响启动。
+# 日志 fd 级别重定向（2026-08-24 验收准备 v2）—— 只在 GUI 主进程执行！
+# 关键：mcp_server.py 会 import main，若模块级执行 fd 重定向，会把 MCP stdio 协议
+# （走 stdout 的 JSON-RPC 通道）劫持到 logs/app.log → MCP 客户端读不到响应 →
+# -32001 Request timed out（2026-08-24 用户重连 WB 后真机撞到，日志文件里躺着
+# jsonrpc 握手帧为铁证）。所以必须包 __main__，import 时跳过。
 # ---------------------------------------------------------------------------
-LOG_DIR = os.path.join(HERE, "logs")
-try:
-    os.makedirs(LOG_DIR, exist_ok=True)
-    _LOG_FD = os.open(os.path.join(LOG_DIR, "app.log"),
-                      os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
-    os.dup2(_LOG_FD, 1)   # stdout
-    os.dup2(_LOG_FD, 2)   # stderr
-    import sys as _sys_mod
+if __name__ == "__main__":
+    LOG_DIR = os.path.join(HERE, "logs")
     try:
-        _sys_mod.stdout.reconfigure(line_buffering=True)
-        _sys_mod.stderr.reconfigure(line_buffering=True)
+        os.makedirs(LOG_DIR, exist_ok=True)
+        _LOG_FD = os.open(os.path.join(LOG_DIR, "app.log"),
+                          os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
+        os.dup2(_LOG_FD, 1)   # stdout
+        os.dup2(_LOG_FD, 2)   # stderr
+        import sys as _sys_mod
+        try:
+            _sys_mod.stdout.reconfigure(line_buffering=True)
+            _sys_mod.stderr.reconfigure(line_buffering=True)
+        except Exception:
+            pass
     except Exception:
         pass
-except Exception:
-    pass
 
 # ---------------------------------------------------------------------------
 # 本地 HTTP 服务器：把项目目录（含 assets 素材）通过 http://127.0.0.1:PORT 暴露。
