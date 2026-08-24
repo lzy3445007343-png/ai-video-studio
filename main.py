@@ -31,6 +31,7 @@ import re
 import functools
 import types
 from doc_protocol.schema import validate_document, load_document as _load_document_proto
+from plugin.plugin import PluginManager, builtin_effects_manifest
 # 写操作文件锁：防止桌面进程和 MCP 进程同时写 draft_state.json 导致数据互踩
 try:
     import portalocker
@@ -1556,7 +1557,15 @@ def _load_effects():
     registry = {}
     meta = {}
     for key, spec in (data.get("effects") or {}).items():
-        meta[key] = {"label": spec.get("label", key), "params": spec.get("params", {})}
+        # M6-6b：meta 增加 css_expr/css_when —— 前端 Effects.compile 现场编译 css adapter 的数据源
+        # （消灭 effects.js 人工镜像：新增特效只改 effects.json，预览/面板/导出三处自动生效）。
+        css = (spec.get("filters") or {}).get("css") or {}
+        meta[key] = {
+            "label": spec.get("label", key),
+            "params": spec.get("params", {}),
+            "css_expr": css.get("expr", ""),
+            "css_when": css.get("when", "True"),
+        }
         filters = spec.get("filters", {})
         registry[key] = {
             "css": _build_effect_filter(filters.get("css", {})),
@@ -1565,6 +1574,11 @@ def _load_effects():
     return registry, meta
 
 EFFECT_REGISTRY, EFFECT_META = _load_effects()
+
+# M6-6b Plugin v0：把 effects 注册表包装成内置 effects 插件，注册进类级 PluginManager。
+# masks/commands/exporters 为空位，为 M7 Intent exporters 与第三方特效包留注册点。
+PLUGIN_MANAGER = PluginManager()
+PLUGIN_MANAGER.register(builtin_effects_manifest(EFFECT_REGISTRY, EFFECT_META))
 
 def _effect_keyframes_to_anims(keyframes):
     """5c（R18 并入统一 channel）：把扁平特效关键帧 [{param,time(us),value,easing}]

@@ -1,18 +1,20 @@
 "use strict";
 
 /* =====================================================================
- * effects.js —— 特效渲染纯函数模块（阶段 C，新文件）
+ * effects.js —— 特效渲染纯函数模块（阶段 C，新文件；M6-6b 起 JSON 化）
  *
  * 职责（方案 §3 阶段 C）：把"特效段 → 预览滤镜"的计算收成纯函数，
  * renderer.js 只调用、不内联写滤镜逻辑，守住
  *   Timeline Kernel → Playback Graph → Renderer 单向（特效只是 Graph 上的 Node）。
  *
- * 与 main.py EFFECT_REGISTRY（§2.3）镜像同一份 key + 语义：
- *   css adapter = 预览（本文件 preview()）；ffmpeg adapter = 导出（main.py）。
- * 改一个特效类型只动两处：本文件 Effects[].preview + main.py EFFECT_REGISTRY[].ffmpeg。
+ * 单一真源（M6-6b）：effects.json 的 filters.css 模板（{expr, when}）。
+ *   后端 _load_effects 生成 EFFECT_META（含 css_expr/css_when），前端启动时经
+ *   get_effect_registry() 拉取并 Effects.compile(meta) 现场编译 preview 函数——
+ *   新增/修改特效只改 effects.json 一处，预览/面板/导出三处自动生效，不再人工镜像。
+ *   ffmpeg adapter = 导出（main.py EFFECT_REGISTRY[].ffmpeg），读同一份模板。
  *
  * 浏览器用法：<script src="effects.js"> → 全局 Effects / computeEffectStyle
- * Node 用法（对拍脚本）：require("effects.js").computeEffectStyle
+ * Node 用法（对拍脚本）：require("effects.js").compileEffectPreviews
  * ===================================================================== */
 
 // 数值兜底（与 playback-graph.js _num 同语义）
@@ -21,22 +23,68 @@ function _num(v, dflt) {
   return v;
 }
 
-// 每个 effect_type 声明它的「预览端能力」(css adapter)。
-// 规则：产生「无视觉变化」(identity) 时返回 null —— 不叠无效滤镜，
-// 与 Python 端「无操作返回空串」语义对齐（避免 filter:none 抖动 / 冗余计算）。
-// 注：opacity 不是 CSS filter（它是 el.style.opacity），故以 {opacity} 返回，
-// computeEffectStyle 区分处理（filter 拼接 vs opacity 相乘）。
-const Effects = {
-  blur:       { preview(p){ const r=_num(p.radius,0); return r>0 ? { filter:`blur(${r}px)` } : null; } },
-  brightness: { preview(p){ const v=_num(p.value,1); return v!==1 ? { filter:`brightness(${v})` } : null; } },
-  contrast:   { preview(p){ const v=_num(p.value,1); return v!==1 ? { filter:`contrast(${v})` } : null; } },
-  saturate:   { preview(p){ const v=_num(p.value,1); return v!==1 ? { filter:`saturate(${v})` } : null; } },
-  hue_rotate: { preview(p){ const v=_num(p.value,0); return v!==0 ? { filter:`hue-rotate(${v}deg)` } : null; } },
-  grayscale:  { preview(p){ const v=_num(p.value,0); return v!==0 ? { filter:`grayscale(${v})` } : null; } },
-  sepia:      { preview(p){ const v=_num(p.value,0); return v!==0 ? { filter:`sepia(${v})` } : null; } },
-  invert:     { preview(p){ const v=_num(p.value,0); return v!==0 ? { filter:`invert(${v})` } : null; } },
-  opacity:    { preview(p){ const v=_num(p.value,1); return v!==1 ? { opacity:v } : null; } },
-  // 后续 glow/vintage/film/shake/zoom/rgb 只加一条；v2 加 webgl/canvas adapter
+// —— M6-6b：Effects 表由 effects.json 现场编译，不再人工镜像 ——
+// 单一真源 = filters.css 模板。编译语义：
+//   when（Python 风格布尔表达式，如 "radius > 0"）为 false → preview 返回 null
+//     （identity，不叠无效滤镜，与 Python 端「无操作返回空串」语义对齐）；
+//   expr 为 "blur({radius}px)"（CSS filter 函数）→ 输出 {filter: "blur(5px)"}；
+//   expr 为 "opacity:{value}"（含冒号 = style 属性声明）→ 输出 {opacity: 0.5}
+//     （opacity 不是 CSS filter，是 el.style.opacity，computeEffectStyle 区分处理）。
+let Effects = {};
+
+// Python 风格布尔表达式 → JS 求值（参数名来自 effects.json 的 params 声明，白名单安全）。
+// 缺参时用 params 默认值补全（保证 when 里的参数总有定义，identity 判断不因 ReferenceError 失效）。
+// 支持 > < >= <= != == and or 与数字/参数引用；求值失败保守返回 true（不拦渲染）。
+function _evalWhen(when, p, paramDefs) {
+  try {
+    const jsExpr = String(when)
+      .replace(/\band\b/g, "&&")
+      .replace(/\bor\b/g, "||")
+      .replace(/!=/g, "!==")
+      .replace(/\bTrue\b/g, "true")
+      .replace(/\bFalse\b/g, "false");
+    const keys = Object.keys(paramDefs || {}).filter((k) => /^\w+$/.test(k));
+    const fn = new Function(...keys, "return (" + jsExpr + ");");
+    return !!fn(...keys.map((k) => _num(p[k], (paramDefs[k] && paramDefs[k].default) || 0)));
+  } catch (e) {
+    return true;
+  }
+}
+
+// 由 effects.json 的 css 模板编译单个 preview 函数。
+function _compilePreview(cssExpr, cssWhen, paramDefs) {
+  return function (p) {
+    const params = p || {};
+    if (cssWhen && !_evalWhen(cssWhen, params, paramDefs)) return null;   // identity → 不叠滤镜
+    const s = String(cssExpr).replace(/\{(\w+)\}/g, (m, k) => {
+      const dflt = (paramDefs && paramDefs[k]) ? paramDefs[k].default : 0;
+      return String(_num(params[k], dflt));
+    });
+    const style = /^([A-Za-z-]+)\s*:\s*(.*)$/.exec(s);
+    if (style) {
+      const out = {};
+      const v = style[2];
+      out[style[1]] = /^-?\d+(\.\d+)?$/.test(v) ? Number(v) : v;   // 数字保持 number（opacity 相乘）
+      return out;
+    }
+    return { filter: s };   // blur(5px) 等 CSS filter 函数
+  };
+}
+
+// 从 EFFECT_META 编译整表：{key: {preview}}。Node 对拍/测试入口。
+function compileEffectPreviews(meta) {
+  const out = {};
+  for (const key in (meta || {})) {
+    const e = meta[key] || {};
+    out[key] = { preview: _compilePreview(e.css_expr, e.css_when, e.params) };
+  }
+  return out;
+}
+
+// 启动时由 HTML 调 Effects.compile(meta) 填充（保持 Effects 全局引用不变，computeEffectStyle 无需改）。
+Effects.compile = function (meta) {
+  const compiled = compileEffectPreviews(meta);
+  for (const k in compiled) Effects[k] = compiled[k];
 };
 
 // 关键帧插值（线性；与 transform 通道同源，统一走 seg['animations'][path]）。
@@ -142,5 +190,5 @@ function computeEffectStyle(effectNodes, playheadUs, layerByKey) {
 
 // 对拍脚本 / Node 消费
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { Effects, computeEffectStyle, effectParamAt };
+  module.exports = { Effects, computeEffectStyle, effectParamAt, compileEffectPreviews, _compilePreview };
 }

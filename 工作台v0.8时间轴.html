@@ -1008,7 +1008,7 @@ function renderMedia(s) {
     _mediaSig = "";   // 切到特效 → 下次回媒体/音频/文本时强制重建
     // 懒加载保险：特效注册表是启动异步从后端拉的；若此时尚未回填（时序/失败），点开特效 tab 补拉一次
     if (!Store.state.effects || !Object.keys(Store.state.effects).length) {
-      call("get_effect_registry").then(r => { if (r && r.ok) Store.set({ effects: r.meta }); });
+      call("get_effect_registry").then(r => { if (r && r.ok) { Store.set({ effects: r.meta }); if (window.Effects) Effects.compile(r.meta); } });
     }
     renderEffectLibrary(s, $("mediaList")); return;
   }
@@ -3376,10 +3376,10 @@ function boot() {
   // 先拿本地 HTTP 服务器地址，素材才能走 http（WebView2 下 video/audio 不能读 file://）
   call("get_server_url").then(url => {
     if (url) window.MEDIA_BASE = url;
-    try { bindEvents(); initSplit(); initHSplit("L"); initHSplit("R"); initZoomControls(); initSubscriptionSlices(); refresh(); call("get_effect_registry").then(r => { if (r && r.ok) Store.set({ effects: r.meta }); }); }
+    try { bindEvents(); initSplit(); initHSplit("L"); initHSplit("R"); initZoomControls(); initSubscriptionSlices(); refresh(); call("get_effect_registry").then(r => { if (r && r.ok) { Store.set({ effects: r.meta }); if (window.Effects) Effects.compile(r.meta); } }); }
     catch (e) { showFatal("init: " + (e && e.stack || e)); }
   }).catch(() => {
-    try { bindEvents(); initSplit(); initHSplit("L"); initHSplit("R"); initZoomControls(); initSubscriptionSlices(); refresh(); call("get_effect_registry").then(r => { if (r && r.ok) Store.set({ effects: r.meta }); }); }
+    try { bindEvents(); initSplit(); initHSplit("L"); initHSplit("R"); initZoomControls(); initSubscriptionSlices(); refresh(); call("get_effect_registry").then(r => { if (r && r.ok) { Store.set({ effects: r.meta }); if (window.Effects) Effects.compile(r.meta); } }); }
     catch (e) { showFatal("init(fallback): " + (e && e.stack || e)); }
   });
 }
