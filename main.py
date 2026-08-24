@@ -987,12 +987,21 @@ class CommandManager:
         self._tx = None         # C3：事务状态 {label, meta, saved_state, count, changed_paths, created_at}
         self._TX_TIMEOUT_S = 30 # C3 v2：事务超时保护（begin 成功但后续失败/卡住 → 超时自动 abort）
 
-    def push_snapshot(self, saved_state):
+    def push_snapshot(self, saved_state, dv=None):
         """save_state 自动快照入口（5a 兜底）：草稿变化时压一个无语义快照 Command。
-        5b 包壳后，写操作改走 execute()，此入口仅服务未包壳操作。"""
+        5b 包壳后，写操作改走 execute()，此入口仅服务未包壳操作。
+
+        2c-fix2（2026-08-24）：必须记录 dv。原实现不设 dv → snapshot 命令 dv_after 恒为 0，
+        一旦撤销栈混入 snapshot 兜底命令，undo 门控 disk_dv(N) != cmd_dv(0) 永久判"外部已改动"
+        → 纯手动操作撤销十几步后卡死（用户真机撞到，与外部 agent 无关）。
+        dv = 本次变化前 domain_version（save_state record=True 时传 state 现值，+1 得变化后）。
+        """
         cmd = Command("snapshot", "自动快照")
         cmd.saved_state = saved_state
         cmd.source = "snapshot"
+        if dv is not None:
+            cmd.dv_before = dv
+            cmd.dv_after = dv + 1   # 变化后 dv（undo 门控比对基准）
         self.history.append(cmd)
         if len(self.history) > self._cap:
             self.history.pop(0)
@@ -1158,6 +1167,8 @@ class CommandManager:
         # 自身 undo/redo 走 record=False 不 bump → 不匹配一定是外部写入）。
         disk_dv = api.state.get("domain_version", 0)
         if disk_dv != cmd.dv_after:
+            print("[UNDO-CONFLICT] disk_dv=%s cmd_dv_after=%s cmd=%s source=%s hist=%d" %
+                  (disk_dv, cmd.dv_after, cmd.cmd_id, getattr(cmd, "source", "?"), len(self.history)))
             return {"ok": False, "conflict": True,
                     "error": "外部已改动草稿，撤销会丢失他人修改（先同步/另存再撤销）",
                     "disk_dv": disk_dv, "cmd_dv": cmd.dv_after}
@@ -1183,6 +1194,8 @@ class CommandManager:
         # 2c 修复：redo 前状态 = 本命令执行前（dv_before），检测基准用 dv_before 而非 dv_after，
         # 否则与 undo 回退后的 domain_version 永远不匹配 → redo 第一次就永久冲突。
         if disk_dv != cmd.dv_before:
+            print("[REDO-CONFLICT] disk_dv=%s cmd_dv_before=%s cmd=%s source=%s redo=%d" %
+                  (disk_dv, cmd.dv_before, cmd.cmd_id, getattr(cmd, "source", "?"), len(self.redo_stack)))
             return {"ok": False, "conflict": True,
                     "error": "外部已改动草稿，重做会丢失他人修改（先同步/另存再重做）",
                     "disk_dv": disk_dv, "cmd_dv": cmd.dv_before}
@@ -1389,7 +1402,8 @@ def save_state(state, record=True):
         # 走 execute 的路径由 CommandManager.execute 统一压带语义的 Command（避免双步 / 无 cmd_id）。
         Api._op_changed = True
         if (not Api._in_execute) and Api.cmd_mgr is not None:
-            Api.cmd_mgr.push_snapshot(_clone_draft_share_peaks(Api.last_committed))   # 3c：共享 peaks 引用降快照内存
+            Api.cmd_mgr.push_snapshot(_clone_draft_share_peaks(Api.last_committed),
+                                      state.get("domain_version", 0))   # 2c-fix2：传变化前 dv，undo 门控不误判
     # A1（2026-08-19）：写盘前统一确保轨道 tid——任何途径新建的轨（_track_segs ensure /
     # _ensure_*_track / add_* 系列）落盘前自动带 tid，不依赖每个建轨点手动加。
     if isinstance(state.get("draft"), dict):
