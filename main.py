@@ -33,6 +33,7 @@ import types
 from doc_protocol.schema import validate_document, load_document as _load_document_proto
 from plugin.plugin import PluginManager, builtin_effects_manifest
 from presets.preset import load_presets as _load_presets, get_presets as _get_presets, plan_preset as _plan_preset
+from intent.intent import validate_intents as _validate_intents, plan_intents as _plan_intents
 # 写操作文件锁：防止桌面进程和 MCP 进程同时写 draft_state.json 导致数据互踩
 try:
     import portalocker
@@ -3038,9 +3039,13 @@ class Api:
         self._reload()
         m = {"actor": (meta or {}).get("actor") or "preset",
              "reason": "preset:" + preset_id, "reversible": True}
-        r = self.begin_transaction("preset:" + preset_id, m)
-        if not r.get("ok"):
-            return {"ok": False, "error": r.get("error", "事务开启失败")}
+        # 外层事务检测（M7-7a submit_intents 包批时复用外层事务，不嵌套 begin/commit；
+        # 独立调用时自开事务）。外层事务由调用方统一 commit/abort。
+        outer_tx = Api.cmd_mgr._tx is not None
+        if not outer_tx:
+            r = self.begin_transaction("preset:" + preset_id, m)
+            if not r.get("ok"):
+                return {"ok": False, "error": r.get("error", "事务开启失败")}
         applied, skipped = [], []
         try:
             for step in steps:
@@ -3054,16 +3059,83 @@ class Api:
                 if isinstance(res, dict) and res.get("ok") is False:
                     raise Exception("%s: %s" % (step["cmd"], res.get("error")))
                 applied.append(step["cmd"])
+            if outer_tx:
+                return {"ok": True, "plan": steps, "applied": applied,
+                        "skipped": skipped, "count": len(applied), "tx": "outer"}
             cr = self.commit_transaction()
             return {"ok": bool(cr.get("ok")), "plan": steps, "applied": applied,
                     "skipped": skipped, "count": len(applied), "tx": cr}
+        except Exception as e:
+            if not outer_tx:
+                try:
+                    self.abort_transaction()
+                except Exception:
+                    pass
+                err = "模板执行中断（已整体回滚）: %s" % e
+            else:
+                err = "模板执行中断（已交由外层事务回滚）: %s" % e
+            return {"ok": False, "error": err,
+                    "plan": steps, "applied": applied, "skipped": skipped}
+
+    # ---------- M7-7a Intent v0（意图提交：AI 从命令直连升级为意图层） ----------
+    def create_project(self, name=None):
+        """create-project 意图：重置为全新空工程（materials 清空 + 草稿初始化 + metadata.name）。
+        可 undo（经 execute 包装）；旧工程内容被清空（建议先 save_document 备份）。"""
+        self._reload()
+        empty_draft = {
+            "overlay": [], "main": {"segs": []}, "audio": [{"segs": []}],
+            "canvas": {"ratio": DEFAULT_CANVAS, "locked": False},
+            "_track_meta": {"overlay": [], "main": {}, "audio": [{}]},
+        }
+        _ensure_track_tids(empty_draft)
+        self.state["materials"] = []
+        self.state["draft"] = empty_draft
+        self.draft = empty_draft
+        self.state.setdefault("metadata", {})
+        self.state["metadata"]["name"] = name or "未命名工程"
+        save_state(self.state)
+        return {"ok": True, "name": self.state["metadata"]["name"]}
+
+    def submit_intents(self, intents, meta=None):
+        """M7-7a：意图批量提交（事务包批，undo 一次整批回滚）。
+
+        流程：validate（schema + 资源可达性，errors 不执行）→ plan（规则 Planner）→
+        begin → 逐计划 execute（事务内只累计）→ commit。plan 记录进审计 meta。
+        apply-preset 复用外层事务（6c 已支持 outer_tx）；execute 保留为专家模式双轨并存。
+        """
+        errors, cleaned = _validate_intents(intents, presets=_load_presets())
+        if errors:
+            return {"ok": False, "errors": errors}
+        plan = _plan_intents(cleaned)
+        if not plan:
+            return {"ok": False, "error": "没有可执行的意图"}
+        if Api.cmd_mgr is None:
+            return {"ok": False, "error": "命令系统未就绪"}
+        self._reload()
+        m = dict(meta or {})
+        m.setdefault("actor", "agent")
+        m["intents"] = cleaned          # plan 记录进审计 meta（M2 产物，AI 可复盘）
+        m["plan"] = [{"type": p["type"], "cmd": p["cmd"]} for p in plan]
+        r = self.begin_transaction("intents", m)
+        if not r.get("ok"):
+            return {"ok": False, "error": r.get("error", "事务开启失败")}
+        applied, skipped = [], []
+        try:
+            for item in plan:
+                res = self.execute(item["cmd"], item["args"], m)
+                if isinstance(res, dict) and res.get("ok") is False:
+                    raise Exception("%s: %s" % (item["cmd"], res.get("error")))
+                applied.append(item["type"])
+            cr = self.commit_transaction()
+            return {"ok": bool(cr.get("ok")), "plan": plan, "applied": applied,
+                    "count": len(applied), "tx": cr}
         except Exception as e:
             try:
                 self.abort_transaction()
             except Exception:
                 pass
-            return {"ok": False, "error": "模板执行中断（已整体回滚）: %s" % e,
-                    "plan": steps, "applied": applied, "skipped": skipped}
+            return {"ok": False, "error": "意图执行中断（已整体回滚）: %s" % e,
+                    "plan": plan, "applied": applied}
 
     def undo(self, selection=None):
         """撤销上一步：Command 栈弹栈还原（人与 AI 的编辑都记录在同一份历史里）。

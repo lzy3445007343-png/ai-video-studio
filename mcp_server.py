@@ -113,6 +113,21 @@ def preset_apply(preset_id: str, args: dict = None) -> str:
         return json.dumps(api.apply_preset(preset_id, args), ensure_ascii=False, indent=2)
 
 
+# ---------- M7-7a Intent v0（意图提交） ----------
+@mcp.tool()
+def submit_intents(intents: list, meta: dict = None) -> str:
+    """意图批量提交（事务包批：一次 undo 整批回滚，plan 入审计）。
+    intents: [{"type": "create-project"|"apply-preset"|"import-media"|"add-subtitles", "args": {...}}]。
+    - create-project: args.name 可选（工程名）
+    - apply-preset: args.preset_id 必填（get_presets 查），其余 args 为模板变量（如 cues）
+    - import-media: args.paths 必填（本地文件绝对路径，必须存在）
+    - add-subtitles: args.cues 必填（[{text,start(秒),duration(秒)}]），args.style 可选
+    返回 {ok, plan(命令计划), applied, count}；errors 非空则不执行。"""
+    api = _get_api()
+    with _WRITE_LOCK:
+        return json.dumps(api.submit_intents(intents, meta), ensure_ascii=False, indent=2)
+
+
 @mcp.tool()
 def import_media_by_paths(paths: list) -> str:
     """按文件路径直接把素材复制进工具素材库（无需弹窗，AI 专用）。
