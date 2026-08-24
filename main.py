@@ -1130,6 +1130,8 @@ class CommandManager:
         cmd.post_state = copy.deepcopy(api.draft)   # undo 前 = 该命令执行后状态，redo 用
         api.draft = copy.deepcopy(cmd.saved_state)
         api.state["draft"] = api.draft
+        api.state["domain_version"] = cmd.dv_before   # 2c 修复：undo 把领域版本回退到操作前；否则磁盘 dv 停在最后操作后，
+                                                      # 越往回的 cmd.dv_after 越小 → 第2次起永久判冲突（撤销死循环，撤销被卡死）
         save_state(api.state, record=False)   # record=False → 不 bump domain_version，门控基线不被自身 undo 破坏
         self.redo_stack.append(cmd)
         return {"ok": True, "remaining": len(self.history), "selection": cmd.selection_before}
@@ -1141,15 +1143,18 @@ class CommandManager:
             return {"ok": False, "error": "没有可重做的操作"}
         cmd = self.redo_stack[-1]
         disk_dv = api.state.get("domain_version", 0)
-        if disk_dv != cmd.dv_after:
+        # 2c 修复：redo 前状态 = 本命令执行前（dv_before），检测基准用 dv_before 而非 dv_after，
+        # 否则与 undo 回退后的 domain_version 永远不匹配 → redo 第一次就永久冲突。
+        if disk_dv != cmd.dv_before:
             return {"ok": False, "conflict": True,
                     "error": "外部已改动草稿，重做会丢失他人修改（先同步/另存再重做）",
-                    "disk_dv": disk_dv, "cmd_dv": cmd.dv_after}
+                    "disk_dv": disk_dv, "cmd_dv": cmd.dv_before}
         cmd = self.redo_stack.pop()
         if selection is not None:
             cmd.selection_before = selection  # 重做前那一刻的选中（=撤销后的选中），下次 undo 还原
         api.draft = copy.deepcopy(cmd.post_state)
         api.state["draft"] = api.draft
+        api.state["domain_version"] = cmd.dv_after   # 2c 修复：redo 把领域版本恢复到操作后
         save_state(api.state, record=False)
         self.history.append(cmd)
         if len(self.history) > self._cap:
