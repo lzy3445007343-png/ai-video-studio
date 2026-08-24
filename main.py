@@ -65,6 +65,41 @@ HTML_PATH = os.path.join(HERE, "工作台v0.8时间轴.html")
 FILE_URL = "file:///" + HTML_PATH.replace("\\", "/")
 
 # ---------------------------------------------------------------------------
+# 日志 tee（2026-08-24 验收准备增强）：所有 print 同时落 logs/app.log ——
+# 验收/排查不再依赖 start.bat 的 cmd 黑窗口（一最小化/关闭就丢日志）。
+# 纯 tee：窗口照样显示，文件留底；失败静默（绝不影响启动）。
+# ---------------------------------------------------------------------------
+LOG_DIR = os.path.join(HERE, "logs")
+try:
+    os.makedirs(LOG_DIR, exist_ok=True)
+    _LOG_FILE = open(os.path.join(LOG_DIR, "app.log"), "a", encoding="utf-8")
+    import sys as _sys_mod
+
+    class _TeeStream:
+        def __init__(self, *streams):
+            self._streams = streams
+
+        def write(self, s):
+            for st in self._streams:
+                try:
+                    st.write(s)
+                except Exception:
+                    pass
+            return len(s)
+
+        def flush(self):
+            for st in self._streams:
+                try:
+                    st.flush()
+                except Exception:
+                    pass
+
+    _sys_mod.stdout = _TeeStream(_sys_mod.stdout, _LOG_FILE)
+    _sys_mod.stderr = _TeeStream(_sys_mod.stderr, _LOG_FILE)
+except Exception:
+    pass
+
+# ---------------------------------------------------------------------------
 # 本地 HTTP 服务器：把项目目录（含 assets 素材）通过 http://127.0.0.1:PORT 暴露。
 # WebView2 不允许 file:// 文档里的 <video>/<audio> 加载本地文件（安全上下文限制），
 # 走 localhost HTTP 后视频/音频/图片都能正常加载，且支持 seek（Range 请求）。
