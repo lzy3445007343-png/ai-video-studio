@@ -64,6 +64,35 @@ def get_state() -> str:
         return json.dumps(api.get_state(), ensure_ascii=False, indent=2)
 
 
+# ---------- M6-6a Document Protocol v1（VideoDocument 协议入口） ----------
+@mcp.tool()
+def validate_document(raw: str) -> str:
+    """校验外部 VideoDocument JSON（协议三态：errors 不可修复 / warnings 有隐患 / repaired 可自动补）。
+    只读不落盘；AI 生成/改造 VideoDocument 后先调它确认 errors 为空，再 load_document。
+    参数 raw = VideoDocument JSON 字符串。返回 {ok, errors, warnings, repaired}。"""
+    api = _get_api()
+    return json.dumps(api.validate_document(raw), ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
+def load_document(raw: str) -> str:
+    """把外部 VideoDocument JSON 整体加载为当前工程（导入语义，替换当前草稿并落盘）。
+    校验失败返回 {ok:false, errors} 不落盘（不静默修复）；成功应用 repaired 并触发前端刷新。
+    参数 raw = VideoDocument JSON 字符串。返回 {ok, warnings, repaired, saved}。"""
+    api = _get_api()
+    with _WRITE_LOCK:
+        return json.dumps(api.load_document(raw), ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
+def save_document() -> str:
+    """导出当前工程的 VideoDocument 视图（完整协议 JSON：materials+draft+metadata）。
+    AI 读它回答"时间轴里有什么、某段在几秒"等结构性提问。"""
+    api = _get_api()
+    with _WRITE_LOCK:
+        return json.dumps(api.save_document(), ensure_ascii=False, indent=2)
+
+
 @mcp.tool()
 def import_media_by_paths(paths: list) -> str:
     """按文件路径直接把素材复制进工具素材库（无需弹窗，AI 专用）。

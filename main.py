@@ -30,6 +30,7 @@ import tempfile
 import re
 import functools
 import types
+from doc_protocol.schema import validate_document, load_document as _load_document_proto
 # 写操作文件锁：防止桌面进程和 MCP 进程同时写 draft_state.json 导致数据互踩
 try:
     import portalocker
@@ -891,6 +892,17 @@ def load_state():
         s.setdefault("version", 0)
         s.setdefault("domain_version", 0)   # 2c（M2）：领域改动计数（仅 record=True 时 +1），version 门控用
         s.setdefault("schemaVersion", DOCUMENT_SCHEMA_VERSION)
+        # M6-6a：协议层校验审计（只读不改行为；repaired 由下方 setdefault/migrate 兜底覆盖）。
+        # 非法草稿 → [DOCUMENT-INVALID] 打日志，供统一验证阶段排查「脏数据进导出」。
+        s.setdefault("metadata", {})
+        try:
+            _vres = validate_document(s)
+            if _vres["errors"]:
+                print("[DOCUMENT-INVALID] " + "; ".join(_vres["errors"][:5]))
+            if _vres["warnings"]:
+                print("[DOCUMENT-WARN] " + "; ".join(_vres["warnings"][:3]))
+        except Exception:
+            pass
         if isinstance(s["materials"], dict):
             s["materials"] = list(s["materials"].values()) if s["materials"] else []
         if not isinstance(s["materials"], list):
@@ -2931,6 +2943,48 @@ class Api:
         if Api.cmd_mgr is None:
             return {"ok": False, "error": "命令系统未就绪"}
         return Api.cmd_mgr.audit_log(limit=limit, actor=actor)
+
+    # ---------- M6-6a Document Protocol v1（VideoDocument 协议入口） ----------
+    def validate_document(self, raw_json):
+        """协议校验：AI 生成 VideoDocument JSON 后先检查（三态 errors/warnings/repaired）。
+        只读不落盘；errors 非空表示不可加载，须修正后再 load_document。"""
+        try:
+            raw = json.loads(raw_json) if isinstance(raw_json, str) else raw_json
+        except Exception as e:
+            return {"ok": False, "errors": ["JSON 解析失败: %s" % e], "warnings": [], "repaired": {}}
+        return validate_document(raw)
+
+    def load_document(self, raw_json):
+        """协议加载：把外部 VideoDocument JSON 整体替换为当前工程（导入语义）。
+        校验失败 → 返回 {ok:false, errors} 不落盘（09 验收①：非法不静默修复）；
+        成功 → 应用 repaired + 落盘 + 发布 document-changed（前端自动刷新）。
+        注意：整体替换不可 undo（record=False 不压栈）；undo 栈语义留统一验证阶段确认。"""
+        try:
+            raw = json.loads(raw_json) if isinstance(raw_json, str) else raw_json
+        except Exception as e:
+            return {"ok": False, "errors": ["JSON 解析失败: %s" % e]}
+        res = _load_document_proto(raw)
+        if not res["ok"]:
+            return {"ok": False, "errors": res["errors"], "warnings": res.get("warnings", [])}
+        doc = res["document"]
+        self._reload()   # 拿磁盘 version 基线（乐观锁比对用）+ 刷新 last_committed
+        doc["version"] = self.state.get("version", 0)
+        now = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+        doc.setdefault("metadata", {})
+        doc["metadata"]["updated_at"] = now
+        self.state = doc
+        self.draft = doc["draft"]
+        Api.last_committed = copy.deepcopy(doc["draft"])
+        saved = save_state(doc, record=False)
+        ok = (saved is True)
+        return {"ok": ok, "warnings": res["warnings"], "repaired": res["repaired"], "saved": ok}
+
+    def save_document(self):
+        """协议导出：返回当前工程的 VideoDocument 视图（AI 可读的完整协议 JSON）。"""
+        now = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+        self.state.setdefault("metadata", {})
+        self.state["metadata"]["updated_at"] = now
+        return self.state
 
     def undo(self, selection=None):
         """撤销上一步：Command 栈弹栈还原（人与 AI 的编辑都记录在同一份历史里）。
