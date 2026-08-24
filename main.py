@@ -5761,8 +5761,7 @@ def main():
         js_api=api,          # 把 Python 能力（Api）暴露给前端调用
     )
     # start：进入窗口事件循环（窗口会一直显示，直到用户关闭）
-    # [诊断] debug=True 临时开启 F12 开发者工具（排查 MP3 无声用，测完改回 webview.start()）
-    webview.start(debug=True)
+    webview.start()
 
 
 if __name__ == "__main__":

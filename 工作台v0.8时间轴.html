@@ -1229,8 +1229,7 @@ function syncPreviewVolume() {
   }
 }
 function renderAll(s) {
-  // 2026-08-20 诊断打点（GPT 评审）：任何渲染函数崩溃 → [renderAll fail] + 堆栈，不静默黑屏
-  console.log("[renderAll start]");
+  // 渲染崩溃由下方 try/catch 捕获堆栈（不静默黑屏）；诊断日志 [renderAll start] 已删（P-017，避免每 500ms 刷屏）
   try {
     renderMedia(s);
     if (!isPlaying) renderTimeline(s);   // 播放中冻结时间轴重建：OpenCut 播放时绝不重建 timeline DOM，否则每 0.5s 拆建导致闪/双播放头撕裂

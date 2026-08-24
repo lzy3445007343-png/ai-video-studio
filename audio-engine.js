@@ -59,15 +59,7 @@ function createAudioEngine(ctx) {
     return engine.ctx.currentTime - engine.playheadUs / 1e6;
   };
 
-  // ---- 时钟锚定（v1.2 审查 S2-2 修正；保留兼容，调度主路径用 _anchorNow） ----
-  // 原则：时间轴秒 T 对应的 ctx 时刻 = T + anchorOffset（由 setClips 时播放头位置决定）
-  engine.setAnchor = function (playheadUs) {
-    if (!engine.ctx) return;
-    engine.anchorOffset = engine.ctx.currentTime - playheadUs / 1e6;
-  };
-  engine.timelineToCtx = function (us) {
-    return us / 1e6 + engine.anchorOffset;
-  };
+  // 时钟锚定：实时锚定 _anchorNow() 是唯一路径（2026-08-16 根治跨段无声）；旧 setAnchor/timelineToCtx 死代码已删（P-021）
 
   // 音量关键帧实时增益：clip 有 volume 通道则按播放头局部时间插值,否则用 base gain。
   // 静音(track/seg)已在 base gain=0 表达,优先尊重(返回 0)。
