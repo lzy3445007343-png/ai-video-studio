@@ -27,9 +27,11 @@ import http.server
 import socketserver
 import threading
 import tempfile
+import gzip
 import re
 import functools
 import types
+from contextlib import contextmanager
 from doc_protocol.schema import validate_document, load_document as _load_document_proto
 from plugin.plugin import PluginManager, builtin_effects_manifest
 from presets.preset import load_presets as _load_presets, get_presets as _get_presets, plan_preset as _plan_preset
@@ -268,6 +270,14 @@ SETTINGS_PATH = os.path.join(HERE, "settings.json")
 MCP_STATE_PATH = os.path.join(HERE, "mcp_state.json")
 # 草稿 + 素材共享状态文件：人和 AI/MCP 共用同一份「真相」，前端轮询刷新即可实时看到彼此的改动
 STATE_PATH = os.path.join(HERE, "draft_state.json")
+# 共享撤销栈（⑧-A 根治）：AI(MCP 进程) 与桌面 UI 进程跨进程共用同一条撤销时间线。
+# 撤销栈原本只存各进程内存、互不打通 → AI 提交的批次桌面 Ctrl+Z 撤回不到。
+# 改为落盘：内容 = gzip(JSON(history + redo_stack + seq))，原子写（临时文件 + os.replace）。
+# 锁打在独立 .lock 文件上（避免 os.replace 让 portalocker 锁的 inode 失效），跨进程串行化读写改。
+UNDO_STACK_PATH = os.path.join(HERE, "undo_stack.json.gz")
+UNDO_STACK_LOCK = os.path.join(HERE, "undo_stack.lock")
+# 落盘截断上限：撤销/重做历史最多持久化 _PERSIST_CAP 步（内存 _cap=2000 仅理论上限，落盘以本值为准）。
+_PERSIST_CAP = 100
 
 # 扩展名 → 素材类型（前端列表用不同颜色标签）
 EXT_TYPE = {
@@ -833,6 +843,16 @@ def migrate(draft, from_version, to_version):
       3) 字段确保：_ensure_track_tids / _ensure_seg_ids / _ensure_seg_speeds / _ensure_seg_animations。
     注：_ensure_seg_src_full 不在本管线——它有 record=False 落盘副作用且归属 3b 热路径清理。
     """
+    # 防御：from_version 可能因文件污染/手工编辑变成非数字（如 "not_a_number"）；
+    # 强行当作 0（触发从旧模型迁移），避免下方 < 比较抛 TypeError 把整稿判坏（09 事故根因）。
+    try:
+        from_version = int(from_version)
+    except (TypeError, ValueError):
+        from_version = 0
+    try:
+        to_version = int(to_version)
+    except (TypeError, ValueError):
+        to_version = DOCUMENT_SCHEMA_VERSION
     # 1) 结构迁移（旧模型 → X 模型，原地替换以保住 s["draft"] 引用）
     if from_version < 1 and ("overlay" not in draft or "main" not in draft):
         migrated = _migrate_old_to_x(draft)
@@ -909,16 +929,23 @@ def load_state():
     if not os.path.exists(STATE_PATH):
         _ensure_track_tids(empty["draft"])   # A1：空草稿也要有 tid（统一不变量）
         return empty
+    s = None   # 供下方 except 判断：文件已解析出 s 则保留原稿，不丢数据
     try:
         with open(STATE_PATH, "r", encoding="utf-8") as f:
             s = json.load(f)
         s.setdefault("materials", [])
         s.setdefault("draft", {})
         draft = s["draft"]
+        # 归一化 schemaVersion：非法/非数字（如污染值 "not_a_number"）当作 0，
+        # 避免 migrate 内 < 比较抛 TypeError。写回归一化值，避免每次加载反复迁移。
         from_v = s.get("schemaVersion", 0)
+        try:
+            from_v = int(from_v)
+        except (TypeError, ValueError):
+            from_v = 0
+        s["schemaVersion"] = from_v
         s.setdefault("version", 0)
         s.setdefault("domain_version", 0)   # 2c（M2）：领域改动计数（仅 record=True 时 +1），version 门控用
-        s.setdefault("schemaVersion", DOCUMENT_SCHEMA_VERSION)
         # M6-6a：协议层校验审计（只读不改行为；repaired 由下方 setdefault/migrate 兜底覆盖）。
         # 非法草稿 → [DOCUMENT-INVALID] 打日志，供统一验证阶段排查「脏数据进导出」。
         s.setdefault("metadata", {})
@@ -937,10 +964,19 @@ def load_state():
         # M3-3a：按 schemaVersion 驱动迁移管线（结构迁移 + 轨道规范化 + 字段确保，幂等、零丢失）
         if from_v != DOCUMENT_SCHEMA_VERSION:
             print("[MIGRATE] from=%s to=%s" % (from_v, DOCUMENT_SCHEMA_VERSION))
-        migrate(draft, from_v, DOCUMENT_SCHEMA_VERSION)
+            try:
+                migrate(draft, from_v, DOCUMENT_SCHEMA_VERSION)
+                s["schemaVersion"] = DOCUMENT_SCHEMA_VERSION   # 迁移成功：标记当前版本，落盘即归一化
+            except Exception as e:
+                # 迁移异常：保留已解析原稿（含 materials/segs），不丢数据；标记当前版本避免反复迁移
+                print("[MIGRATE-FAIL] 迁移异常，保留原稿不丢数据:", repr(e))
+                s["schemaVersion"] = DOCUMENT_SCHEMA_VERSION
         return s
     except Exception:
-        return empty
+        # 损坏但已解析出 s：保留已解析状态（含 materials/segs），不丢数据；
+        # 仅当完全无法解析（s 为 None）时才退回空稿。
+        # 原 return empty(version=0) 会因 version 与磁盘真实 version 乐观锁冲突 → 写盘全失败（导入静默不动）。
+        return s if s is not None else empty
 
 
 # =====================================================================
@@ -978,16 +1014,150 @@ class Command:
     def __repr__(self):
         return "<Command %s actor=%s>" % (self.cmd_id, self.meta.get("actor", "-"))
 
+    def to_dict(self):
+        """序列化为纯 JSON 结构（saved_state/post_state 为整份草稿深拷贝，随外层 gzip 压缩）。"""
+        return {
+            "cmd_id": self.cmd_id,
+            "label": self.label,
+            "meta": self.meta,
+            "saved_state": self.saved_state,
+            "post_state": self.post_state,
+            "changed_paths": self.changed_paths,
+            "count": self.count,
+            "args": self.args,
+            "source": self.source,
+            "dv_before": self.dv_before,
+            "dv_after": self.dv_after,
+            "selection_before": self.selection_before,
+            "selection_after": self.selection_after,
+        }
+
+    @classmethod
+    def from_dict(cls, d):
+        """从 to_dict 还原（saved_state/post_state 恢复为普通 dict，撤销时 copy.deepcopy 即用）。"""
+        c = cls(d.get("cmd_id"), d.get("label"), d.get("meta"))
+        c.saved_state = d.get("saved_state")
+        c.post_state = d.get("post_state")
+        c.changed_paths = d.get("changed_paths", [])
+        c.count = d.get("count", 1)
+        c.args = d.get("args")
+        c.source = d.get("source")
+        c.dv_before = d.get("dv_before", 0)
+        c.dv_after = d.get("dv_after", 0)
+        c.selection_before = d.get("selection_before")
+        c.selection_after = d.get("selection_after")
+        return c
+
+
+def _undo_state_default(o):
+    """序列化兜底：撤销快照里若混入不可 JSON 化对象，降级为 repr，避免整条落盘失败。"""
+    try:
+        return repr(o)
+    except Exception:
+        return "<unserializable>"
+
 
 class CommandManager:
     """撤销/重做/审计统一入口。类级共享（桌面窗口与 MCP 进程共用同一份历史）。"""
 
     def __init__(self, cap=2000):
-        self.history = []       # undo 栈：Command 对象
+        self.history = []       # undo 栈：Command 对象（跨进程共享，落盘于 undo_stack.json.gz）
         self.redo_stack = []    # redo 栈
         self._cap = cap
+        self._persist_cap = _PERSIST_CAP   # 落盘截断上限（见模块常量）
+        self._stack_seq = 0     # 撤销栈落盘序号（单调递增，_resync 据此判文件是否变更）
+        self._stack_sig = None  # (mtime, size) 缓存，未变则跳过昂贵的反序列化
         self._tx = None         # C3：事务状态 {label, meta, saved_state, count, changed_paths, created_at}
         self._TX_TIMEOUT_S = 30 # C3 v2：事务超时保护（begin 成功但后续失败/卡住 → 超时自动 abort）
+
+    @contextmanager
+    def _stack_locked(self):
+        """跨进程撤销栈读写锁：持锁期间先重载磁盘最新栈，yield 让调用方改动内存，退出时原子落盘。
+        锁打在独立 .lock 文件上，避免与内容文件 os.replace 冲突（否则 portalocker 锁的是旧 inode 失效）。"""
+        lockf = None
+        try:
+            if _HAS_LOCK:
+                lockf = open(UNDO_STACK_LOCK, "a+b")
+                portalocker.lock(lockf, portalocker.LOCK_EX)
+            self._resync()
+            yield
+            self._persist()
+        finally:
+            if lockf is not None:
+                try:
+                    portalocker.unlock(lockf)
+                except Exception:
+                    pass
+                try:
+                    lockf.close()
+                except Exception:
+                    pass
+
+    def _resync(self):
+        """从磁盘重载共享撤销栈到内存。若文件自上次加载后未变（mtime+size），跳过以省去
+        本地连续编辑时的反复反序列化；跨进程场景下另一进程写入会改变 sig → 必然重载。"""
+        try:
+            if not os.path.exists(UNDO_STACK_PATH):
+                self.history = []
+                self.redo_stack = []
+                self._stack_seq = 0
+                self._stack_sig = None
+                return
+            st = os.stat(UNDO_STACK_PATH)
+            sig = (st.st_mtime, st.st_size)
+            if self._stack_sig == sig and self._stack_seq is not None:
+                return
+            with open(UNDO_STACK_PATH, "rb") as f:
+                raw = f.read()
+            data = json.loads(gzip.decompress(raw).decode("utf-8"))
+            self.history = [Command.from_dict(c) for c in data.get("history", [])]
+            self.redo_stack = [Command.from_dict(c) for c in data.get("redo_stack", [])]
+            self._stack_seq = data.get("seq", 0)
+            self._stack_sig = sig
+        except Exception as e:
+            print("[UNDO-STACK-RESYNC-FAIL] %r" % (e,))
+            self.history = []
+            self.redo_stack = []
+            self._stack_seq = 0
+            self._stack_sig = None
+
+    def _persist(self):
+        """把内存撤销栈原子写盘（临时文件 + os.replace），带单调递增 seq 供 _resync 判变更。"""
+        try:
+            if len(self.history) > self._persist_cap:
+                self.history = self.history[-self._persist_cap:]
+            if len(self.redo_stack) > self._persist_cap:
+                self.redo_stack = self.redo_stack[-self._persist_cap:]
+            self._stack_seq = (self._stack_seq or 0) + 1
+            data = {
+                "version": 1,
+                "seq": self._stack_seq,
+                "history": [c.to_dict() for c in self.history],
+                "redo_stack": [c.to_dict() for c in self.redo_stack],
+            }
+            s = json.dumps(data, ensure_ascii=False, default=_undo_state_default)
+            payload = gzip.compress(s.encode("utf-8"), 6)
+            d = os.path.dirname(UNDO_STACK_PATH)
+            fd, tmp = tempfile.mkstemp(dir=d, suffix=".ustmp")
+            try:
+                with os.fdopen(fd, "wb") as f:
+                    f.write(payload)
+                    f.flush()
+                    os.fsync(f.fileno())
+                os.replace(tmp, UNDO_STACK_PATH)
+            except Exception:
+                try:
+                    os.remove(tmp)
+                except Exception:
+                    pass
+                raise
+            try:
+                st = os.stat(UNDO_STACK_PATH)
+                self._stack_sig = (st.st_mtime, st.st_size)
+            except Exception:
+                self._stack_sig = None
+        except Exception as e:
+            print("[UNDO-STACK-PERSIST-FAIL] %r" % (e,))
 
     def push_snapshot(self, saved_state, dv=None):
         """save_state 自动快照入口（5a 兜底）：草稿变化时压一个无语义快照 Command。
@@ -1004,10 +1174,11 @@ class CommandManager:
         if dv is not None:
             cmd.dv_before = dv
             cmd.dv_after = dv + 1   # 变化后 dv（undo 门控比对基准）
-        self.history.append(cmd)
-        if len(self.history) > self._cap:
-            self.history.pop(0)
-        self.redo_stack.clear()
+        with self._stack_locked():
+            self.history.append(cmd)
+            if len(self.history) > self._cap:
+                self.history.pop(0)
+            self.redo_stack.clear()
         _append_audit({
             "ts": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()),
             "cmd_id": "snapshot", "label": "自动快照",
@@ -1065,12 +1236,11 @@ class CommandManager:
                         if p not in self._tx["changed_paths"]:
                             self._tx["changed_paths"].append(p)
             else:
-                if len(self.history) > before:
-                    self.history.pop()   # 双录防护：弹掉方法内 save_state 可能残留的 snapshot
-                self.history.append(cmd)
-                if len(self.history) > self._cap:
-                    self.history.pop(0)
-                self.redo_stack.clear()
+                with self._stack_locked():
+                    self.history.append(cmd)
+                    if len(self.history) > self._cap:
+                        self.history.pop(0)
+                    self.redo_stack.clear()
                 _append_audit({
                     "ts": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()),
                     "cmd_id": cmd_id, "label": cmd_id,
@@ -1094,6 +1264,7 @@ class CommandManager:
             "saved_state": _clone_draft_share_peaks(api.draft),   # 3c：共享 peaks 引用降快照内存
             "count": 0, "changed_paths": [], "args": [], "created_at": time.time(),
             "affected_seg_ids": set(),   # 2d：本事务真正改过的段 id 集合（abort 段级 diff 用）
+            "dv_before": api.state.get("domain_version", 0),   # 2c：事务开始前领域版本（commit 时写入 tx Command，undo/redo 门控比对基准）
         }
         return {"ok": True, "tx": True}
 
@@ -1109,10 +1280,16 @@ class CommandManager:
         cmd.count = tx["count"]
         cmd.changed_paths = tx["changed_paths"]
         cmd.args = tx["args"]
-        self.history.append(cmd)
-        if len(self.history) > self._cap:
-            self.history.pop(0)
-        self.redo_stack.clear()
+        # 2c-fix（2026-08-25）：事务 Command 必须记录 dv_before/dv_after，否则 dv_after 恒为 0，
+        # undo 门控 disk_dv(N) != cmd_dv(0) 永久判"外部已改动" → 批首整批撤销被卡死（⑧-A 实测撞到）。
+        # 与 execute()/push_snapshot() 一致：dv_before=事务前版本，dv_after=提交时磁盘当前版本。
+        cmd.dv_before = tx["dv_before"]
+        cmd.dv_after = api.state.get("domain_version", 0)
+        with self._stack_locked():
+            self.history.append(cmd)
+            if len(self.history) > self._cap:
+                self.history.pop(0)
+            self.redo_stack.clear()
         _append_audit({
             "ts": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()),
             "cmd_id": "tx:" + tx["label"], "label": tx["label"],
@@ -1152,65 +1329,74 @@ class CommandManager:
         return {"ok": True, "count": tx["count"]}
 
     def undo(self, api, selection=None):
-        """撤销：弹 Command → 恢复其 saved_state（操作前状态）。
+        """撤销：弹共享栈顶 Command → 恢复其 saved_state（操作前状态）。
         C3：若存在未完成事务，先放弃事务（不撤销事务前的历史步），用户再按一次才撤销上一步。
         2c：version 门控——若磁盘 domain_version 已 ≠ 本命令 applied 版本，说明外部进程（MCP/另一窗口）
         在本命令应用后又改过草稿，此时撤销会丢失他人改动 → 拒绝并提示冲突（R14 防护，不误吞他人工作）。
-        选中恢复——返回执行前选中快照，前端据此还原焦点；selection 参数（本次撤销前的前端选中）记为
-        本命令的「操作后选中」，供后续 redo 还原。"""
+        ⑧-A 根治：撤销栈跨进程共享（落盘 + portalocker 锁）。桌面内存栈可能为空，但磁盘栈里有 AI 批次，
+        故必须先持锁 _resync 从磁盘载入共享栈，再做空栈检查与 dv 门控——绝不能在重载前判「空栈」。"""
         if self._tx is not None:
             # 拖动/操作进行中按 Ctrl+Z → 语义=放弃未完成动作（拖一半撤销=回到拖动前）
             self._abort_tx(api)
             return {"ok": True, "aborted_tx": True, "remaining": len(self.history)}
-        if not self.history:
-            return {"ok": False, "error": "没有可撤销的操作"}
-        cmd = self.history[-1]
-        # 2c version 门控：外部改动检测（仅 record=True 的真实领域改动会 bump domain_version；
-        # 自身 undo/redo 走 record=False 不 bump → 不匹配一定是外部写入）。
-        disk_dv = api.state.get("domain_version", 0)
-        if disk_dv != cmd.dv_after:
-            print("[UNDO-CONFLICT] disk_dv=%s cmd_dv_after=%s cmd=%s source=%s hist=%d" %
-                  (disk_dv, cmd.dv_after, cmd.cmd_id, getattr(cmd, "source", "?"), len(self.history)))
-            return {"ok": False, "conflict": True,
-                    "error": "外部已改动草稿，撤销会丢失他人修改（先同步/另存再撤销）",
-                    "disk_dv": disk_dv, "cmd_dv": cmd.dv_after}
-        cmd = self.history.pop()
-        if selection is not None:
-            cmd.selection_after = selection   # 撤销前那一刻的选中（=本命令执行后的选中），redo 用
-        cmd.post_state = copy.deepcopy(api.draft)   # undo 前 = 该命令执行后状态，redo 用
-        api.draft = copy.deepcopy(cmd.saved_state)
-        api.state["draft"] = api.draft
-        api.state["domain_version"] = cmd.dv_before   # 2c 修复：undo 把领域版本回退到操作前；否则磁盘 dv 停在最后操作后，
-                                                      # 越往回的 cmd.dv_after 越小 → 第2次起永久判冲突（撤销死循环，撤销被卡死）
+        with self._stack_locked():
+            # 锁内以磁盘草稿为权威重载：dv 门控比对「真·当前磁盘 domain_version」，
+            # 且让后续 save_state 的乐观锁 version 基线正确（否则跨进程撤销会因 version 不符被拒写）。
+            api.state = load_state()
+            api.draft = api.state.get("draft")
+            if not self.history:
+                return {"ok": False, "error": "没有可撤销的操作"}
+            cmd = self.history[-1]
+            # 2c version 门控：外部改动检测（仅 record=True 的真实领域改动会 bump domain_version；
+            # 自身 undo/redo 走 record=False 不 bump → 不匹配一定是外部写入）。
+            disk_dv = api.state.get("domain_version", 0)
+            if disk_dv != cmd.dv_after:
+                print("[UNDO-CONFLICT] disk_dv=%s cmd_dv_after=%s cmd=%s source=%s hist=%d" %
+                      (disk_dv, cmd.dv_after, cmd.cmd_id, getattr(cmd, "source", "?"), len(self.history)))
+                return {"ok": False, "conflict": True,
+                        "error": "外部已改动草稿，撤销会丢失他人修改（先同步/另存再撤销）",
+                        "disk_dv": disk_dv, "cmd_dv": cmd.dv_after}
+            cmd = self.history.pop()
+            if selection is not None:
+                cmd.selection_after = selection   # 撤销前那一刻的选中（=本命令执行后的选中），redo 用
+            cmd.post_state = copy.deepcopy(api.draft)   # undo 前 = 该命令执行后状态，redo 用
+            api.draft = copy.deepcopy(cmd.saved_state)
+            api.state["draft"] = api.draft
+            api.state["domain_version"] = cmd.dv_before   # 2c 修复：undo 把领域版本回退到操作前
+            self.redo_stack.append(cmd)
         save_state(api.state, record=False)   # record=False → 不 bump domain_version，门控基线不被自身 undo 破坏
-        self.redo_stack.append(cmd)
         return {"ok": True, "remaining": len(self.history), "selection": cmd.selection_before}
 
     def redo(self, api, selection=None):
-        """重做：弹 redo 栈 → 恢复其 post_state（该命令执行后状态）。
-        2c：version 门控同样适用（外部在撤销后改过 → 拒绝）；返回操作后选中供前端还原。"""
-        if not self.redo_stack:
-            return {"ok": False, "error": "没有可重做的操作"}
-        cmd = self.redo_stack[-1]
-        disk_dv = api.state.get("domain_version", 0)
-        # 2c 修复：redo 前状态 = 本命令执行前（dv_before），检测基准用 dv_before 而非 dv_after，
-        # 否则与 undo 回退后的 domain_version 永远不匹配 → redo 第一次就永久冲突。
-        if disk_dv != cmd.dv_before:
-            print("[REDO-CONFLICT] disk_dv=%s cmd_dv_before=%s cmd=%s source=%s redo=%d" %
-                  (disk_dv, cmd.dv_before, cmd.cmd_id, getattr(cmd, "source", "?"), len(self.redo_stack)))
-            return {"ok": False, "conflict": True,
-                    "error": "外部已改动草稿，重做会丢失他人修改（先同步/另存再重做）",
-                    "disk_dv": disk_dv, "cmd_dv": cmd.dv_before}
-        cmd = self.redo_stack.pop()
-        if selection is not None:
-            cmd.selection_before = selection  # 重做前那一刻的选中（=撤销后的选中），下次 undo 还原
-        api.draft = copy.deepcopy(cmd.post_state)
-        api.state["draft"] = api.draft
-        api.state["domain_version"] = cmd.dv_after   # 2c 修复：redo 把领域版本恢复到操作后
+        """重做：弹共享栈 redo 栈 → 恢复其 post_state（该命令执行后状态）。
+        2c：version 门控同样适用（外部在撤销后改过 → 拒绝）；返回操作后选中供前端还原。
+        ⑧-A 根治：与 undo 同理，redo 栈也跨进程共享，必须先持锁 _resync 再从磁盘载入再判空。"""
+        with self._stack_locked():
+            # 锁内以磁盘草稿为权威重载（同 undo）。
+            api.state = load_state()
+            api.draft = api.state.get("draft")
+            if not self.redo_stack:
+                return {"ok": False, "error": "没有可重做的操作"}
+            cmd = self.redo_stack[-1]
+            disk_dv = api.state.get("domain_version", 0)
+            # 2c 修复：redo 前状态 = 本命令执行前（dv_before），检测基准用 dv_before 而非 dv_after，
+            # 否则与 undo 回退后的 domain_version 永远不匹配 → redo 第一次就永久冲突。
+            if disk_dv != cmd.dv_before:
+                print("[REDO-CONFLICT] disk_dv=%s cmd_dv_before=%s cmd=%s source=%s redo=%d" %
+                      (disk_dv, cmd.dv_before, cmd.cmd_id, getattr(cmd, "source", "?"), len(self.redo_stack)))
+                return {"ok": False, "conflict": True,
+                        "error": "外部已改动草稿，重做会丢失他人修改（先同步/另存再重做）",
+                        "disk_dv": disk_dv, "cmd_dv": cmd.dv_before}
+            cmd = self.redo_stack.pop()
+            if selection is not None:
+                cmd.selection_before = selection  # 重做前那一刻的选中（=撤销后的选中），下次 undo 还原
+            api.draft = copy.deepcopy(cmd.post_state)
+            api.state["draft"] = api.draft
+            api.state["domain_version"] = cmd.dv_after   # 2c 修复：redo 把领域版本恢复到操作后
+            self.history.append(cmd)
+            if len(self.history) > self._cap:
+                self.history.pop(0)
         save_state(api.state, record=False)
-        self.history.append(cmd)
-        if len(self.history) > self._cap:
-            self.history.pop(0)
         return {"ok": True, "remaining": len(self.redo_stack), "selection": cmd.selection_after}
 
     def audit_log(self, limit=100, actor=None):
@@ -3074,6 +3260,7 @@ class Api:
         if not res["ok"]:
             return {"ok": False, "errors": res["errors"], "warnings": res.get("warnings", [])}
         doc = res["document"]
+        doc["schemaVersion"] = DOCUMENT_SCHEMA_VERSION   # 协议加载强制归一化，杜绝非法 schemaVersion（如 "not_a_number"）落盘污染
         self._reload()   # 拿磁盘 version 基线（乐观锁比对用）+ 刷新 last_committed
         doc["version"] = self.state.get("version", 0)
         now = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
