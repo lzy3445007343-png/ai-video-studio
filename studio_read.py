@@ -201,7 +201,7 @@ def get_segment_detail(track_type, track_index, index, state=None):
             break
 
     # 落在这一段上的特效（effect 模型为空时返回空列表，不报错）
-    effects_on_seg = _effects_on_segment(state, track_type, track_index, index)
+    effects_on_seg = _effects_on_segment(state, track_type, track_index, index, seg.get("id"))
 
     return {
         "track_type": track_type,
@@ -221,13 +221,16 @@ def get_segment_detail(track_type, track_index, index, state=None):
     }
 
 
-def _effects_on_segment(state, track_type, track_index, index):
+def _effects_on_segment(state, track_type, track_index, index, seg_id=None):
     """从 draft.overlay[type=effect] 轨道筛出作用于该段的特效。
 
     与 get_effects / _track_segs / export / renderer 同源访问（单一真源 effects.json + overlay 轨道），
     不再读已废弃的 draft.effect 死路径。
     - target.type=="adjustment"：调整层，盖整栈 → 命中所有段。
-    - target.type=="clip"：按 target.track/ti 绑定到具体段（si 同源）。"""
+    - target.type=="clip"：
+        * 历史姿势按 target.track/ti 绑定到具体段（si 同源）；
+        * 09 M1-1b 稳定段 id 姿势按 target.seg_id 绑定 —— 查询时反查被查段自身 id，
+          不依赖易变 index，段被移动后仍精准命中（与 _seg_by_id 同源稳定引用）。"""
     draft = state.get("draft", {})
     out = []
     for tr in draft.get("overlay", []):
@@ -242,6 +245,8 @@ def _effects_on_segment(state, track_type, track_index, index):
                 out.append(e)
             elif ttype == "clip":
                 if tgt.get("track") == track_index and tgt.get("ti") == index:
+                    out.append(e)
+                elif seg_id is not None and tgt.get("seg_id") == seg_id:
                     out.append(e)
     return out
 
