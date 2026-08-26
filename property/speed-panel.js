@@ -71,6 +71,7 @@ function buildSpeedFields(c) {
           '<div class="insp-field">' +
             '<div class="insp-switch-row"><span class="lab">变音（音调随速度）</span>' +
             '<div id="spdPitch" class="insp-switch' + (pitch ? " on" : "") + '" title="变音开=慢放声音变低沉，关=保持原调"></div></div>' +
+            '<div class="empty-hint" style="margin-top:2px;color:var(--warn)">关闭变音（保持原调）：预览仍随变速变调，仅导出按剪映保调——预览与导出在音调上存在已知差异</div>' +
           '</div>' +
           '<div class="empty-hint" style="margin-top:4px">变速改变时间轴时长，预览/导出均生效</div>' +
         '</div></div>';
