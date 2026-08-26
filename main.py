@@ -700,26 +700,26 @@ def _seg_by_id(draft, segid):
 
 
 def _pop_seg_by_ref(draft, seg):
-    """按对象引用从所在轨移除段（main/overlay/audio 全查）。成功返回 True。"""
+    """按对象引用从所在轨移除段（main/overlay/audio 全查）。成功返回该轨 pop 后剩余 segs 列表，失败返回 None。"""
     main = draft.get("main")
     if isinstance(main, dict):
         for i, s in enumerate(main.get("segs", [])):
             if s is seg:
                 main["segs"].pop(i)
-                return True
+                return main["segs"]
     for tr in draft.get("overlay", []):
         if isinstance(tr, dict):
             for i, s in enumerate(tr.get("segs", [])):
                 if s is seg:
                     tr["segs"].pop(i)
-                    return True
+                    return tr["segs"]
     for a in draft.get("audio", []):
         if isinstance(a, dict):
             for i, s in enumerate(a.get("segs", [])):
                 if s is seg:
                     a["segs"].pop(i)
-                    return True
-    return False
+                    return a["segs"]
+    return None
 
 
 def _locate_seg(draft, seg):
@@ -4232,13 +4232,16 @@ class Api:
             if not isinstance(index, int) or index < 0 or index >= len(segs):
                 return {"ok": False, "error": f"tid={track_tid} 轨没有第 {index} 段（共 {len(segs)} 段）"}
             removed = segs.pop(index)
+            removed_count = len(segs)
         elif segid:
             seg = _seg_by_id(self.draft, segid)
             if seg is None:
                 return {"ok": False, "error": f"未找到段 id={segid}"}
-            removed = _pop_seg_by_ref(self.draft, seg)
-            if not removed:
+            remaining = _pop_seg_by_ref(self.draft, seg)
+            if remaining is None:
                 return {"ok": False, "error": f"段 id={segid} 定位失败"}
+            removed = seg
+            removed_count = len(remaining)
         else:
             segs = _track_segs(self.draft, track_type, track_index)
             if segs is None:
@@ -4246,12 +4249,14 @@ class Api:
             if not isinstance(index, int) or index < 0 or index >= len(segs):
                 return {"ok": False, "error": f"{track_type}[{track_index}] 没有第 {index} 段（共 {len(segs)} 段）"}
             removed = segs.pop(index)
+            removed_count = len(segs)
         # 不做重排：保留其余片段的绝对 start（与 move_segment 的自由拖动手感一致，删除不抹掉曾移动留下的空档）
         _collapse_empty_tracks(self.draft)  # 片段移走后留下的空轨自动消失
         save_state(self.state)
         return {
             "ok": True, "removed": removed,
-            "track_type": track_type, "track_index": track_index, "count": -1,
+            "track_type": track_type, "track_index": track_index,
+            "count": removed_count,
         }
 
     def remove_segments(self, keys, ripple=False):
