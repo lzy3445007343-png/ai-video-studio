@@ -1801,7 +1801,7 @@ def _submit_task(fn, *args, **kwargs):
 
 # ---- Effect Registry（Effect DSL 双 adapter：预览 css + 导出 ffmpeg，读同一份 params 规格）----
 # 单一真源：项目根目录 effects.json。main.py 启动时加载，生成 EFFECT_REGISTRY（函数）和 EFFECT_META（自描述）。
-# 新增/修改特效只需改 effects.json；预览 css 适配器仍需在 effects.js 同步镜像（下一阶段可也 JSON 化）。
+# 新增/修改特效只需改 effects.json；预览经 effects.js 的 Effects.compile(meta) 运行时从 effects.json 自动生成 css 适配器，无需手工镜像。
 # 无操作（默认参数）返回 ""，避免叠加无效滤镜——renderer/export 跳过空串即可。
 
 def _build_effect_filter(filter_spec):

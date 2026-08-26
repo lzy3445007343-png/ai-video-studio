@@ -222,31 +222,47 @@ def get_segment_detail(track_type, track_index, index, state=None):
 
 
 def _effects_on_segment(state, track_type, track_index, index):
-    """从 draft.effect 里筛出作用于该段的特效。
-    effect 模型当前为空；若未来每段特效以 material 引用形式挂在片段上，
-    这里也留了扩展点（返回匹配 target 的项）。"""
-    effs = state.get("draft", {}).get("effect", [])
-    if not effs:
-        return []
-    # 防御：effect 可能是 list[list]（按轨）或 list（扁平），统一成可迭代对象
-    flat = []
-    for e in effs:
-        if isinstance(e, list):
-            flat.extend(e)
-        else:
-            flat.append(e)
-    # 若特效带 target 标识则过滤，否则原样返回（由上层决定）
-    matched = []
-    for e in flat:
-        if isinstance(e, dict) and e.get("target") == {"track_type": track_type, "track_index": track_index, "index": index}:
-            matched.append(e)
-    return matched if matched else flat
+    """从 draft.overlay[type=effect] 轨道筛出作用于该段的特效。
+
+    与 get_effects / _track_segs / export / renderer 同源访问（单一真源 effects.json + overlay 轨道），
+    不再读已废弃的 draft.effect 死路径。
+    - target.type=="adjustment"：调整层，盖整栈 → 命中所有段。
+    - target.type=="clip"：按 target.track/ti 绑定到具体段（si 同源）。"""
+    draft = state.get("draft", {})
+    out = []
+    for tr in draft.get("overlay", []):
+        if not (isinstance(tr, dict) and tr.get("type") == "effect"):
+            continue
+        for e in tr.get("segs", []):
+            if not isinstance(e, dict):
+                continue
+            tgt = e.get("target") or {}
+            ttype = tgt.get("type")
+            if ttype == "adjustment":
+                out.append(e)
+            elif ttype == "clip":
+                if tgt.get("track") == track_index and tgt.get("ti") == index:
+                    out.append(e)
+    return out
 
 
 def get_effects(state=None):
-    """返回所有已放置特效（紧凑）。agent 查"现在挂了哪些特效"用这个。"""
+    """返回所有已放置特效（紧凑）。agent 查"现在挂了哪些特效"用这个。
+
+    单一真源：遍历 draft.overlay 中 type=="effect" 的轨道，收集其 segs
+    （与 _track_segs / export / renderer 同源访问，不再读已废弃的 draft.effect 死路径）。
+    每个段附带 _track 字段标明所属特效轨序号，便于 AI 审计/定位。"""
     state = state or load_state()
-    return state.get("draft", {}).get("effect", [])
+    draft = state.get("draft", {})
+    out = []
+    for ti, tr in enumerate(draft.get("overlay", [])):
+        if isinstance(tr, dict) and tr.get("type") == "effect":
+            for s in tr.get("segs", []):
+                if isinstance(s, dict):
+                    s = dict(s)
+                    s["_track"] = ti
+                    out.append(s)
+    return out
 
 
 # ---------------------------------------------------------------------------

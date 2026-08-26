@@ -1,5 +1,5 @@
 {
-  "_note": "特效注册表（单一真源）：在这里新增/修改特效后，main.py 启动时自动加载，前端面板与后端导出同步更新。preview 适配器目前仍需在 effects.js 镜像；ffmpeg 适配器由本文件模板生成。",
+  "_note": "特效注册表（单一真源）：在这里新增/修改特效后，main.py 启动时自动加载，前端面板与后端导出同步更新。预览 css 适配器由 effects.js 的 Effects.compile(meta) 运行时从本文件自动生成，无需手工镜像；ffmpeg 适配器由本文件模板生成。",
   "effects": {
     "blur": {
       "label": "模糊",
