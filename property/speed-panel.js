@@ -9,6 +9,35 @@
  */
 let _speedPropPanel = null;
 
+/* L2-09：Speed 两段灵敏度 scrub（对齐 OpenCut scrubRanges）——
+ * 慢放区(0.01~1) 160px/单位精细调，快放区(1~5) 48px/单位粗调，跨段自动切换消耗像素。
+ * L1-17 drag-to-scrub 未落，本卡内联实现（Pointer Lock + scrubAcrossRanges）。 */
+const SPEED_SCRUB_RANGES = [
+  { from: 0.01, to: 1, pxPerUnit: 160 },
+  { from: 1,    to: 5, pxPerUnit: 48 },
+];
+function scrubAcrossRanges(start, px, ranges) {
+  let v = start, remain = px;
+  for (let i = 0; i < ranges.length; i++) {
+    const r = ranges[i];
+    if (v < r.from) v = r.from;          // 钳到当前段下界
+    if (v > r.to) continue;              // 已在更高速段，跳过
+    const span = r.to - v;
+    const pxForSpan = span * r.pxPerUnit;
+    if (remain <= pxForSpan) {
+      v += remain / r.pxPerUnit;
+      remain = 0; break;
+    } else {
+      v = r.to; remain -= pxForSpan;      // 吃完本段，进入下一段
+    }
+  }
+  if (remain > 0) {                       // 超出最高段后按最后一段灵敏度继续消耗
+    const last = ranges[ranges.length - 1];
+    v += remain / last.pxPerUnit;
+  }
+  return Math.max(0.01, Math.min(5, v));
+}
+
 function renderSpeedTabPF() {
   const bodyEl = $("spdBody"), nameEl = $("spdSegName");
   if (!bodyEl) return;
@@ -62,7 +91,7 @@ function buildSpeedFields(c) {
           (isBatch ? '<div class="insp-batch-hint">批量应用于 ' + c.refs.length + ' 个片段</div>' : '') +
           '<div class="insp-field">' +
             '<div class="insp-field-label">速度</div>' +
-            '<div class="insp-num"><span class="ic">⏩</span>' +
+            '<div class="insp-num"><span class="ic scrub-handle" style="cursor:ew-resize" aria-label="拖动调节速度" title="按住拖动调节速度（慢放区精细、快放区粗调）">⏩</span>' +
               '<input type="text" inputmode="decimal" id="spdVal" value="' + spd + '">' +
               '<span class="unit">x</span>' +
               '<button class="reset" id="spdValReset" title="恢复默认 1x">↺</button>' +
@@ -79,7 +108,7 @@ function buildSpeedFields(c) {
     },
     write: (el, v) => {
       const inp = el.querySelector("#spdVal");
-      if (inp && document.activeElement !== inp) inp.value = Math.round(v * 100) / 100;
+      if (inp && document.activeElement !== inp && !el._scrubbing) inp.value = Math.round(v * 100) / 100;  // L2-09：scrub 拖动中不被 updateSpeedFields 覆盖
       const pitchEl = el.querySelector("#spdPitch");
       if (pitchEl) pitchEl.classList.toggle("on", !!v);
       const rst = el.querySelector("#spdValReset");                       // L2-29：批量态或=默认(1x)时隐藏 reset
@@ -106,6 +135,38 @@ function buildSpeedFields(c) {
       fld.on(inp, "keydown", e => { if (e.key === "Enter" || e.key === "Escape") { e.preventDefault(); inp.blur(); } });
       if (rst) fld.on(rst, "click", () => { inp.value = "1"; fld._draft.onInput("1"); fld._draft.onCommit(); });
       if (pitchEl) fld.on(pitchEl, "click", () => toggleSpeedPitch(pitchEl));
+      // L2-09：⏩ 图标 drag-to-scrub（Pointer Lock + 分段灵敏度，内联实现 L1-17）
+      const ic = fld.el.querySelector(".ic.scrub-handle");
+      if (ic) fld.on(ic, "pointerdown", (e) => {
+        e.preventDefault();
+        const start = parseFloat(inp.value) || 1;
+        let cum = 0, last = start, scrubbing = true;
+        fld.el._scrubbing = true;
+        const onMove = (ev) => {
+          cum += ev.movementX;
+          last = scrubAcrossRanges(start, cum, SPEED_SCRUB_RANGES);
+          inp.value = Math.round(last * 100) / 100;
+          fld._draft.onInput(String(last));            // 走既有 previewSpeed 两阶段（实时预览）
+        };
+        const finish = (commit) => {
+          document.removeEventListener("mousemove", onMove);
+          document.removeEventListener("mouseup", finish);
+          document.removeEventListener("keydown", onEsc);
+          if (document.pointerLockElement) document.exitPointerLock();
+          fld.el._scrubbing = false; scrubbing = false;
+          if (commit) { fld._draft.onCommit(); fld.update(fld._draft.value); }     // 松手提交一次 undo
+          else { inp.value = Math.round(start * 100) / 100; fld._draft.onInput(String(start)); }  // Esc 丢弃：恢复原值不落库
+        };
+        const onEsc = (ev) => { if (ev.key === "Escape") { ev.preventDefault(); finish(false); } };
+        ic.requestPointerLock();
+        document.addEventListener("mousemove", onMove);
+        document.addEventListener("mouseup", finish);
+        document.addEventListener("keydown", onEsc);
+        // 锁丢失（Esc / 切窗 / 失焦）即提交，防值卡在中间态
+        document.addEventListener("pointerlockchange", () => {
+          if (!document.pointerLockElement && scrubbing) finish(true);
+        });
+      });
     },
   });
 
