@@ -102,6 +102,27 @@ const SnapEngine = {
     if (Math.abs(angleDeg - s) <= threshold) return s;
     return angleDeg;
   },
+
+  /* —— 缩放吸附（L0-04 3.5 / L1-08，供 ResizeSession 消费）——
+   * 整数比例吸附：常见比例 0.25/0.5/0.75/1/1.25/1.5/2/3/4 在 ±threshold 内吸附到该比例。 */
+  snapScale(scale, { enabled = true, threshold = 0.04 } = {}) {
+    if (!enabled) return scale;
+    const targets = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 2, 3, 4];
+    for (const t of targets) {
+      if (Math.abs(scale - t) <= threshold) return t;
+    }
+    return scale;
+  },
+
+  /* —— 双轴缩放吸附（corner 等比 / edge 单轴）——
+   * 返回 { sx, sy }，两轴独立吸附。 */
+  snapScaleAxes(sx, sy, { enabled = true, threshold = 0.04 } = {}) {
+    if (!enabled) return { sx, sy };
+    return {
+      sx: this.snapScale(sx, { enabled, threshold }),
+      sy: this.snapScale(sy, { enabled, threshold }),
+    };
+  },
 };
 
 if (typeof window !== "undefined") window.SnapEngine = SnapEngine;

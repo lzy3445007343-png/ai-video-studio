@@ -127,16 +127,12 @@ class ResizeSession extends GestureSession {
     let nsx = t.sx, nsy = t.sy;
     if (c.h.startsWith("corner")) {
       // OpenCut corner-scale：distance 比等比缩放（scaleX/scaleY 同乘 factor）
-      // 统一屏幕坐标：anchor/initialDist 都是屏幕像素，dx/dy 不除 sc
       const dx = e.clientX - c.anchorCX, dy = e.clientY - c.anchorCY;
       const curDist = Math.sqrt(dx * dx + dy * dy) || 1;
       const factor = curDist / c.initialDist;
       nsx = Math.max(0.01, c.startSX * factor);
       nsy = Math.max(0.01, c.startSY * factor);
-      if (e.shiftKey) {   // shift 锁定比例：以 start 比例统一
-        const pr = c.startSY / (c.startSX || 1);
-        nsy = nsx * pr;
-      }
+      // Q4 分支A（用户 2026-08-27 裁定）：移除 Shift 锁比例，Shift 仅用于禁用吸附（对齐 OpenCut）
     } else {
       // OpenCut edge-scale：旋转坐标投影 → 单轴（proposedScale = projection/baseAxisHalf）
       const dx = e.clientX - c.anchorCX, dy = e.clientY - c.anchorCY;
@@ -149,6 +145,11 @@ class ResizeSession extends GestureSession {
       } else {
         nsy = Math.max(0.01, proj / ((c.startH || 1) / 2));
       }
+    }
+    // L1-08 整数比例吸附（Shift 禁用吸附时跳过）
+    if (!SnapEngine.isShiftDisabled(e)) {
+      const snapped = SnapEngine.snapScaleAxes(nsx, nsy);
+      nsx = snapped.sx; nsy = snapped.sy;
     }
     OverlayState.set(c.target.id, "transform.scaleX", Math.round(nsx * 100) / 100);
     OverlayState.set(c.target.id, "transform.scaleY", Math.round(nsy * 100) / 100);
@@ -164,6 +165,11 @@ class ResizeSession extends GestureSession {
     const nsy = OverlayState.get(c.target.id, "transform.scaleY");
     if (nsx === undefined || nsy === undefined) return;
     const seg = c.seg;
+    // L1-08：提交静态 scale 时清除已存在的 scale 动画通道，避免动画覆盖静态值
+    if (seg.animations && (seg.animations.scaleX || seg.animations.scaleY)) {
+      delete seg.animations.scaleX;
+      delete seg.animations.scaleY;
+    }
     setProperties(seg, { "transform.scaleX": nsx, "transform.scaleY": nsy });
     const k = c.key.split(":");
     const next = {
