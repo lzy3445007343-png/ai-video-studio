@@ -73,6 +73,7 @@
   .mcp-dot.on { background: #4ade80; }
 
   .assets { width: var(--assets-w, 250px); flex: none; background: var(--panel); border-right: 1px solid var(--border);
+    position: relative;
     display: flex; flex-direction: column; overflow: hidden; min-height: 0; }
   .assets .head { display: flex; align-items: center; gap: 8px; padding: 10px; border-bottom: 1px solid var(--border); }
   .assets .head .btn { background: var(--primary-dim); border: 1px solid var(--primary); padding: 5px 10px;
@@ -87,6 +88,25 @@
   .media-list-wrapper::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
   .media-list-wrapper::-webkit-scrollbar-thumb:hover { background: var(--muted); }
   .media-list { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; padding: 8px 10px; align-content: start; }
+  /* L2-15 空状态引导（复用于 L2-19 占位 tab） */
+  .media-empty { grid-column: 1 / -1; display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 8px; padding: 40px 16px; text-align: center; color: var(--muted); }
+  .media-empty .me-icon { font-size: 34px; opacity: .55; line-height: 1; }
+  .media-empty .me-title { font-size: 13px; color: var(--text); }
+  .media-empty .me-sub { font-size: 11px; }
+  .media-empty .me-btn { margin-top: 6px; padding: 7px 14px; border-radius: 8px; border: 1px solid var(--primary);
+    background: var(--primary-dim); color: #fff; font-size: 12px; cursor: pointer; }
+  .media-empty .me-btn:hover { background: var(--primary); }
+  /* L2-15 拖入高亮增强 + 导入中进度条（分支 A：无精确百分比，两态处理中） */
+  .assets.drag-over-active { background: rgba(64,150,255,.12); }
+  .assets-drag-progress { position: absolute; left: 10px; right: 10px; bottom: 10px; z-index: 60;
+    display: none; flex-direction: column; gap: 7px; padding: 10px 12px; border-radius: 10px;
+    background: var(--panel); border: 1px solid var(--border); box-shadow: 0 6px 20px rgba(0,0,0,.35); }
+  .assets-drag-progress .adp-bar { height: 4px; border-radius: 2px; background: var(--panel-2); overflow: hidden; }
+  .assets-drag-progress .adp-fill { height: 100%; width: 40%; border-radius: 2px; background: var(--primary);
+    animation: adp-slide 1.1s ease-in-out infinite; }
+  .assets-drag-progress .adp-text { font-size: 11px; color: var(--muted); }
+  @keyframes adp-slide { 0% { transform: translateX(-110%); } 100% { transform: translateX(280%); } }
   /* 素材面板固定双列网格视图（2026-08-17 移除 grid/list 切换，避免鸡肋空 UI） */
   .media-card { background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px;
     overflow: hidden; cursor: grab; position: relative; }
@@ -1201,6 +1221,21 @@ function renderMedia(s) {
   }
   _mediaSig = sig;
   const box = $("mediaList");
+  if (!list.length) {
+    const trulyEmpty = !mats.length;   // 真空库（无任何素材）vs 该类型被过滤空（如文本 tab 无文本）
+    box.innerHTML = '<div class="media-empty">'
+      + '<div class="me-icon">⤵</div>'
+      + '<div class="me-title">' + (trulyEmpty ? "将视频、照片和音频文件拖到此处" : "该类型暂无素材") + '</div>'
+      + (trulyEmpty
+          ? '<div class="me-sub">或点击按钮选择本地素材</div><button class="me-btn" id="emptyImportBtn">+ 导入素材</button>'
+          : '<div class="me-sub">换其他分类，或导入对应类型的素材</div>')
+      + '</div>';
+    if (trulyEmpty) {
+      const b = $("emptyImportBtn");
+      if (b) b.addEventListener("click", () => call("import_media").then(refresh));
+    }
+    return;
+  }
   // 固定双列网格视图（2026-08-17 已移除 grid/list 切换）
   box.innerHTML = "";
   for (const m of list) {
@@ -3154,13 +3189,30 @@ function readFileB64(file) {
     r.readAsDataURL(file);
   });
 }
+/* L2-15 导入中进度条（分支 A：drop_files 无百分比回传，做两态处理中提示，不碰 Api） */
+function setImportProgress(on) {
+  let el = $("assetsImporting");
+  if (on) {
+    if (!el) {
+      el = document.createElement("div");
+      el.id = "assetsImporting";
+      el.className = "assets-drag-progress";
+      el.innerHTML = '<div class="adp-bar"><div class="adp-fill"></div></div><div class="adp-text">正在导入…</div>';
+      const z = document.querySelector(".assets");
+      if (z) z.appendChild(el);
+    }
+    el.style.display = "flex";
+  } else if (el) {
+    el.style.display = "none";
+  }
+}
 function setupAssetDrop() {
   const zone = document.querySelector(".assets");
   if (!zone) return;
   let counter = 0;
   zone.addEventListener("dragenter", e => {
     if (!e.dataTransfer || !e.dataTransfer.types.includes("Files")) return;
-    e.preventDefault(); counter++; zone.classList.add("drag-over");
+    e.preventDefault(); counter++; zone.classList.add("drag-over", "drag-over-active");
   });
   zone.addEventListener("dragover", e => {
     if (!e.dataTransfer || !e.dataTransfer.types.includes("Files")) return;
@@ -3168,11 +3220,11 @@ function setupAssetDrop() {
   });
   zone.addEventListener("dragleave", e => {
     if (!e.dataTransfer || !e.dataTransfer.types.includes("Files")) return;
-    counter--; if (counter <= 0) { counter = 0; zone.classList.remove("drag-over"); }
+    counter--; if (counter <= 0) { counter = 0; zone.classList.remove("drag-over", "drag-over-active"); }
   });
   zone.addEventListener("drop", e => {
     if (!e.dataTransfer || !e.dataTransfer.types.includes("Files")) return;  // 内部素材拖拽(text/plain)交给时间轴，不在这里处理
-    e.preventDefault(); counter = 0; zone.classList.remove("drag-over");
+    e.preventDefault(); counter = 0; zone.classList.remove("drag-over", "drag-over-active");
     const files = [];
     for (const item of (e.dataTransfer.items || [])) {
       if (item.kind === "file") { const f = item.getAsFile(); if (f) files.push(f); }
@@ -3181,7 +3233,11 @@ function setupAssetDrop() {
     const MAX = 30 * 1024 * 1024;  // 大文件(视频/音频)走「导入素材」按钮更稳，避免 base64 大桥阻塞
     const big = files.filter(f => f.size > MAX && !f.type.startsWith("image/"));
     if (big.length) { UiFeedback.showToast({ description: "大文件请点「导入素材」按钮：" + big.map(f => f.name).join(", "), variant: "warn" }); return; }
-    Promise.all(files.map(readFileB64)).then(arr => call("drop_files", arr).then(refresh));
+    setImportProgress(true);
+    Promise.all(files.map(readFileB64))
+      .then(arr => call("drop_files", arr))
+      .then(() => { setImportProgress(false); refresh(); })
+      .catch(() => { setImportProgress(false); });
   });
 }
 
@@ -3205,7 +3261,15 @@ function bindEvents() {
     const b = $(id); if (!b) return;
     b.addEventListener("click", e => { e.stopPropagation(); clearSelection(); });
   });
-  $("importBtn").addEventListener("click", () => call("import_media").then(refresh));
+  $("importBtn").addEventListener("click", () => {
+    showImportLoading();
+    call("import_media").then(r => {
+      hideImportLoading();
+      if (r && r.ok === false) { UiFeedback.showToast({ description: "导入失败：" + (r.error || "未知错误"), variant: "error" }); return; }
+      UiFeedback.showToast({ description: "导入完成 ✅", variant: "success" });
+      refresh();
+    }).catch(e => { hideImportLoading(); UiFeedback.showToast({ description: "导入异常：" + e, variant: "error" }); });
+  });
   $("importJyBtn").addEventListener("click", () => {
     const def = "E:\\草稿\\JianyingPro Drafts\\5月2日\\draft_content.json";
     const p = prompt("粘贴剪映草稿 draft_content.json 的完整路径：", def);
