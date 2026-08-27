@@ -41,7 +41,11 @@ function renderAudioTabPF() {
   if (!_audioPropPanel) {
     _audioPropPanel = new PropertyPanel({
       host: bodyEl,
-      keyFn: (c) => c.selId + "|" + (c.isBatch ? "B" : "S") + "|" + (c.hasVolKf ? "K" : "N"),
+      keyFn: (c) => {
+        const sc = c.s;
+        const ext = (!c.isBatch && sc && sc.type === "video" && sc.source_audio_extracted) ? "R" : "N";
+        return c.selId + "|" + (c.isBatch ? "B" : "S") + "|" + (c.hasVolKf ? "K" : "N") + "|" + ext;
+      },
       buildFields: (c) => buildAudioFields(c),
       updateFields: (fields, c) => updateAudioFields(fields, c),
       onMount: (c) => { if (c.nameEl) c.nameEl.textContent = c.isBatch ? (" " + c.refs.length + " 个片段") : (" " + ((c.s && c.s.name) || "")); },
@@ -52,7 +56,7 @@ function renderAudioTabPF() {
 
 /* —— Field 树构建（结构变化时才调用；每个 Field 的 DOM 只在 mount 创建一次） —— */
 function buildAudioFields(c) {
-  const { s, isBatch, hasVolKf } = c;
+  const { s, isBatch, hasVolKf, refs } = c;
   const baseVol = (s.volume == null ? 1 : s.volume);
   const muted = !!s.muted;
   const local = Math.max(0, Math.min(Store.state.playheadUs - s.start, s.duration));
@@ -132,7 +136,32 @@ function buildAudioFields(c) {
     },
   });
 
-  return [volField, muteField];
+  const fields = [volField, muteField];
+  // L2-08：已分离音轨的视频段 → 顶部分离态 banner + Recover audio
+  const extracted = !isBatch && s.type === "video" && !!s.source_audio_extracted;
+  if (extracted) {
+    fields.unshift(new PropertyField({
+      id: "aud-recover-banner",
+      buildDom: () => {
+        const b = document.createElement("div");
+        b.className = "aud-recover-banner";
+        b.style.cssText = "border:1px solid var(--border);background:color-mix(in srgb,var(--muted) 18%,transparent);border-radius:8px;padding:10px 12px;margin-bottom:10px;font-size:13px;display:flex;align-items:center;justify-content:space-between;gap:10px";
+        const span = document.createElement("span");
+        span.textContent = "音频已分离为独立音轨";
+        const btn = document.createElement("button");
+        btn.id = "audRecoverBtn"; btn.className = "insp-gen";
+        btn.style.cssText = "background:#2a3a2a;color:#9bff9b;white-space:nowrap";
+        btn.textContent = "Recover audio";
+        b.appendChild(span); b.appendChild(btn);
+        return b;
+      },
+      bind: (fld) => {
+        const btn = fld.el.querySelector("#audRecoverBtn");
+        if (btn) fld.on(btn, "click", () => recoverAudio(refs));
+      },
+    }));
+  }
+  return fields;
 }
 
 /* —— key 相同时只更新值（Field.update，绝不重建 DOM） —— */
@@ -187,4 +216,21 @@ function toggleAudioMute(sw) {
   const done = () => refresh().catch(e => console.error("[audio] mute 刷新失败:", e));
   if (refs.length > 1) call("set_segments_props", refs.map(r => ({ segid: r.segid, props: { muted: next } }))).then(done);
   else call("set_segment_flag", refs[0].type, refs[0].ti, refs[0].idx, "muted", next, refs[0].segid).then(done);
+}
+
+// L2-08：还原音轨分离（复用既有 toggle_source_audio，与工具栏「还原音频」同后端方法对拍）
+function recoverAudio(refs) {
+  if (!refs || !refs.length) return;
+  const r = refs[0];
+  if (!r.seg || r.seg.type !== "video") return;
+  call("toggle_source_audio", r.type, r.ti, r.idx)
+    .then(res => {
+      if (res && res.ok) {
+        refresh();
+        if (typeof UiFeedback !== "undefined") UiFeedback.showToast({ description: "已还原音频", variant: "success" });
+      } else if (res && res.error) {
+        if (typeof UiFeedback !== "undefined") UiFeedback.showToast({ description: "还原失败：" + res.error, variant: "error" });
+      }
+    })
+    .catch(e => console.error("[audio] recover 失败:", e));
 }
