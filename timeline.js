@@ -500,13 +500,13 @@ function makeSeg(s, type, ti, idx, overrideLeftUs, forceDragging) {
     for (const [t, g] of byTime) {
       const tSec = Math.max(0, Math.min(durSec, t / 1e6));
       const xPx = tSec * pps();
-      kfMarkersHtml += '<div class="kf-marker" data-kftime="' + t + '" data-kids="' + g.kids.join(",") + '" data-paths="' + g.paths.join(",") + '" style="left:' + xPx + 'px"></div>';
+      kfMarkersHtml += '<div class="kf-marker" data-kftime="' + t + '" data-kids="' + g.kids.join(",") + '" data-paths="' + g.paths.join(",") + '" style="left:' + xPx + 'px">' + kfDiamondSVG("", "#fff") + '</div>';
     }
   }
   seg.innerHTML =
     fillHtml +
     kfMarkersHtml +
-    '<div class="hdr">' + headerTxt + '</div>' +
+    '<div class="hdr" title="' + esc(headerTxt) + '">' + esc(headerTxt) + '</div>' +
     speedBadge + stBadge +
     (key === Store.state.selectedKey ? '<div class="handle l"></div><div class="handle r"></div>' : '');
   return seg;
@@ -559,7 +559,7 @@ function _renderTimelineKeyed(content, labels, ruler) {
     if (showMute) { const on = !m.muted; icons += '<span class="icon' + (on ? "" : " off") + '" data-act="mute" title="静音/取消静音">' + (on ? "🔊" : "🔇") + '</span>'; }
     if (showHide) { const on = !m.hidden; icons += '<span class="icon' + (on ? "" : " off") + '" data-act="hide" title="显示/隐藏">' + (on ? "👁" : "🚫") + '</span>'; }
     icons += '<span class="icon' + (m.locked ? " off" : "") + '" data-act="lock" title="锁定/解锁轨道（锁定后禁止编辑该轨）">' + (m.locked ? "🔒" : "🔓") + '</span>';
-    label.innerHTML = icons + '<span class="name">' + tr.label + '</span>';
+    label.innerHTML = icons + '<span class="name" title="' + esc(tr.label) + '">' + esc(truncateName(tr.label)) + '</span>';
     labels.appendChild(label);
   }
   // 逐轨逐段 in-place 更新（几何 + 内容），仅签名变化者才写 DOM
@@ -666,7 +666,7 @@ function renderTimeline(s) {
     }
     // 轨道锁定（2026-08-16 对齐 OpenCut TrackLabelsPanel lock）：锁定的轨禁止编辑
     icons += '<span class="icon' + (m.locked ? " off" : "") + '" data-act="lock" title="锁定/解锁轨道（锁定后禁止编辑该轨）">' + (m.locked ? "🔒" : "🔓") + '</span>';
-    label.innerHTML = icons + '<span class="name">' + tr.label + '</span>';
+    label.innerHTML = icons + '<span class="name" title="' + esc(tr.label) + '">' + esc(truncateName(tr.label)) + '</span>';
     labels.appendChild(label);
     const track = document.createElement("div");
     track.className = "track";

@@ -72,7 +72,7 @@ function buildAudioFields(c) {
           (isBatch ? '<div class="insp-batch-hint">批量应用于 ' + c.refs.length + ' 个片段（关键帧仅单段支持）</div>' : '') +
           '<div class="insp-field">' +
             '<div class="insp-field-label">音量' +
-              (isBatch ? '' : '<button class="tog' + (hasVolKf ? " on" : "") + '" id="audVolKf" title="开/关音量关键帧（在播放头处打点）">◆</button>') +
+              (isBatch ? '' : '<button class="tog' + (hasVolKf ? " on" : "") + '" id="audVolKf" title="开/关音量关键帧（在播放头处打点）">' + kfDiamondSVG("aud-dia", "currentColor") + '</button>') +
             '</div>' +
             '<div class="insp-num"><span class="ic">🔊</span>' +
               '<input type="text" inputmode="decimal" id="audVol" value="' + db.toFixed(1) + '">' +

@@ -273,6 +273,10 @@
   .kf-kf-toggle .dia { font-size: 12px; line-height: 1; opacity: 0.35; transition: opacity 0.15s; }
   .kf-kf-toggle:hover .dia { opacity: 0.65; }
   .kf-kf-toggle.is-active .dia { color: var(--primary); opacity: 1; }
+  /* L2-28（2026-08-27）：SVG 菱形统一尺寸 */
+  .kf-diamond-svg { display: block; }
+  .kf-kf-toggle .kf-diamond-svg { width: 14px; height: 14px; }
+  .insp-field-label .tog .kf-diamond-svg { width: 14px; height: 14px; margin: auto; }
   .kf-section .kf-row .lab { flex: none; font-size: 11px; color: var(--text); min-width: 36px; }
   .kf-section .kf-row .val {
     flex: 1; min-width: 0;
@@ -312,8 +316,10 @@
   .insp-sub { font-size: 11px; color: #caa56b; margin: 8px 0 2px; }
   .kf-graph { position: relative; height: 70px; margin: 8px 0; background: var(--panel-2); border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
   .kf-graph .kf-axis { position: absolute; left: 0; right: 0; top: 50%; border-top: 1px dashed var(--border); }
-  .kf-graph .kf-diamond { position: absolute; width: 11px; height: 11px; background: var(--primary); transform: translate(-50%, -50%) rotate(45deg); cursor: pointer; border-radius: 2px; }
-  .kf-graph .kf-diamond.sel { background: #ffd24d; box-shadow: 0 0 0 2px rgba(255, 210, 77, .5); }
+  /* L2-28（2026-08-27）：面板 KF 图菱形 div→SVG（同一菱形视觉体系），选中 .sel 高亮 */
+  .kf-graph .kf-diamond { position: absolute; width: 14px; height: 14px; transform: translate(-50%, -50%); cursor: pointer; }
+  .kf-graph .kf-diamond svg { display: block; width: 14px; height: 14px; fill: var(--primary); stroke: currentColor; }
+  .kf-graph .kf-diamond.sel svg { fill: #ffd24d; stroke: #ffd24d; }
   .kf-sel { background: var(--panel-2); border: 1px solid var(--border); border-radius: 6px; padding: 8px; font-size: 11px; color: var(--text); }
   .kf-sel .hd { font-weight: 600; margin-bottom: 4px; }
   .kf-sel .row { display: flex; align-items: center; gap: 6px; margin-top: 6px; }
@@ -396,9 +402,12 @@
   .seg .handle.l { left: 0; } .seg .handle.r { right: 0; }
   .seg .handle:hover { background: rgba(61,169,255,.65); }
   /* 关键帧 marker（2026-08-20，对齐 OpenCut timeline-element.tsx KeyframeIndicator：白色菱形 8x8） */
-  .seg .kf-marker { position: absolute; top: 50%; width: 8px; height: 8px; background: #fff;
-    border: 1px solid #000; transform: translate(-50%,-50%) rotate(45deg); pointer-events: auto; z-index: 5; }
-  .seg .kf-marker.is-selected { background: var(--primary, #3da9ff); border-color: var(--primary, #3da9ff); }
+  /* L2-28（2026-08-27）：时间轴 marker 8→14px，内部 SVG 菱形（fill 跟随 .is-selected）。.seg 已用 overflow:hidden 裁切段外 */
+  .seg .kf-marker { position: absolute; top: 50%; width: 14px; height: 14px; background: transparent;
+    border: none; transform: translate(-50%,-50%); pointer-events: auto; z-index: 5;
+    display: flex; align-items: center; justify-content: center; }
+  .seg .kf-marker svg { display: block; width: 14px; height: 14px; fill: #fff; stroke: currentColor; }
+  .seg .kf-marker.is-selected svg { fill: var(--primary, #3da9ff); stroke: var(--primary, #3da9ff); }
   .seg.effect { border-top: 2px dashed rgba(255,255,255,.28); }   /* 图层语义：虚线顶边 = 这是盖在素材上的「层」 */
   .seg.effect .hdr { font-style: italic; }
   /* 变速倍率徽章：段上显示当前 speed（对齐 OpenCut speed 标签），speed=1 不显示 */
@@ -855,6 +864,26 @@ function fileURL(p) {
   return "file:///" + encodeURI((p).replace(/\\/g, "/"));
 }
 function pps() { return Store.state.pxPerSec; }
+/* L2-31（2026-08-27）：HTML 转义，杜绝用户素材名/文本段名里的 < > & " ' 注入渲染（XSS 与结构破坏） */
+function esc(s) {
+  return String(s == null ? "" : s)
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+}
+/* L2-31（2026-08-27）：名称截断规则「前 max + … + 后 tail」（对齐 OpenCut 长名省略），配合 title 显示完整名 */
+function truncateName(name, max, tail) {
+  name = (name == null ? "" : String(name));
+  max = (max || 16); tail = (tail == null ? 3 : tail);
+  if (name.length <= max + tail) return name;
+  return name.slice(0, max) + "…" + name.slice(name.length - tail);
+}
+/* L2-28（2026-08-27）：共享 SVG 菱形（对齐 OpenCut KEYFRAME_DIAMOND_SIZE_PX=14、fill 跟随激活态）。
+   fill/stroke 用 presentation attribute（非 inline style）→ 可被 CSS 类（.is-selected/.sel）覆盖，便于运行时切换状态。 */
+function kfDiamondSVG(cls, fill) {
+  return '<svg class="kf-diamond-svg ' + (cls || "") + '" viewBox="0 0 14 14" width="14" height="14" ' +
+    'fill="' + (fill || "currentColor") + '" stroke="currentColor" stroke-width="1.5">' +
+    '<rect x="4.4" y="4.4" width="5.2" height="5.2" transform="rotate(45 7 7)"></rect></svg>';
+}
 /* L0-05：缩放指数平滑 + 视图状态持久化 */
 let _rulerRaf = 0;
 let _zoomTarget = null, _zoomAnim = 0;
@@ -1108,7 +1137,7 @@ function renderMedia(s) {
     const icon = m.type === "video" ? "🎬" : m.type === "audio" ? "♪" : m.type === "image" ? "" : "T";
     card.innerHTML =
       '<div class="thumb" style="' + (bg ? "background-image:url('" + bg + "')" : "") + '">' + (bg ? "" : icon) + '</div>' +
-      '<div class="name">' + (m.name || "") + '</div>' +
+      '<div class="name" title="' + esc(m.name || "") + '">' + esc(truncateName(m.name || "")) + '</div>' +
       '<div class="add" title="在播放头加入">+</div>' +
       '<div class="del" title="删除素材 (Del)">🗑</div>';
     card.addEventListener("dragstart", e => {
@@ -1159,7 +1188,7 @@ function renderEffectLibrary(s, box) {
     card.draggable = true;
     card.innerHTML =
       '<div class="thumb" style="display:flex;align-items:center;justify-content:center;font-size:22px">✦</div>' +
-      '<div class="name">' + label + '</div>' +
+      '<div class="name" title="' + esc(label) + '">' + esc(truncateName(label)) + '</div>' +
       '<div class="eff-hint">' + (hint || "无参数") + '</div>';
     card.addEventListener("click", () => addEffectFromLibrary(type));
     card.addEventListener("dragstart", e => {
@@ -1680,6 +1709,7 @@ function renderKfGraph(s) {
       d.className = "kf-diamond" + (selectedKf.path === path && selectedKf.id === k.id ? " sel" : "");
       d.style.left = x + "%";
       d.style.top = ((lane + 0.5) / lanes.length * 100) + "%";
+      d.innerHTML = kfDiamondSVG("", "currentColor");   // L2-28：div 方块 → 内联 SVG 菱形
       d.dataset.path = path; d.dataset.id = k.id;
       d.title = path + " @ " + (k.t / 1e6).toFixed(2) + "s = " + round2(k.v);
       d.addEventListener("mousedown", e => onKfDiamondDown(e, path, k.id, dur));

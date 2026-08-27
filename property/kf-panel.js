@@ -168,7 +168,7 @@ function buildKfRow(path, lab, step, def, anims, local) {
   row.innerHTML =
     '<button class="kf-kf-toggle' + (hitOn ? ' is-active' : '') + '" data-act="tog" title="' +
       (hitOn ? '删除当前位置关键帧' : '在播放头处打关键帧') + '">' +
-      '<span class="dia">◆</span>' +
+      kfDiamondSVG("dia", "currentColor") +
     '</button>' +
     '<span class="lab">' + lab + '</span>' +
     '<input class="val" data-act="val" value="' + round2(shown) + '" step="' + step + '">' +
