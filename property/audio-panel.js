@@ -95,6 +95,8 @@ function buildAudioFields(c) {
       if (kfBtn) kfBtn.classList.toggle("on", !!hasVolKf);
       const hint = el.querySelector("#audVolKfHint");
       if (hint) hint.style.display = hasVolKf ? "" : "none";
+      const rst = el.querySelector("#audVolReset");                       // L2-29：批量态或=默认(0.0dB=线性1.0)时隐藏 reset
+      if (rst) rst.style.display = (isBatch || Math.abs(v) < 1e-6) ? "none" : "";
     },
     bind: (fld) => {
       const inp = fld.el.querySelector("#audVol");

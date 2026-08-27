@@ -57,6 +57,16 @@ function getProperty(seg, path) {
   return PROPERTY_REGISTRY[path] ? PROPERTY_REGISTRY[path].default : null;
 }
 
+/* L2-29：判断某段某属性当前是否处于默认值（基于静态 base，不经动画覆盖——播放头扫过关键帧时显隐不闪跳） */
+function isPropertyAtDefault(seg, path) {
+  const def = PROPERTY_REGISTRY[path];
+  if (!def || def.default === undefined) return true;   // 无 default 定义 → 不显示 reset
+  const v = getProperty(seg, path);                     // params → legacy → default（复用既有读取链）
+  if (typeof v === "boolean") return v === def.default;
+  if (typeof v === "number") return Math.abs(v - def.default) < 1e-6;  // 浮点容差
+  return v === def.default;
+}
+
 /* 写入：params 是唯一真相源（5b R9 收敛，不再 mirror 旧字段）。
  * 后端 update_segment_transform / set_segment_speed / set_segment_volume 已同步写 params，
  * 导出 _video_clip_settings 已 params 优先 + legacy 兜底。旧 draft 经 getProperty 的 legacy 读兜底。 */

@@ -29,6 +29,8 @@ class NumberField extends PropertyField {
       write: (el, v) => {
         const inp = el.querySelector(".pf-num-input");
         if (inp && document.activeElement !== inp) inp.value = NumberField._fmt(v, opts.digits, opts.step);
+        const rst = el.querySelector(".pf-num-reset");                          // L2-29：值=默认时隐藏 reset
+        if (rst && this._isDefault) rst.style.display = this._isDefault(v) ? "none" : "";
       },
       read: el => {
         const inp = el.querySelector(".pf-num-input");
@@ -43,6 +45,8 @@ class NumberField extends PropertyField {
     this.onPreview = opts.onPreview || null;
     this.onCommit = opts.onCommit || null;
     this.onReset = opts.onReset || null;
+    this._default = (opts.default !== undefined) ? opts.default : this.min;   // L2-29：reset 回退到 default（非 min）
+    this._isDefault = opts.isDefault || null;                                 // L2-29：条件显示 reset 的判定函数 (v)=>bool
     this._draft = new PropertyDraft({
       parse: raw => this._parse(raw),
       getValue: () => this.value,
@@ -97,7 +101,7 @@ class NumberField extends PropertyField {
     const rst = this.el.querySelector(".pf-num-reset");
     if (rst) this.on(rst, "click", () => {
       if (this.onReset) this.onReset();
-      else { inp.value = NumberField._fmt(this.min, this._digits, this.step); this._draft.onInput(inp.value); this._draft.onCommit(); }
+      else { inp.value = NumberField._fmt(this._default, this._digits, this.step); this._draft.onInput(inp.value); this._draft.onCommit(); }
     });
   }
 

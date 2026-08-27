@@ -82,6 +82,8 @@ function buildSpeedFields(c) {
       if (inp && document.activeElement !== inp) inp.value = Math.round(v * 100) / 100;
       const pitchEl = el.querySelector("#spdPitch");
       if (pitchEl) pitchEl.classList.toggle("on", !!v);
+      const rst = el.querySelector("#spdValReset");                       // L2-29：批量态或=默认(1x)时隐藏 reset
+      if (rst) rst.style.display = (isBatch || Math.abs(v - 1) < 1e-6) ? "none" : "";
     },
     bind: (fld) => {
       const inp = fld.el.querySelector("#spdVal");
