@@ -56,6 +56,9 @@ const Store = {
     rippleOn: false,    // 波纹编辑开关（对齐 OpenCut rippleEditingEnabled）
     filter: "media",
     mediaView: "grid",         // 资产面板视图：grid（网格 2 列）/ list（单列紧凑）
+    mediaSortBy: "name",       // L2-16 排序键：name / type / size（duration 待 L2-17 数据源，暂不启用）
+    mediaSortOrder: "asc",     // L2-16 排序方向：asc / desc
+    selectedMaterialUids: [],  // L2-16 素材多选集合（与时间轴片段 selectedKeys 互斥独立）
     drag: null,            // 临时拖拽态（move / resize），提交后清空
     pendingDrag: null,     // mousedown 后未超过阈值前的待定态
     pendingBox: null,     // 框选待定态（空白区 mousedown 起框选）

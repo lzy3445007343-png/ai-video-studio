@@ -136,6 +136,26 @@
   .ctx-menu button { display: block; width: 100%; text-align: left; padding: 6px 10px; border-radius: 5px; font-size: 12px; color: var(--text); background: none; border: none; cursor: pointer; }
   .ctx-menu button:hover { background: var(--primary-dim); color: var(--primary); }
   .ctx-menu .sep { height: 1px; background: var(--border); margin: 4px 6px; }
+  .ctx-menu button.active { color: var(--primary); }
+  .ctx-menu button:disabled { opacity: .4; cursor: not-allowed; }
+  .ctx-menu button .ar { float: right; margin-left: 10px; }
+  /* L2-16 素材工具栏（视图切换 / 排序） */
+  .assets .head .head-spacer { flex: 1; }
+  .asset-tools { display: flex; align-items: center; gap: 4px; }
+  .asset-tools .tool-btn { width: 26px; height: 26px; display: flex; align-items: center; justify-content: center;
+    border-radius: 6px; border: 1px solid var(--border); background: var(--panel-2); color: var(--muted); cursor: pointer; }
+  .asset-tools .tool-btn svg { width: 15px; height: 15px; pointer-events: none; }
+  .asset-tools .tool-btn:hover { background: #34343c; color: var(--text); }
+  .asset-tools .tool-btn.active { color: var(--primary); border-color: var(--primary); }
+  /* L2-16 多选态 / 列表视图 / 行内类型标签 */
+  .media-card.multi-sel { outline: 2px solid var(--primary); outline-offset: -2px; }
+  .media-list.view-list { grid-template-columns: 1fr; }
+  .media-list.view-list .media-card { display: flex; align-items: center; gap: 8px; height: 38px; }
+  .media-list.view-list .media-card .thumb { width: 46px; height: 32px; flex: none; border-radius: 4px; }
+  .media-list.view-list .media-card .name { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .media-card .mtag { display: none; font-size: 10px; color: var(--muted); }
+  .media-list.view-list .media-card .mtag { display: inline; flex: none; }
+  .media-list.view-list .media-card .add, .media-list.view-list .media-card .del { position: static; opacity: 1; pointer-events: auto; width: 22px; height: 22px; line-height: 22px; }
     border-radius: 6px; overflow: hidden; box-shadow: 0 6px 24px rgba(0,0,0,.55); border: 2px solid var(--primary);
     background: #15151a center/cover no-repeat; display: flex; align-items: center; justify-content: center; }
   .drop-newtrack-hint { position: absolute; left: 50%; top: 50%; transform: translate(-50%,-50%);
@@ -569,7 +589,7 @@
 
   <div class="main">
     <div class="assets">
-      <div class="head"><button class="btn" id="importBtn">+ 导入素材</button><button class="btn" id="importJyBtn">导入剪映</button></div>
+      <div class="head"><button class="btn" id="importBtn">+ 导入素材</button><button class="btn" id="importJyBtn">导入剪映</button><span class="head-spacer"></span><div class="asset-tools" id="assetTools"><button class="tool-btn" id="viewToggle" data-tip="切换网格/列表视图" title=""></button><button class="tool-btn" id="sortBtn" data-tip="排序" title="">⇅</button></div></div>
       <div class="tabs" id="mediaTabs">
         <div class="tab active" data-f="media" data-tip="媒体"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/></svg><span>媒体</span></div>
         <div class="tab" data-f="audio" data-tip="音频"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 14v-2a8 8 0 0 1 16 0v2"/><rect x="3" y="13" width="4" height="7" rx="1.6"/><rect x="17" y="13" width="4" height="7" rx="1.6"/></svg><span>音频</span></div>
@@ -1211,6 +1231,15 @@ function removeDragGhost() {
 let _mediaSig = "";
 let _effectSig = "";   // 特效库独立渲染签名：不共享 _mediaSig，否则异步回填 effects 后不重绘
 let _lastRenderedFilter = ""; // filter 切换时强制重建，避免 tab 切回时缓存命中导致显示错位
+// L2-16 素材排序比较（name 默认，中文/大小写不敏感；size 数值；type 分组；duration 待 L2-17）
+function compareMaterials(a, b, by, order) {
+  let r = 0;
+  if (by === "type") r = String(a.type || "").localeCompare(String(b.type || ""), "zh");
+  else if (by === "size") r = (Number(a.size) || 0) - (Number(b.size) || 0);
+  else r = String(a.name || "").localeCompare(String(b.name || ""), "zh");
+  if (r === 0) r = String(a.name || "").localeCompare(String(b.name || ""), "zh");   // 同键回退 name 稳定
+  return order === "desc" ? -r : r;
+}
 function renderMedia(s) {
   // L2-19 占位 tab 前置分派：transitions/adjustment/captions/settings 绝不落入素材/特效过滤
   if (s && ["transitions", "adjustment", "captions", "settings"].includes(s.filter)) {
@@ -1235,12 +1264,18 @@ function renderMedia(s) {
   //   过滤非对象 + 兜底空数组，杜绝脏数据崩渲染。
   const mats = Array.isArray(s.materials) ? s.materials.filter(Boolean) : [];
   const list = (s.filter === "media" ? mats.filter(m => m.type === "video" || m.type === "image") : mats.filter(m => m.type === s.filter));
-  const sig = s.filter + "|" + list.map(m => (m.uid || m.path) + ":" + m.name + ":" + m.type).join(",");
+  const sorted = [...list].sort((a, b) => compareMaterials(a, b, Store.state.mediaSortBy, Store.state.mediaSortOrder));   // L2-16 排序（filter 之后）
+  const sig = s.filter + "|" + Store.state.mediaView + "|" + Store.state.mediaSortBy + Store.state.mediaSortOrder + "|" + list.map(m => (m.uid || m.path) + ":" + m.name + ":" + m.type).join(",");   // L2-16 sig 纳入 view/sort
   // 仅在素材列表/筛选真正变化时重建 DOM；平时轮询只刷新选中态。
   // 否则每 500ms 把卡片 innerHTML 清空重建，会导致 +/删除 按钮闪烁、且点击时的 DOM 被替换使 click 丢失（加号点了没反应）。
   if (!filterChanged && sig === _mediaSig) {
     const box = $("mediaList");
-    for (const card of box.children) card.classList.toggle("sel", card.dataset.uid === Store.state.selectedMaterialUid);
+    const su = Store.state.selectedMaterialUid, mus = Store.state.selectedMaterialUids || [];
+    for (const card of box.children) {
+      const u = card.dataset.uid;
+      card.classList.toggle("sel", u === su || mus.includes(u));
+      card.classList.toggle("multi-sel", mus.includes(u) && mus.length > 1);
+    }
     return;
   }
   _mediaSig = sig;
@@ -1261,19 +1296,25 @@ function renderMedia(s) {
     return;
   }
   // 固定双列网格视图（2026-08-17 已移除 grid/list 切换）
+  box.className = "media-list " + (Store.state.mediaView === "list" ? "view-list" : "view-grid");   // L2-16 双视图
   box.innerHTML = "";
   for (const m of list) {
     const card = document.createElement("div");
     const uid = m.uid || m.path;   // 旧素材无 uid 时以 path 兜底
-    card.className = "media-card" + (uid === Store.state.selectedMaterialUid ? " sel" : "");
+    const su = Store.state.selectedMaterialUid, mus = Store.state.selectedMaterialUids || [];
+    const isSel = (uid === su) || mus.includes(uid);
+    const multiSel = mus.includes(uid) && mus.length > 1;
+    card.className = "media-card" + (isSel ? " sel" : "") + (multiSel ? " multi-sel" : "");
     card.dataset.uid = uid;
     card.draggable = true;
     const isImg = m.type === "image";
     const bg = isImg ? fileURL(m.path) : (m.thumbnail ? fileURL(m.thumbnail) : "");
     const icon = m.type === "video" ? "🎬" : m.type === "audio" ? "♪" : m.type === "image" ? "" : "T";
+    const typeLabel = m.type === "video" ? "视频" : m.type === "audio" ? "音频" : m.type === "image" ? "图片" : "文本";
     card.innerHTML =
       '<div class="thumb" style="' + (bg ? "background-image:url('" + bg + "')" : "") + '">' + (bg ? "" : icon) + '</div>' +
       '<div class="name" title="' + esc(m.name || "") + '">' + esc(truncateName(m.name || "")) + '</div>' +
+      '<span class="mtag">' + typeLabel + '</span>' +   // L2-16 列表视图行内类型标签（时长徽标待 L2-17）
       '<div class="add" title="在播放头加入">+</div>' +
       '<div class="del" title="删除素材 (Del)">🗑</div>';
     card.addEventListener("dragstart", e => {
@@ -1292,7 +1333,7 @@ function renderMedia(s) {
     });
     card.addEventListener("drag", e => { moveDragGhost(e.clientX, e.clientY); });
     card.addEventListener("dragend", () => { isLibraryDragging = false; hideDragLine(); hideClipGhost(); dragGhostData = null; window.__libDropCache = null; removeDragGhost(); });
-    card.addEventListener("click", () => selectMaterial(uid));
+    card.addEventListener("click", e => selectMaterial(uid, e));   // L2-16 传事件支持 Ctrl/Shift 多选
     card.querySelector(".add").addEventListener("click", e => {
       e.stopPropagation();
       call("add_to_timeline", m.name, m.path, m.type, null, Store.state.playheadUs).then(refresh);
@@ -1336,6 +1377,86 @@ function renderPlaceholderTab(kind) {
   }
 }
 function phRow(k, v) { return '<div class="ph-row"><span class="ph-k">' + k + '</span><span class="ph-v">' + v + '</span></div>'; }
+
+/* ================= L2-16 / L2-21 / L2-22 素材库能力组 ================= */
+// L2-21 状态持久化（localStorage，不写工程；分支 A 对齐 OpenCut）
+const ASSETS_PANEL_KEY = "aivs.assetsPanel";
+const _SORT_KEYS = ["name", "type", "size", "duration"];
+function loadAssetsPanelPrefs() {
+  const def = { view: "grid", sortBy: "name", sortOrder: "asc" };
+  try {
+    const p = JSON.parse(localStorage.getItem(ASSETS_PANEL_KEY) || "{}");
+    return {
+      view: (p.view === "list" || p.view === "grid") ? p.view : "grid",
+      sortBy: _SORT_KEYS.includes(p.sortBy) ? p.sortBy : "name",       // 白名单校验，防非法值导致排序异常
+      sortOrder: (p.sortOrder === "asc" || p.sortOrder === "desc") ? p.sortOrder : "asc"
+    };
+  } catch (_) { return def; }
+}
+function saveAssetsPanelPrefs() {
+  try { localStorage.setItem(ASSETS_PANEL_KEY, JSON.stringify({
+    view: Store.state.mediaView, sortBy: Store.state.mediaSortBy, sortOrder: Store.state.mediaSortOrder })); } catch (_) {}
+}
+// 工具栏视图/排序按钮同步（图标 + 占位 tab 隐藏）
+function updateAssetTools() {
+  const tools = $("assetTools");
+  if (tools) tools.style.display = ["transitions", "adjustment", "captions", "settings"].includes(Store.state.filter) ? "none" : "";
+  const vt = $("viewToggle");
+  if (vt) vt.innerHTML = Store.state.mediaView === "list"
+    ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16M4 12h16M4 18h16"/></svg>'   // 列表图标
+    : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>';   // 网格图标
+}
+function openSortMenu() {
+  closeSortMenu();
+  const btn = $("sortBtn"); if (!btn) return;
+  const menu = document.createElement("div");
+  menu.id = "sortMenu"; menu.className = "ctx-menu";
+  const curBy = Store.state.mediaSortBy, curOrder = Store.state.mediaSortOrder;
+  [["name", "名称"], ["type", "类型"], ["size", "大小"], ["duration", "时长"]].forEach(([key, label]) => {
+    const row = document.createElement("button");
+    row.className = "ctx-item" + (key === curBy ? " active" : "");
+    if (key === "duration") { row.disabled = true; row.title = "待素材时长数据源（L2-17）"; }   // Duration 排序禁用（数据源待裁定）
+    row.innerHTML = label + (key === curBy ? ' <span class="ar">' + (curOrder === "asc" ? "↑" : "↓") + '</span>' : "");
+    if (!row.disabled) row.addEventListener("click", () => {
+      let by = key, order = "asc";
+      if (by === curBy) order = curOrder === "asc" ? "desc" : "asc";   // 同项再点切换升降
+      Store.set({ mediaSortBy: by, mediaSortOrder: order });
+      closeSortMenu(); updateAssetTools();
+    });
+    menu.appendChild(row);
+  });
+  document.body.appendChild(menu);
+  const r = btn.getBoundingClientRect();
+  menu.style.left = Math.min(r.left, window.innerWidth - 150) + "px";
+  menu.style.top = (r.bottom + 4) + "px";
+  setTimeout(() => document.addEventListener("click", closeSortMenu, { once: true }), 0);
+}
+function closeSortMenu() { const m = $("sortMenu"); if (m) m.remove(); }
+
+/* L2-22 素材卡右键菜单（独立容器 #assetCtxMenu，不干扰时间轴 ctxMenu） */
+function showAssetCtxMenu(x, y) {
+  hideAssetCtxMenu();
+  const uids = Store.state.selectedMaterialUids || [];
+  const n = uids.length || 1;
+  const menu = document.createElement("div");
+  menu.id = "assetCtxMenu"; menu.className = "ctx-menu";
+  const del = document.createElement("button"); del.className = "ctx-item"; del.textContent = "删除 " + n + " 个素材";
+  del.addEventListener("click", () => { hideAssetCtxMenu(); batchDeleteMaterials(uids.length ? uids : [Store.state.selectedMaterialUid]); });
+  const exp = document.createElement("button"); exp.className = "ctx-item"; exp.textContent = "导出素材";
+  exp.addEventListener("click", () => { hideAssetCtxMenu(); UiFeedback.showToast({ description: "素材导出开发中（Export clips 待 L0-07 契约放行）", variant: "warn" }); });
+  const sep = document.createElement("div"); sep.className = "sep";
+  const des = document.createElement("button"); des.className = "ctx-item"; des.textContent = "取消选择";
+  des.addEventListener("click", () => { Store.set({ selectedMaterialUids: [], selectedMaterialUid: null }); hideAssetCtxMenu(); });
+  menu.appendChild(del); menu.appendChild(exp); menu.appendChild(sep); menu.appendChild(des);
+  document.body.appendChild(menu);
+  menu.style.left = Math.min(x, window.innerWidth - 160) + "px";
+  menu.style.top = Math.min(y, window.innerHeight - 120) + "px";
+  setTimeout(() => {
+    document.addEventListener("click", hideAssetCtxMenu, { once: true });
+    document.addEventListener("keydown", e => { if (e.key === "Escape") hideAssetCtxMenu(); }, { once: true });
+  }, 0);
+}
+function hideAssetCtxMenu() { const m = $("assetCtxMenu"); if (m) m.remove(); }
 // 特效库（v0.9 P0）：左栏「特效」tab，卡片来自后端 get_effect_registry(EFFECT_META)，点击加特效。
 function renderEffectLibrary(s, box) {
   const reg = Store.state.effects || {};
@@ -1818,7 +1939,28 @@ function selectKey(key) {
   updateToolbarState();
   renderKfPanelPF();
 }
-function selectMaterial(uid) { Store.set({ selectedMaterialUid: uid, selectedKey: null, selectedKeys: [] }); }
+function selectMaterial(uid, e) {
+  const cur = Store.state.selectedMaterialUids || [];
+  if (e && (e.ctrlKey || e.metaKey)) {   // Ctrl/⌘ 加选/减选
+    const set = new Set(cur);
+    if (set.has(uid)) set.delete(uid); else set.add(uid);
+    const arr = [...set];
+    Store.set({ selectedMaterialUids: arr, selectedMaterialUid: arr.length === 1 ? arr[0] : null, selectedKey: null, selectedKeys: [] });
+  } else if (e && e.shiftKey && cur.length) {   // Shift 范围选（按当前排序序列）
+    const ids = (Store.state.materials || []).filter(Boolean)
+      .filter(m => (Store.state.filter === "media" ? (m.type === "video" || m.type === "image") : m.type === Store.state.filter))
+      .sort((a, b) => compareMaterials(a, b, Store.state.mediaSortBy, Store.state.mediaSortOrder))
+      .map(m => m.uid || m.path);
+    const i = ids.indexOf(cur[cur.length - 1]), j = ids.indexOf(uid);
+    if (i >= 0 && j >= 0) {
+      const [lo, hi] = i < j ? [i, j] : [j, i];
+      const arr = ids.slice(lo, hi + 1);
+      Store.set({ selectedMaterialUids: arr, selectedMaterialUid: arr.length === 1 ? arr[0] : null, selectedKey: null, selectedKeys: [] });
+    } else Store.set({ selectedMaterialUids: [uid], selectedMaterialUid: uid, selectedKey: null, selectedKeys: [] });
+  } else {
+    Store.set({ selectedMaterialUids: [uid], selectedMaterialUid: uid, selectedKey: null, selectedKeys: [] });
+  }
+}
 
 /* ===================== 关键帧 / 动画（对齐 OpenCut 属性面板 keyframe 轨道） ===================== */
 // transform 关键帧仅对视觉元素（video/image/text/sticker）有意义；audio 段没有画面位移概念
@@ -2236,6 +2378,18 @@ function toggleRipple() {
 function deleteMaterial(uid) {
   if (!uid) return;
   call("delete_material", uid).then(() => { Store.set({ selectedMaterialUid: null }); refresh(); });
+}
+// L2-16/L2-22 批量删除：循环 delete_material（分支 A 零新 Api），全部成功后清多选态
+function batchDeleteMaterials(uids) {
+  uids = (uids || []).filter(Boolean);
+  if (!uids.length) return Promise.resolve();
+  return Promise.all(uids.map(u => call("delete_material", u).then(r => ({ u, ok: !r || r.ok !== false }))))
+    .then(results => {
+      const failed = results.filter(x => !x.ok).map(x => x.u);
+      Store.set({ selectedMaterialUids: [], selectedMaterialUid: null });
+      refresh();
+      if (failed.length) UiFeedback.showToast({ description: "部分素材删除失败：" + failed.length + " 个", variant: "error" });
+    });
 }
 
 /* 拖拽 / 裁剪：mousedown 只记 pending；mousemove 超阈值才真进入 drag；mouseup 没动则纯选中 */
@@ -3353,6 +3507,27 @@ function bindEvents() {
       sync();
     }
   })();
+  // L2-16/L2-21/L2-22 素材工具栏 + 右键菜单
+  (function bindAssetTools() {
+    const vt = $("viewToggle");
+    if (vt) vt.addEventListener("click", () => {
+      Store.set({ mediaView: Store.state.mediaView === "list" ? "grid" : "list" });
+      updateAssetTools();
+    });
+    const sb = $("sortBtn");
+    if (sb) sb.addEventListener("click", e => { e.stopPropagation(); openSortMenu(); });
+    const ml = $("mediaList");
+    if (ml) ml.addEventListener("contextmenu", e => {
+      const card = e.target.closest(".media-card"); if (!card) return;
+      e.preventDefault();
+      const uid = card.dataset.uid;
+      if (!(Store.state.selectedMaterialUids || []).includes(uid)) {
+        Store.set({ selectedMaterialUids: [uid], selectedMaterialUid: uid, selectedKey: null, selectedKeys: [] });
+      }
+      showAssetCtxMenu(e.clientX, e.clientY);
+    });
+    updateAssetTools();
+  })();
   // 媒体底层事件诊断：previewStack 内的 video/audio 动态创建，用事件委托捕获错误
   $("previewStack").addEventListener("error", e => {
     const t = e.target;
@@ -4131,7 +4306,12 @@ function initSubscriptionSlices() {
   // C4.3 低频切片
   Store.subscribeSlice("pxPerSec", () => { renderTimeline(); });
   // ★ 同 FIX-1：透传 state 给 renderMedia
-  Store.subscribeSlice("filter", (v, s) => { renderMedia(s); });
+  Store.subscribeSlice("filter", (v, s) => { renderMedia(s); updateAssetTools(); });
+  // L2-16/L2-21 视图/排序/多选订阅 → 重绘素材面板；变更即时落盘（持久化）
+  Store.subscribeSlice("mediaView", (v, s) => { renderMedia(s); updateAssetTools(); saveAssetsPanelPrefs(); });
+  Store.subscribeSlice("mediaSortBy", (v, s) => { renderMedia(s); saveAssetsPanelPrefs(); });
+  Store.subscribeSlice("mediaSortOrder", (v, s) => { renderMedia(s); saveAssetsPanelPrefs(); });
+  Store.subscribeSlice("selectedMaterialUids", (v, s) => { renderMedia(s); });
   Store.subscribeSlice("bookmarks", () => { renderTimeline(); });
   // B2（GPT 定案）：播放头切片独立订阅者——拖播放头 → KF 面板值实时更新
   // 不挂 renderPlayheadUI（UI 层不互相调，防耦合，见 1167 行独立订阅）；updateKfPanelValues 内部跳过编辑中的 input
@@ -4206,6 +4386,8 @@ function boot() {
   if (booted) return;
   if (!api()) return;            // pywebview 未注入就等，绝不缓存 null
   booted = true;
+  // L2-21 启动即应用素材面板持久化（视图/排序），首屏即按持久值渲染，避免先默认后跳变
+  try { const _ap = loadAssetsPanelPrefs(); Store.set({ mediaView: _ap.view, mediaSortBy: _ap.sortBy, mediaSortOrder: _ap.sortOrder }); } catch (_) {}
   // 构建版本戳：每次改版必须改 BUILD_TAG，用户重启一眼确认跑的是不是当前构建（终结"重启还旧"猜疑）
   try {
     document.title = "AI剪辑工作台 v0.9 (" + BUILD_TAG + ")";
