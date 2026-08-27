@@ -42,6 +42,8 @@ const KF_GROUPS = [
     pairs: [],
     singles: [
       ["text.color", "文字颜色", "color"],  // L2-07：kind="color" → buildColorRow（四分量合并成单 ColorRow + 成组 ◆）
+      ["text.fontSize", "字号", 0.5, 10],     // L2-02：标量 KF（base 落 seg.sub_style.font_size）
+      ["text.letterSpacing", "字距", 0.1, 0], // L2-02：标量 KF（base 落 seg.sub_style.letter_spacing）
     ],
   },
 ];
@@ -427,8 +429,16 @@ function commitColor(hex) {
       call("add_keyframe", ...args, paths[i], local, vals[i], "linear", segId).then(() => run(i + 1));
     };
     CommandService.withTx("color-kf-edit", () => run(0));
+  } else {
+    // L2-02：无帧 → base 写回 sub_style.color（set_segments_props 已扩展 sub_style，不新增 Api）
+    const k = Store.state.selectedKey ? Store.state.selectedKey.split(":") : null;
+    if (k && k.length >= 3) {
+      CommandService.withTx("text-color-base", () =>
+        CommandService.run("set_segments_props",
+          [{ track_type: k[0], track_index: +k[1], index: +k[2], segid: s.id, sub_style: { color: hex } }],
+          { actor: "ui", paths: ["text.color"] }));
+    }
   }
-  // 无帧：base 写回 sub_style.color 由 L2-02 接入命令（本卡不新增后端 Api，仅预览）
 }
 function toggleColorKf(pathBase) {
   const s = selectedSeg(); if (!s) return;

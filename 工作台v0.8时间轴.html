@@ -569,6 +569,15 @@
   .cp-hex { flex:1; background:#2a2a2a; color:#eee; border:1px solid #444; border-radius:4px; padding:3px 6px; text-transform:uppercase; font-family:monospace; }
   .cp-eye { background:#2a2a2a; color:#eee; border:1px solid #444; border-radius:4px; padding:3px 8px; cursor:pointer; }
   .kf-color-wrap { display:inline-flex; align-items:center; }
+  /* L2-02 文本样式 tab */
+  .text-row { display: flex; align-items: center; gap: 8px; padding: 6px 4px; }
+  .text-row .lab { min-width: 48px; color: var(--muted); font-size: 12px; }
+  .text-row-inner { display: flex; align-items: center; gap: 6px; flex: 1; }
+  .text-row-kf .val, .text-row .insp-select { flex: 1; }
+  .text-row .insp-textarea { flex: 1; resize: vertical; font: inherit; padding: 4px 6px; border-radius: 6px; border: 1px solid var(--line); background: var(--bg-2); color: var(--fg); }
+  .text-row .insp-switch { width: 16px; height: 16px; }
+  .text-bg-wrap { display: flex; align-items: center; gap: 8px; padding: 6px 4px; }
+  .text-row-color .kf-color-wrap, .text-bg-wrap .kf-color-wrap { flex: 1; }
 </style>
 </head>
 <body>
@@ -730,6 +739,10 @@
       </div>
     </div>
 
+    <div class="subpanel" id="textPanel">
+      <div class="head">文本样式 <span class="property-seg-name" id="textSegName"></span></div>
+      <div class="body" id="textBody"></div>
+    </div>
     <div class="subpanel" id="subPanel">
       <div class="head">字幕生成 <span class="property-seg-name" id="subSegName"></span><button class="head-close" id="subClose" title="取消选择（Esc）">✕</button></div>
       <div class="body" id="subBody">
@@ -993,6 +1006,7 @@
 <script src="property/mask-panel.js"></script>
 <script src="property/effect-panel.js"></script>
 <script src="property/color-picker.js"></script>
+<script src="property/text-panel.js"></script>
 <script src="property/kf-panel.js"></script>
 <script src="property/preview-drag.js"></script>
 <script src="property/viewport-input.js"></script>
@@ -1738,7 +1752,7 @@ const PROPERTY_TABS_BY_TYPE = {
   video:   ["kf", "audio", "speed", "mask", "effects", "sub", "sticker"],
   image:   ["kf", "mask", "effects", "sub", "sticker"],
   audio:   ["audio", "speed", "kf", "sub", "sticker"],
-  text:    ["sub", "sticker"],
+  text:    ["text", "sub", "sticker"],   // L2-02：文本样式 tab 置首位（默认进入）
   sticker: ["sticker", "kf", "effects", "sub"],
   effect:  ["effects", "sub", "sticker"],
 };
@@ -1747,7 +1761,7 @@ const PROPERTY_DEFAULT_TAB_BY_TYPE = {
 };
 const TAB_TO_PANEL = {
   kf: "kfPanel", mask: "maskPanel", sub: "subPanel", sticker: "stickerPanel",
-  audio: "audioPanel", speed: "speedPanel", effects: "effectPanel",
+  audio: "audioPanel", speed: "speedPanel", effects: "effectPanel", text: "textPanel",  // L2-02
 };
 const PLACEHOLDER_TITLES = { effects: "特效面板" };
 
@@ -1767,7 +1781,7 @@ function showToolTab(tab) {
 const PROP_ACTIVE_TAB = {};
 
 function hideAllPropertyPanels() {
-  ["kfPanel", "maskPanel", "subPanel", "stickerPanel", "effectPanel", "audioPanel", "speedPanel"].forEach(id => {
+  ["kfPanel", "maskPanel", "subPanel", "stickerPanel", "effectPanel", "audioPanel", "speedPanel", "textPanel"].forEach(id => {
     const el = document.getElementById(id); if (el) el.classList.remove("panel-active");
   });
 }
@@ -1815,7 +1829,7 @@ function renderPropertyPanel() {
   const activePanel = TAB_TO_PANEL[activeTab] || "kfPanel";
 
   // 切换 panel-active
-  ["kfPanel", "maskPanel", "subPanel", "stickerPanel", "effectPanel", "audioPanel", "speedPanel"].forEach(id => {
+  ["kfPanel", "maskPanel", "subPanel", "stickerPanel", "effectPanel", "audioPanel", "speedPanel", "textPanel"].forEach(id => {
     const el = document.getElementById(id);
     if (!el) return;
     if (id === activePanel) el.classList.add("panel-active");
@@ -1837,6 +1851,7 @@ function renderPropertyPanel() {
   else if (activePanel === "effectPanel") renderEffectPanelPF();   // Phase 3：Property Framework 版（property/effect-panel.js）
   else if (activePanel === "audioPanel") renderAudioTabPF();   // Phase 2：Property Framework 版（property/audio-panel.js）
   else if (activePanel === "speedPanel") renderSpeedTabPF();   // Phase 2：Property Framework 版（property/speed-panel.js）
+  else if (activePanel === "textPanel") renderTextPanelPF();   // L2-02：文本可编辑样式 tab
 }
 
 // range "0~20" / "0~1" → [min,max]
@@ -2011,7 +2026,8 @@ const KF_PATHS_BY_TYPE = {
             ["transform.rotate", "旋转", 5, 0], ["transform.opacity", "不透明度", 0.1, 1]],
   audio:   [],   // audio 无画面，transform 关键帧无意义（OpenCut 行为）
   text:    [["text.color.r", "文字色 R", 0.1, 1], ["text.color.g", "文字色 G", 0.1, 1],
-            ["text.color.b", "文字色 B", 0.1, 1], ["text.color.a", "文字色 A", 0.1, 1]],  // L2-07 颜色四分量 KF（分支 A-1 独立 scalar path）
+            ["text.color.b", "文字色 B", 0.1, 1], ["text.color.a", "文字色 A", 0.1, 1],  // L2-07 颜色四分量 KF（分支 A-1 独立 scalar path）
+            ["text.fontSize", "字号", 0.5, 10], ["text.letterSpacing", "字距", 0.1, 0]],  // L2-02 标量 KF（base 落 seg.sub_style）
 };
 // 兼容旧引用（kfGraph 等）：默认 video 的 KF_PATHS
 const KF_PATHS = KF_PATHS_BY_TYPE.video;
@@ -2139,12 +2155,15 @@ function setAspect(ratio) {
 function kfVal(anims, path, localUs) {
   if (!anims || !anims[path] || !anims[path].keys || !anims[path].keys.length) return null;
   const ks = anims[path].keys.slice().sort((a, b) => a.t - b.t);
+  const ch = anims[path];
+  // L2-02：discrete 通道（bool/str，ch.type==="discrete" 或任一 key 非数值）→ step 插值（取左帧值，不 lerp）
+  const isDiscrete = ch.type === "discrete" || ks.some(k => typeof k.v !== "number");
   if (localUs <= ks[0].t) return ks[0].v;
   if (localUs >= ks[ks.length - 1].t) return ks[ks.length - 1].v;
   for (let i = 0; i < ks.length - 1; i++) {
     const a = ks[i], b = ks[i + 1];
     if (a.t <= localUs && localUs <= b.t) {
-      if (a.seg === "hold") return a.v;
+      if (a.seg === "hold" || isDiscrete) return a.v;   // L2-02：discrete 恒取左帧值
       const span = (b.t - a.t) || 1; const pr = (localUs - a.t) / span;
       return a.v + (b.v - a.v) * pr;
     }

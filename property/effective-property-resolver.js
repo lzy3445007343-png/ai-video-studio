@@ -28,9 +28,24 @@ function getEffectivePropertyValue(seg, path, localTime) {
   }
   // 2. static / 3. default
   const v = getProperty(seg, path);
-  const explicit = !!(seg.params && seg.params[path] !== undefined) ||
+  // L2-02：文本样式基值落在 seg.sub_style（渲染器读取源，单真源），KF 解析器补一路回退
+  let _tv = v;
+  let _fromText = false;
+  if (path.startsWith("text.") && seg.sub_style) {
+    const _map = { "text.fontSize": "font_size", "text.letterSpacing": "letter_spacing",
+                   "text.color": "color", "text.bold": "bold", "text.align": "align",
+                   "text.bg.enabled": "bg.enabled", "text.bg.color": "bg.color" };
+    const _sm = _map[path];
+    if (_sm) {
+      const _parts = _sm.split(".");
+      let _o = seg.sub_style;
+      for (const _p of _parts) { _o = (_o == null) ? undefined : _o[_p]; }
+      if (_o !== undefined) { _tv = _o; _fromText = true; }
+    }
+  }
+  const explicit = _fromText || !!(seg.params && seg.params[path] !== undefined) ||
                    !!(typeof LEGACY_READ !== "undefined" && LEGACY_READ[path] && LEGACY_READ[path](seg) !== undefined);
-  return { value: v, source: explicit ? "static" : "default" };
+  return { value: _tv, source: explicit ? "static" : "default" };
 }
 
 if (typeof window !== "undefined") window.getEffectivePropertyValue = getEffectivePropertyValue;

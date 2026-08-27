@@ -2123,6 +2123,10 @@ KF_PROPS = {
     # 音量关键帧（OpenCut AudioTab ◆ 按钮）：value 存音量倍率(0~2)，与 seg["volume"] 同单位；
     # 预览/导出时若有该通道则按播放头插值覆盖 base（对齐 OpenCut 动画通道覆盖 base 语义）
     "volume":              {"label": "音量", "default": 1.0, "export": "volume", "coord": None},
+    # L2-02 文本样式关键帧（分支 A：fontSize/letterSpacing 标量 scalar path；颜色四分量见上；
+    #   bold/align/bg.enabled 为 discrete 通道——add_keyframe 已放宽 bool/str 并置 type="discrete"）
+    "text.fontSize":       {"label": "字号", "default": 10.0, "export": None, "coord": None},
+    "text.letterSpacing":  {"label": "字距", "default": 0.0, "export": None, "coord": None},
     # L2-07 颜色关键帧（分支 A-1：四分量独立 scalar path，值域 0~1，均为数字不碰 add_keyframe 校验）
     # export=None：导出侧颜色通道→剪映映射属 Video DSL 护城河，按 L2-07⑧不动边界单独评估，本次不映射。
     # base 回写（删光帧→播放头处解析色写回文本颜色字段）由前端在 WYSIWYG 逻辑做（KF_PATH_TO_BASE_FIELD 不加颜色，避免后端改）。
@@ -3943,6 +3947,17 @@ class Api:
                     _write_param(seg, "speed.pitchCorrection", seg["change_pitch"])
                     seg["duration"] = new_duration
                     seg["src_end"] = ss + int(round(new_duration * rate))
+                # L2-02 文本样式基值写回（语义扩展现有命令，不新增 Api 签名；白名单防越权写）：
+                #   sub_style：合并字体/颜色/背景等字段（bg 为嵌套 dict，整体替换）
+                #   text：字幕正文内容（seg["text"]）
+                if "sub_style" in props and isinstance(props["sub_style"], dict):
+                    _allowed = ("font_size", "letter_spacing", "color", "bold", "align", "bg", "bg_color")
+                    _patch = {k: v for k, v in props["sub_style"].items() if k in _allowed}
+                    if _patch:
+                        seg.setdefault("sub_style", {})
+                        seg["sub_style"].update(_patch)
+                if "text" in props and isinstance(props["text"], str):
+                    seg["text"] = props["text"]
                 ok_count += 1
             except Exception as e:
                 skipped.append(f"{seg.get('name', '?')}: {e}")
@@ -4010,8 +4025,8 @@ class Api:
             return {"ok": False, "error": err}
         if path not in KF_KEYFRAMEABLE:
             return {"ok": False, "error": f"不支持关键帧的属性：{path}"}
-        if not isinstance(value, (int, float)) or isinstance(value, bool):
-            return {"ok": False, "error": "value 必须是数字"}
+        if not isinstance(value, (int, float, bool, str)):
+            return {"ok": False, "error": "value 必须是数字/布尔/字符串（discrete 通道）"}
         if seg_mode not in ("linear", "hold"):
             seg_mode = "linear"
         dur = int(seg.get("duration", 0))
@@ -4072,7 +4087,11 @@ class Api:
                 "tangentMode": "auto",
             })
             keys.sort(key=lambda k: k["t"])
-        anims[path] = {"type": ch.get("type", "scalar"), "keys": keys}
+        # L2-02：新建通道按 value 类型定 type（bool/str→discrete 走 step 插值，数值→scalar）
+        _new_type = ch.get("type")
+        if _new_type is None:
+            _new_type = "discrete" if isinstance(value, (bool, str)) else "scalar"
+        anims[path] = {"type": _new_type, "keys": keys}
         seg["animations"] = anims
         save_state(self.state)
         return {"ok": True, "path": path, "keyframe_id": kid, "keyframes": keys}
