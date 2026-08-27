@@ -41,10 +41,29 @@
     display: flex; flex-direction: row;
     overflow: hidden;
   }
-  .topbar { flex: none; height: 42px; display: flex; align-items: center; gap: 10px; padding: 0 12px;
+  .topbar { position: relative; flex: none; height: 48px; display: flex; align-items: center; gap: 10px; padding: 0 12px;
     background: var(--panel); border-bottom: 1px solid var(--border); }
   .topbar .title { font-weight: 600; font-size: 13px; }
   .topbar .spacer { flex: 1; }
+  .topbar .logo-btn { width: 28px; height: 28px; flex: none; border-radius: 6px; border: 1px solid var(--border);
+    background: var(--panel-2); color: var(--muted); font-size: 15px; line-height: 1; cursor: pointer; }
+  .topbar .logo-btn:hover { background: #2a2e37; color: var(--text); }
+  .topbar .title-input { width: 180px; font-weight: 600; font-size: 13px; color: var(--text);
+    border: 1px solid transparent; border-radius: 4px; padding: 2px 6px; background: transparent; cursor: pointer; }
+  .topbar .title-input:hover { border-color: var(--border); }
+  .topbar .title-input:focus { outline: 1px solid var(--primary); cursor: text; border-color: var(--primary); }
+  .proj-menu { position: absolute; top: 100%; left: 8px; min-width: 140px; display: none;
+    flex-direction: column; padding: 4px; background: var(--panel); border: 1px solid var(--border);
+    border-radius: 8px; box-shadow: 0 6px 20px rgba(0,0,0,.35); z-index: 9500; }
+  .proj-menu.open { display: flex; }
+  .proj-menu-item { padding: 7px 10px; border-radius: 6px; font-size: 12px; color: var(--text); cursor: pointer; }
+  .proj-menu-item:hover { background: var(--panel-2); }
+  .degraded-banner { flex: none; height: 36px; display: flex; align-items: center; justify-content: center;
+    gap: 8px; font-size: 12px; color: var(--muted); background: var(--panel-2);
+    border-bottom: 1px solid var(--border); padding: 0 12px; }
+  .degraded-banner button { width: 20px; height: 20px; border-radius: 4px; color: var(--muted);
+    border: none; background: none; cursor: pointer; font-size: 14px; }
+  .degraded-banner button:hover { background: var(--panel); color: var(--text); }
   .topbar .btn { background: var(--panel-2); border: 1px solid var(--border); padding: 5px 12px;
     border-radius: 6px; font-size: 12px; }
   .topbar .btn:hover { background: #34343c; }
@@ -490,12 +509,23 @@
 </div>
 <div class="app">
   <div class="topbar">
-    <span class="title">AI剪辑工作台 v0.9 <span id="buildTag" style="font-weight:400;font-size:11px;color:var(--muted)"></span></span>
+    <button class="logo-btn" id="projMenuBtn" title="项目菜单">&#8801;</button>
+    <input class="title-input" id="projName" readonly value="AI剪辑工作台" title="点击重命名项目">
+    <span id="buildTag" style="font-weight:400;font-size:11px;color:var(--muted)"></span>
     <span class="spacer"></span>
     <span class="mcp-pill"><span class="mcp-dot" id="mcpDot"></span><span id="mcpName">未连接</span></span>
     <button class="btn" id="skillBtn">Skill</button>
     <button class="btn" id="presetBtn">模板</button>
     <button class="btn primary" id="exportBtn">导出剪映草稿</button>
+    <div class="proj-menu" id="projMenu">
+      <div class="proj-menu-item" id="projMenuShortcuts">快捷键&hellip;</div>
+      <div class="proj-menu-item" id="projMenuExit">退出</div>
+    </div>
+  </div>
+
+  <div class="degraded-banner" id="degradedBanner" style="display:none">
+    <span id="degradedMsg"></span>
+    <button id="degradedClose" aria-label="关闭">&times;</button>
   </div>
 
   <div class="main">
@@ -773,7 +803,7 @@
     .tools-rail .rail-btn.active { background:var(--primary-dim); border-color:var(--primary); color:var(--primary); }
     /* 统一 .tools-rail .rail-btn 已覆盖；此处旧 .rail-btn 规则删除（v0.9 P1，消除与 538 行的冲突） */
     /* 2026-08-19 修 .tools-content 塌陷：.tools 高度撑满屏幕（100vh - 42px topbar），.tools-content 在 flex row 里自然 stretch */
-    .tools { height: calc(100vh - 42px); }
+    .tools { height: calc(100vh - 48px); }
     .tools-content { flex:1; min-width:0; overflow-y:auto; height:100%; }
     .tools-content .kfpanel, .tools-content .maskpanel, .tools-content .subpanel, .tools-content .stickerpanel, .tools-content .effectpanel,
     .tools-content .insp-panel { display:none; border-top:none; min-height: 200px; }
@@ -3946,6 +3976,54 @@ let booted = false;
 // 2026-08-20 诊断打点（GPT 评审）：全局错误捕获——"全空/黑屏"类问题不再需要猜，控制台直接看堆栈
 window.addEventListener("error", e => console.error("[window error]", e.message, e.filename + ":" + e.lineno + ":" + e.colno));
 window.addEventListener("unhandledrejection", e => console.error("[unhandledrejection]", e.reason && (e.reason.stack || e.reason)));
+function initTopbar() {
+  // L2-30 顶栏编辑：可编辑项目名（localStorage，不碰 Api 契约）+ Logo 下拉
+  const input = document.getElementById("projName");
+  const KEY = "aivs.projectName";
+  if (input) {
+    let committed = localStorage.getItem(KEY) || "AI剪辑工作台";
+    input.value = committed;
+    input.addEventListener("pointerdown", () => {
+      input.readOnly = false;
+      input.focus();
+      requestAnimationFrame(() => input.select());
+    });
+    input.addEventListener("keydown", e => {
+      if (e.key === "Enter") { e.preventDefault(); input.blur(); }
+      else if (e.key === "Escape") { input.value = committed; input.blur(); }
+    });
+    input.addEventListener("blur", () => {
+      const v = (input.value || "").trim();
+      if (!v || v === committed) { input.value = committed; input.readOnly = true; return; }
+      try { localStorage.setItem(KEY, v); committed = v; }
+      catch (err) { if (window.UiFeedback) UiFeedback.showToast({ description: "重命名失败", variant: "error" }); }
+      input.readOnly = true;
+    });
+  }
+  const menuBtn = document.getElementById("projMenuBtn");
+  const menu = document.getElementById("projMenu");
+  if (menuBtn && menu) {
+    menuBtn.addEventListener("click", e => { e.stopPropagation(); menu.classList.toggle("open"); });
+    document.addEventListener("click", e => { if (!menu.contains(e.target)) menu.classList.remove("open"); });
+    const sc = document.getElementById("projMenuShortcuts");
+    if (sc) sc.addEventListener("click", () => { menu.classList.remove("open"); if (window.UiFeedback && UiFeedback.openShortcutsDialog) UiFeedback.openShortcutsDialog(); });
+    const ex = document.getElementById("projMenuExit");
+    if (ex) ex.addEventListener("click", () => { try { window.close(); } catch (e) {} });
+  }
+}
+
+function initDegradedBanner() {
+  // L2-33 降级横幅：Q11 未裁定前只保留组件接口（默认 display:none），不启用判定
+  const banner = document.getElementById("degradedBanner");
+  const close = document.getElementById("degradedClose");
+  if (close && banner) close.addEventListener("click", () => { banner.style.display = "none"; });
+}
+
+function maybeShowDegradedBanner() {
+  // L2-33：Q11 未裁定（A1/A2/B 分支）前不启用；组件默认 display:none
+  return;
+}
+
 function boot() {
   if (booted) return;
   if (!api()) return;            // pywebview 未注入就等，绝不缓存 null
@@ -3956,6 +4034,7 @@ function boot() {
     const _bt = document.getElementById("buildTag");
     if (_bt) _bt.textContent = BUILD_TAG;
   } catch (e) { console.error("[boot] buildTag 写入失败:", e); }
+  initTopbar(); initDegradedBanner();
   // 先拿本地 HTTP 服务器地址，素材才能走 http（WebView2 下 video/audio 不能读 file://）
   call("get_server_url").then(url => {
     if (url) window.MEDIA_BASE = url;
