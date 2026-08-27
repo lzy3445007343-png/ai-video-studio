@@ -158,6 +158,7 @@ function buildKfRow(path, lab, step, def, anims, local) {
   //   hitOn     = hitAtPlayhead（播放头是否踩中 KF，决定 ◆ 外观：实心蓝/空心灰）
   const channelOn = KfChannel.isAnimated(s, path);
   const hitOn = KfChannel.hitAtPlayhead(s, path, local);
+  const inRange = TimelineMapper.isPlayheadWithinRange(s);   // L0-06：播放头是否在元素范围内（范围门控第三态）
   // B2.1：显示值收口到 EffectivePropertyResolver（animation→transform→default，带 source）
   const cur = getEffectivePropertyValue(s, path, local).value;
   const shown = cur == null ? def : cur;
@@ -172,6 +173,14 @@ function buildKfRow(path, lab, step, def, anims, local) {
     '<span class="lab">' + lab + '</span>' +
     '<input class="val" data-act="val" value="' + round2(shown) + '" step="' + step + '">' +
     '<button class="add" data-act="add" title="在播放头处打关键帧">＋</button>';
+  // L0-06：播放头在元素范围外 → ◆ 与 ＋ 禁用（对齐 OpenCut：范围外只能改 base、不能打/删帧）
+  const togBtn = row.querySelector('[data-act="tog"]');
+  const addBtn = row.querySelector('[data-act="add"]');
+  if (!inRange) {
+    togBtn.disabled = true; togBtn.style.opacity = "0.5"; togBtn.style.pointerEvents = "none";
+    togBtn.title = "播放头不在该元素时间范围内，无法打/删关键帧";
+    addBtn.disabled = true; addBtn.style.opacity = "0.5"; addBtn.style.pointerEvents = "none";
+  }
   // 事件（每个 row 独立绑一次）
   row.querySelector('[data-act="tog"]').addEventListener("click", () => {
     toggleKf(path);
@@ -195,7 +204,7 @@ function buildKfRow(path, lab, step, def, anims, local) {
     if (isNaN(v)) return;
     const s = selectedSeg();   // 每次取最新段引用（Store 刷新替换 draft 后旧引用失效）
     if (!s) return;
-    const hasKf = KfChannel.isAnimated(s, path);
+    const hasKf = KfChannel.isAnimated(s, path) && inRange;   // L0-06：范围外即使有通道也走 base 分支
     // ★ KET：优先用 focus 锁定的 localUs（一次手势一个时间基准），fallback 实时换算
     const local = (_editCtx && _editCtx.editTime) ? _editCtx.editTime.localUs
                 : TimelineMapper.playheadLocal(s);

@@ -44,15 +44,31 @@ function rulerConfig(p) {
   }
   return { labelInterval, tickInterval };
 }
-// 渲染两级刻度：细刻度 .tick.minor（无文字）+ 主刻度 .tick.major（带 mm:ss 文字）
-function renderRuler(p, totalSec) {
+// L0-05：标尺虚拟化——只读视口 ± 缓冲，长视频不再全量建 tick。
+function _rulerViewportSec() {
+  const sc = $("tlScroll");
+  if (!sc) return { left: 0, right: 0 };
+  const p = pps();
+  return { left: sc.scrollLeft / p, right: (sc.scrollLeft + sc.clientWidth) / p };
+}
+// 渲染两级刻度：细刻度 .tick.minor（无文字）+ 主刻度 .tick.major（带 mm:ss 文字）。
+// 传入 viewLeftSec/viewRightSec 指定可见区间（含缓冲）则仅渲该区间，否则全量（兜底）。
+function renderRuler(p, totalSec, viewLeftSec, viewRightSec) {
   const ruler = document.getElementById("ruler");
   if (!ruler) return;
   const { labelInterval, tickInterval } = rulerConfig(p);
+  let lo = 0, hi = totalSec;
+  if (viewLeftSec != null && viewRightSec != null) {
+    const buf = 80 / p;   // 两侧缓冲 ~80px，避免滚动手边露白
+    lo = Math.max(0, viewLeftSec - buf);
+    hi = viewRightSec + buf;
+  }
   ruler.innerHTML = "";
-  const n = Math.ceil(totalSec / tickInterval) + 1;
-  for (let i = 0; i <= n; i++) {
+  const i0 = Math.max(0, Math.floor(lo / tickInterval));
+  const i1 = Math.ceil(hi / tickInterval);
+  for (let i = i0; i <= i1; i++) {
     const t = i * tickInterval;
+    if (t > totalSec + tickInterval) break;
     const isLabel = Math.abs(t / labelInterval - Math.round(t / labelInterval)) < 1e-6;
     const tick = document.createElement("div");
     tick.className = isLabel ? "tick major" : "tick minor";
@@ -512,8 +528,9 @@ function _renderTimelineKeyed(content, labels, ruler) {
   const w = contentWidth();
   content.style.width = w + "px";
   ruler.style.width = w + "px";
-  ruler.innerHTML = "";
-  renderRuler(pps(), w / pps());
+  // L0-05：标尺虚拟化（按当前视口渲染）
+  const vp = _rulerViewportSec();
+  renderRuler(pps(), w / pps(), vp.left, vp.right);
   (Store.state.bookmarks || []).forEach(b => {
     const bm = document.createElement("div");
     bm.className = "bm-mark";
@@ -602,7 +619,9 @@ function renderTimeline(s) {
   ruler.style.width = w + "px";
   ruler.innerHTML = "";
   const totalSec = w / pps();
-  renderRuler(pps(), totalSec);
+  // L0-05：标尺虚拟化（按当前视口渲染）
+  const vp = _rulerViewportSec();
+  renderRuler(pps(), totalSec, vp.left, vp.right);
   // 书签标记（对齐 OpenCut bookmarks.tsx：标尺顶部小红旗，点击跳转、双击切换、右键删除）
   (Store.state.bookmarks || []).forEach(b => {
     const bm = document.createElement("div");

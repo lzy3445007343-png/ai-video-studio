@@ -51,6 +51,15 @@ const TimelineMapper = {
     if (!seg || typeof Store === "undefined") return 0;
     return this.globalToLocal(seg, Store.state.playheadUs || 0);
   },
+
+  /** L0-06：播放头是否在元素时间范围内（左闭右闭）。用于 ◆ 范围门控——
+   *  播放头在元素外时禁用打/删关键帧、输入框编辑只改 base（对齐 OpenCut isPlayheadWithinElementRange）。
+   *  注意：不 clamp——必须保留"播放头在段外"的事实，不能反推。 */
+  isPlayheadWithinRange(seg) {
+    if (!seg || typeof Store === "undefined") return false;
+    const raw = (Store.state.playheadUs || 0) - (seg.start || 0);
+    return raw >= 0 && raw <= (seg.duration || 0);
+  },
 };
 
 if (typeof window !== "undefined") window.TimelineMapper = TimelineMapper;

@@ -430,6 +430,53 @@ def get_segment_peaks(track_type: str, track_index: int, index: int, max_points:
     return json.dumps(sr.get_segment_peaks(track_type, track_index, index, max_points), ensure_ascii=False)
 
 
+@mcp.tool()
+def upsert_keyframe(track_type: str, track_index: int, index: int,
+                    path: str, time_us: int, value: float,
+                    seg_mode: str = "linear", seg_id: str = None) -> str:
+    """打/改元素属性关键帧（upsert 语义：同 (path,time_us) ±1ms 内已有帧则覆盖，否则新增）。
+
+    覆盖 7 个可关键帧属性：transform.positionX / positionY / scaleX / scaleY / rotate / opacity / volume。
+    time_us: 段内局部时间（微秒，0..seg.duration），后端自动 clamp + 整帧吸附。
+    seg_id: 稳定段 id，优先于 (track_type,track_index,index) 定位（对齐 add_effect/set_segment_flag 约定），避开 ti 漂移。
+    返回后端 {ok, path, keyframe_id, keyframes}（该 path 下全部键，供 Agent 确认）。
+
+    注意：本工具只追加，不改动任何既有 MCP 工具（L0-07 C-6）。语义与前端 toggleKf 同源（都走 main.add_keyframe）。"""
+    return _exec("add_keyframe", {"track_type": track_type, "track_index": track_index,
+                                  "index": index, "path": path, "time_us": time_us,
+                                  "value": value, "seg_mode": seg_mode, "seg_id": seg_id})
+
+
+@mcp.tool()
+def remove_keyframe(track_type: str, track_index: int, index: int,
+                    path: str, time_us: int, seg_id: str = None, playhead_us: int = None) -> str:
+    """删除段内 (path, time_us) 处关键帧（1 帧容差定位 keyframe_id 后删除）。
+
+    删光某属性全部关键帧后，后端把播放头处解析值 WYSIWYG 回写 base（画面保持删除前所见，L0-06）。
+    playhead_us: 段外全局微秒，用于计算回写 base 的值；不传则回退取被删关键帧自身值。
+    返回后端 {ok, path, keyframes}。"""
+    info = json.loads(_exec("get_keyframes", {"track_type": track_type, "track_index": track_index,
+                                              "index": index, "seg_id": seg_id}))
+    kid = None
+    if isinstance(info, dict) and info.get("ok"):
+        for k in (info.get("animations", {}).get(path, {}).get("keys") or []):
+            if abs(k.get("t", 0) - time_us) <= 33333:   # 1 帧@30fps 容差
+                kid = k.get("id"); break
+    if not kid:
+        return json.dumps({"ok": False, "error": f"未找到 {path} 在 time_us={time_us} 处的关键帧"},
+                          ensure_ascii=False)
+    return _exec("remove_keyframe", {"track_type": track_type, "track_index": track_index,
+                                     "index": index, "path": path, "keyframe_id": kid,
+                                     "seg_id": seg_id, "playhead_us": playhead_us})
+
+
+@mcp.tool()
+def get_keyframes(track_type: str, track_index: int, index: int, seg_id: str = None) -> str:
+    """读取某段全部关键帧（seg.animations），返回 {ok, animations}。供 Agent 免解析全量草稿确认落盘结果。"""
+    return _exec("get_keyframes", {"track_type": track_type, "track_index": track_index,
+                                   "index": index, "seg_id": seg_id})
+
+
 @mcp.resource("aivideo://draft_state")
 def draft_state_resource() -> str:
     """当前共享草稿状态（素材库 + 时间轴 + meta.mcp 连接状态）。

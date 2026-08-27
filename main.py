@@ -1217,6 +1217,12 @@ class CommandManager:
             Api._in_execute = False
         # 防御：result 可能不是 dict（部分方法返回列表/True）→ 安全取 ok，避免 AttributeError
         ok = isinstance(result, dict) and bool(result.get("ok"))
+        # L0-09：统一不变量管线（写后强制）——覆盖 set_speed 等 KF 越界漏点，保证动画键恒在 [0,duration]。
+        # 仅在真实变更时运行（避免无操作也 bump domain_version）；幂等，不改三桶组织。
+        if ok and Api._op_changed:
+            _run_enforce_pipeline(api, cmd_id)
+            save_state(api.state)
+            cmd.dv_after = api.state.get("domain_version", 0)
         # 2d：事务内续期——**任一步**（含无改动步）都刷新 created_at，长事务/AI 批量不误 abort。
         # 必须在 op_changed 判断之外，否则无改动的步骤不续期。
         if self._tx is not None:
@@ -2120,6 +2126,17 @@ KF_PROPS = {
 }
 KF_KEYFRAMEABLE = tuple(KF_PROPS.keys())
 
+# L0-08（Q1=A 分支）：动画通道属性路径 → 段 base 字段映射（删光关键帧回写 base 用）。
+# transform.* → seg["transform"][base_field]；volume → seg["volume"]。
+KF_PATH_TO_BASE_FIELD = {
+    "transform.positionX": "x",
+    "transform.positionY": "y",
+    "transform.scaleX": "scaleX",
+    "transform.scaleY": "scaleY",
+    "transform.rotate": "rotation",
+    "transform.opacity": "opacity",
+}
+
 
 def _ensure_seg_animations(draft):
     """给草稿里所有段补 animations 默认值（兼容旧项目）。"""
@@ -2308,11 +2325,29 @@ def _seg_clip_settings(seg, W, H):
 
 
 
-def _kf_interp(keys, local_us):
-    """对一条标量通道的 keys 做线性/hold 插值，返回 (value, found)。keys 元素 {t, v, seg}。"""
+def _kf_interp(keys, local_us, ch_type=None):
+    """对一条标量通道的 keys 做插值，返回 (value, found)。keys 元素 {t, v, seg, ...}。
+
+    L0-08（discrete 语义）：channel type=="discrete"，或任一 key 的 v 非数值（bool/str）
+    时恒取左帧值（step），不参与 lerp（对齐 OpenCut discrete 通道 step 插值）。
+    ch_type 为 None 时退化为线性/hold（兼容旧数据，无 type 字段）。"""
     if not keys:
         return None, False
     ks = sorted(keys, key=lambda k: k["t"])
+    # discrete / 非数值 → step（hold 左侧值）
+    is_discrete = (ch_type == "discrete") or any(
+        (isinstance(k.get("v"), bool) or not isinstance(k.get("v"), (int, float))) for k in ks
+    )
+    if is_discrete:
+        if local_us <= ks[0]["t"]:
+            return ks[0]["v"], True
+        if local_us >= ks[-1]["t"]:
+            return ks[-1]["v"], True
+        for i in range(len(ks) - 1):
+            a, b = ks[i], ks[i + 1]
+            if a["t"] <= local_us <= b["t"]:
+                return a["v"], True
+        return ks[-1]["v"], True
     if local_us <= ks[0]["t"]:
         return ks[0]["v"], True
     if local_us >= ks[-1]["t"]:
@@ -2336,7 +2371,7 @@ def resolve_kf_value(anims, path, local_us):
     keys = ch.get("keys")
     if not keys:
         return None
-    v, _ = _kf_interp(keys, local_us)
+    v, _ = _kf_interp(keys, local_us, ch.get("type"))
     return v
 
 
@@ -2383,8 +2418,48 @@ def _clamp_animations_to_duration(anims, new_duration):
                 kept.append({"id": uuid.uuid4().hex, "t": int(new_duration), "v": v, "seg": "linear"})
                 kept.sort(key=lambda k: k["t"])
         if kept:
-            out[path] = {"keys": kept}
+            # L0-08：保留通道 type 字段（scalar|discrete），新版/旧版 keys 都经 dict(k) 原样携带缓动元数据
+            out[path] = {"type": ch.get("type", "scalar"), "keys": kept}
     return out
+
+
+# ===================== L0-09 统一不变量管线（写后强制） =====================
+# 集中式 enforce：所有写路径经 CommandManager.execute 后统一触发，消除「UI 与 Agent 产出不一致」。
+# 本切片实装规则1（duration→clampAnimations）；规则2(主轨 start=0)/规则3(空轨剪除) 暂缓（行为变更，需真机验收）。
+
+def _enforce_kf_duration(seg):
+    """规则1：段 duration 变化后，将其 animations 所有通道 clamp 到 [0, duration]，无越界键。"""
+    if not isinstance(seg, dict):
+        return
+    anims = _seg_anims(seg)
+    if not anims:
+        return
+    seg["animations"] = _clamp_animations_to_duration(anims, int(seg.get("duration", 0)))
+
+
+def _run_enforce_pipeline(api, cmd_id):
+    """L0-09 管线入口：遍历草稿全部段，强制 KF 时长不变量。幂等、纯前端数据规整，不改三桶组织。"""
+    if hasattr(api, "draft"):
+        draft = api.draft
+    else:
+        draft = api
+    for seg in _iter_all_segs(draft):
+        if isinstance(seg, dict):
+            _enforce_kf_duration(seg)
+
+
+def _write_kf_base(seg, path, val):
+    """L0-06 WYSIWYG：把某属性通道的解析值写回 base（transform 字段 + params 双写），
+    供「删光关键帧」后画面保持删除前所见值。"""
+    if not isinstance(seg, dict) or val is None:
+        return
+    if path in KF_PATH_TO_BASE_FIELD:
+        bf = KF_PATH_TO_BASE_FIELD[path]
+        seg.setdefault("transform", {})[bf] = val
+        _write_param(seg, _FIELD_TO_PARAM.get(bf, "transform." + path.split(".")[1]), val)
+    elif path == "volume":
+        seg["volume"] = val
+        _write_param(seg, "volume", val)
 
 
 def _apply_keyframes_to_segment(seg_obj, anims, W, H):
@@ -3960,15 +4035,24 @@ class Api:
             kid = existing["id"]
         else:
             kid = uuid.uuid4().hex
-            keys.append({"id": kid, "t": t, "v": float(value), "seg": seg_mode})
+            # L0-08（Q1=A）：新建关键帧携带缓动元数据位（默认 linear/无句柄），供 L2-05 缓动曲线编辑器消费；
+            # 求值侧未实现 bezier 时按 linear 回退（_kf_interp 忽略未知句柄）。
+            keys.append({
+                "id": kid, "t": t, "v": float(value), "seg": seg_mode,
+                "segmentToNext": "linear",
+                "leftHandle": {"dt": 0, "dv": 0},
+                "rightHandle": {"dt": 0, "dv": 0},
+                "tangentMode": "auto",
+            })
             keys.sort(key=lambda k: k["t"])
-        anims[path] = {"keys": keys}
+        anims[path] = {"type": ch.get("type", "scalar"), "keys": keys}
         seg["animations"] = anims
         save_state(self.state)
         return {"ok": True, "path": path, "keyframe_id": kid, "keyframes": keys}
 
     def update_keyframe(self, track_type, track_index, index, path, keyframe_id,
-                        value=None, time_us=None, seg_mode=None, seg_id=None):
+                        value=None, time_us=None, seg_mode=None, seg_id=None,
+                        segment_to_next=None, left_handle=None, right_handle=None, tangent_mode=None):
         """更新某关键帧的 value / 时间(time_us) / 插值方式。未传的字段保持不变。"""
         self._reload()
         self._push_undo()
@@ -3999,6 +4083,15 @@ class Api:
             if seg_mode not in ("linear", "hold"):
                 return {"ok": False, "error": "seg_mode 必须是 linear 或 hold"}
             target["seg"] = seg_mode
+        # L0-08（Q1=A）：可选缓动元数据（默认缺省不写，向后兼容既有调用）
+        if segment_to_next is not None:
+            target["segmentToNext"] = segment_to_next
+        if left_handle is not None:
+            target["leftHandle"] = left_handle
+        if right_handle is not None:
+            target["rightHandle"] = right_handle
+        if tangent_mode is not None:
+            target["tangentMode"] = tangent_mode
         if _os2.environ.get("KF_AUDIT", "1") == "1":
             print(f"[KF-AUDIT] update_keyframe stored: path={path} id={keyframe_id} | after: t={target.get('t')} v={target.get('v')} seg={target.get('seg')}")
         keys.sort(key=lambda k: k["t"])
@@ -4007,8 +4100,10 @@ class Api:
         save_state(self.state)
         return {"ok": True, "path": path, "keyframes": keys}
 
-    def remove_keyframe(self, track_type, track_index, index, path, keyframe_id, seg_id=None):
-        """删除一个关键帧；若该属性键被删空，则移除整条通道。"""
+    def remove_keyframe(self, track_type, track_index, index, path, keyframe_id, seg_id=None, playhead_us=None):
+        """删除一个关键帧；若该属性键被删空，则移除整条通道，并把播放头处解析值 WYSIWYG 回写 base。
+
+        playhead_us：可选，段外全局微秒；用于计算"删光后回写 base 的值"。不传则回退取被删关键帧自身值。"""
         self._reload()
         self._push_undo()
         seg, err = self._kf_resolve_seg(track_type, track_index, index, seg_id)
@@ -4018,18 +4113,29 @@ class Api:
         ch = anims.get(path)
         if not isinstance(ch, dict) or not ch.get("keys"):
             return {"ok": False, "error": "该属性没有关键帧"}
-        keys = [k for k in ch["keys"] if k.get("id") != keyframe_id]
+        old_keys = list(ch.get("keys", []))
+        target = next((k for k in old_keys if k.get("id") == keyframe_id), None)
+        keys = [k for k in old_keys if k.get("id") != keyframe_id]
         if keys:
-            anims[path] = {"keys": keys}
+            anims[path] = {"type": ch.get("type", "scalar"), "keys": keys}
         else:
+            # L0-06 WYSIWYG：删光通道 → 把播放头处解析值回写 base（画面保持删除前所见）
             anims.pop(path, None)
+            val = None
+            if playhead_us is not None:
+                local = max(0, min(int(playhead_us) - int(seg.get("start", 0)), int(seg.get("duration", 0))))
+                val, _ = _kf_interp(old_keys, local, ch.get("type"))
+            if val is None and target is not None:
+                val = target.get("v")   # 回退：取被删关键帧自身值
+            if val is not None:
+                _write_kf_base(seg, path, val)
         seg["animations"] = anims
         save_state(self.state)
         return {"ok": True, "path": path, "keyframes": anims.get(path, {}).get("keys", [])}
 
-    def get_keyframes(self, track_type, track_index, index):
-        """返回该段全部关键帧（animations），供前端面板渲染。"""
-        seg, err = self._kf_resolve_seg(track_type, track_index, index)
+    def get_keyframes(self, track_type, track_index, index, seg_id=None):
+        """返回该段全部关键帧（animations），供前端面板渲染 / Agent 读路径。"""
+        seg, err = self._kf_resolve_seg(track_type, track_index, index, seg_id)
         if err:
             return {"ok": False, "error": err}
         return {"ok": True, "animations": _seg_anims(seg)}

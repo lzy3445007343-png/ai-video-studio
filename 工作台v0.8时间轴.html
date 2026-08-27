@@ -806,6 +806,8 @@
 <script src="property/property-kernel.js"></script>
 <script src="property/kf-channel.js"></script>
 <script src="property/timeline-mapper.js"></script>
+<script src="property/snap-engine.js"></script>
+<script src="property/ui-feedback.js"></script>
 <script src="property/edit-context.js"></script>
 <script src="property/effective-property-resolver.js"></script>
 <script src="property/interaction-kernel.js"></script>
@@ -844,6 +846,51 @@ function fileURL(p) {
   return "file:///" + encodeURI((p).replace(/\\/g, "/"));
 }
 function pps() { return Store.state.pxPerSec; }
+/* L0-05：缩放指数平滑 + 视图状态持久化 */
+let _rulerRaf = 0;
+let _zoomTarget = null, _zoomAnim = 0;
+let _viewRestored = false;
+const TL_VIEW_KEY = "TL_VIEW_STATE";
+function queueZoomWheel(deltaY) {
+  if (_zoomTarget == null) _zoomTarget = pps();
+  const dir = deltaY > 0 ? -1 : 1;
+  const capped = Math.min(30, Math.abs(deltaY));     // 单帧步长上限 30
+  const f = Math.exp(-capped / 300);                 // 指数衰减因子：步长随滚轮量平滑
+  _zoomTarget = Math.min(600, Math.max(20, _zoomTarget * (1 + dir * (1 - f))));
+  if (!_zoomAnim) _zoomAnim = requestAnimationFrame(_zoomTick);
+}
+function _zoomTick() {
+  _zoomAnim = 0;
+  if (_zoomTarget == null) return;
+  const diff = _zoomTarget - pps();
+  if (Math.abs(diff) < 0.4) { setZoom(_zoomTarget); _zoomTarget = null; return; }
+  setZoom(pps() + diff * 0.4);                        // 指数逼近目标
+  _zoomAnim = requestAnimationFrame(_zoomTick);
+}
+let _saveViewTimer = 0;
+function saveViewStateThrottled() {
+  if (_saveViewTimer) return;
+  _saveViewTimer = setTimeout(() => { _saveViewTimer = 0; saveViewState(); }, 400);
+}
+function saveViewState() {
+  try {
+    const sc = $("tlScroll");
+    localStorage.setItem(TL_VIEW_KEY, JSON.stringify({
+      pxPerSec: Store.state.pxPerSec,
+      scrollLeft: sc ? sc.scrollLeft : 0,
+      playheadUs: Store.state.playheadUs,
+    }));
+  } catch (_) {}
+}
+function loadViewState() {
+  try {
+    const raw = localStorage.getItem(TL_VIEW_KEY);
+    if (!raw) return null;
+    const o = JSON.parse(raw);
+    if (o && typeof o.pxPerSec === "number") return o;
+  } catch (_) {}
+  return null;
+}
 /* 缩放时以当前播放头为锚点：保持播放头在屏幕上的相对位置不变，避免用户 zoom 后找不到定位 */
 function setZoom(v) {
   v = Math.min(600, Math.max(20, v));
@@ -855,6 +902,7 @@ function setZoom(v) {
 
   $("zoomRange").value = v;
   Store.set({ pxPerSec: v });
+  saveViewState();   // L0-05：缩放变化即持久化视图状态
 
   requestAnimationFrame(() => {
     // Round B0：播放期 renderTimeline 被冻结(L1850)，zoom 必须自己重排容器宽度，
@@ -883,7 +931,9 @@ function repositionTimelineZoom() {
   });
   // 标尺刻度跟随新 pps 重画（renderTimeline 冻结期不会重画，否则刻度留旧比例）
   const ruler = $("ruler"), totalSec = ($("tlContent").offsetWidth) / p;
-  renderRuler(p, totalSec);
+  // L0-05：标尺虚拟化（按当前视口渲染）
+  const vp = _rulerViewportSec();
+  renderRuler(p, totalSec, vp.left, vp.right);
   renderGroupBox();   // 选中态包围盒跟随缩放
 }
 function usToTime(us) {
@@ -1149,7 +1199,7 @@ function addEffectFromLibrary(type, drop) {
   // 拖到空白新建特效轨：传 insertIndex 让后端在指定显示位插入（与 computeDrop/预览同源）
   call("add_effect", trackIndex, type, target, startUs, null, null, null, null, insertIndex, sel && sel.id).then(r => {
     if (r && r.ok) { refresh(); selectKey("effect:" + r.track_index + ":" + r.index); showToolTab("effects"); scrollToSegmentUs(startUs || 0); }
-    else alert("添加特效失败：" + (r && r.error ? r.error : "未知"));
+    else UiFeedback.showToast({ description: "添加特效失败：" + (r && r.error ? r.error : "未知"), variant: "error" });
   });
 }
 
@@ -1649,7 +1699,7 @@ function renderKfSel(s) {
   selEl.querySelector('[data-f="seg"]').addEventListener("change", e =>
     call("update_keyframe", ...kfSegArgs(), selectedKf.path, selectedKf.id, null, null, e.target.value, Store.state.selectedSegId).then(() => refresh()));
   selEl.querySelector('[data-act="delkf"]').addEventListener("click", () => {
-    call("remove_keyframe", ...kfSegArgs(), selectedKf.path, selectedKf.id, Store.state.selectedSegId).then(() => { selectedKf = { path: null, id: null }; refresh(); });
+    call("remove_keyframe", ...kfSegArgs(), selectedKf.path, selectedKf.id, Store.state.selectedSegId, Store.state.playheadUs).then(() => { selectedKf = { path: null, id: null }; refresh(); });
   });
 }
 
@@ -1691,9 +1741,10 @@ function toggleKf(path) {
   }));
   const anims = s.animations || {};
   const keys = (anims[path] && anims[path].keys) ? anims[path].keys : [];
-  const hitKey = keys.find(k => Math.abs((k.t || 0) - local) <= 1000);
+  const hitKey = keys.find(k => Math.abs((k.t || 0) - local) <= KfChannel.KF_HIT_TOLERANCE_US);   // L0-06：容差统一到 1 帧（与 KfChannel.hitAtPlayhead 同口径）
   if (hitKey) {
-    call("remove_keyframe", ...kfSegArgs(), path, hitKey.id, Store.state.selectedSegId).then(() => { selectedKf = { path: null, id: null }; refresh(); });
+    // L0-06：删光通道时把播放头处解析值 WYSIWYG 回写 base（后端 remove_keyframe 消费 playhead_us）
+    call("remove_keyframe", ...kfSegArgs(), path, hitKey.id, Store.state.selectedSegId, Store.state.playheadUs).then(() => { selectedKf = { path: null, id: null }; refresh(); });
   } else {
     const v = getEffectivePropertyValue(s, path, local).value;
     call("add_keyframe", ...kfSegArgs(), path, local, v, "linear", Store.state.selectedSegId).then(() => refresh());
@@ -1745,7 +1796,7 @@ function doToggleSourceAudio() {
   if (type !== "video") return;
   call("toggle_source_audio", type, +ti, +idx)
     .then(r => {
-      if (!r || !r.ok) { if (r && r.error) alert("提取原声失败：" + r.error); return; }
+      if (!r || !r.ok) { if (r && r.error) UiFeedback.showToast({ description: "提取原声失败：" + r.error, variant: "error" }); return; }
       refresh();
     });
 }
@@ -1759,12 +1810,12 @@ function doSetSpeed() {
   const input = prompt("设置播放速度（0.01 ~ 5.0，默认 1.0）：", cur);
   if (input === null) return;
   const speed = parseFloat(input);
-  if (Number.isNaN(speed)) { alert("请输入数字"); return; }
+  if (Number.isNaN(speed)) { UiFeedback.showToast({ description: "请输入数字", variant: "warn" }); return; }
   const changePitch = !confirm("保持原音调？\n\n确定=保持原音调；取消=随速度变调");
   const [type, ti, idx] = Store.state.selectedKey.split(":");
   call("set_segment_speed", type, +ti, +idx, speed, changePitch)
     .then(r => {
-      if (!r || !r.ok) { if (r && r.error) alert("变速失败：" + r.error); return; }
+      if (!r || !r.ok) { if (r && r.error) UiFeedback.showToast({ description: "变速失败：" + r.error, variant: "error" }); return; }
       refresh();
     });
 }
@@ -1782,7 +1833,7 @@ async function doExportDraft() {
   if (!name) return;
   // 2) 选保存位置（系统文件夹选择框，初始定位到上次导出路径）
   const folder = await call("select_folder");
-  if (typeof folder !== "string" || !folder) { alert("已取消导出（未选择保存位置）"); return; }
+  if (typeof folder !== "string" || !folder) { UiFeedback.showToast({ description: "已取消导出（未选择保存位置）" }); return; }
   // 3) 导出（后端返回完整草稿文件夹路径 + 跳过清单）
   const r = await call("export_draft", name, folder);
   if (r && r.ok) {
@@ -1792,9 +1843,9 @@ async function doExportDraft() {
         r.skipped.slice(0, 8).map(s => "· " + (s.name || "") + "：" + (s.reason || "")).join("\n") +
         (r.skipped.length > 8 ? "\n… 等 " + r.skipped.length + " 个" : "");
     }
-    alert(msg + "\n\n现在可以打开剪映 → 导入草稿验证");
+    UiFeedback.showToast({ description: msg + "\n\n现在可以打开剪映 → 导入草稿验证" });
   } else {
-    alert("❌ 导出失败：" + ((r && r.error) || "未知错误"));
+    UiFeedback.showToast({ description: "❌ 导出失败：" + ((r && r.error) || "未知错误"), variant: "error" });
   }
 }
 
@@ -1805,26 +1856,28 @@ async function doExportDraft() {
 //   每个段每个动画通道的每个 key → global 时间 = s.start + k.t（TimelineMapper.localToGlobal）
 //   这是"播放头能对上关键帧→◆ 蓝点亮"的前提——没有它，播放头永远停在任意微秒，
 //   hitOn 的 ±1ms 精确判定形同虚设（用户反馈"播放头很难挪到关键帧上"的根因）。
+// L0-04：吸附点集统一收口到 SnapEngine.getPoints（缓存 + exclude 过滤）。
+// 保留此函数为兼容壳 + 引擎内部复用入口；每个点带 segKey 标记，便于按段排除自身。
 function buildSnapPoints(excludeKey, excludePlayhead) {
   const pts = [];
   forEachSeg((s, type, ti, idx) => {
     const k = type + ":" + ti + ":" + idx;
     if (excludeKey && k === excludeKey) return;
-    pts.push({ time: s.start, type: "element-start" });
-    pts.push({ time: s.start + s.duration, type: "element-end" });
+    pts.push({ time: s.start, type: "element-start", segKey: k });
+    pts.push({ time: s.start + s.duration, type: "element-end", segKey: k });
     // 关键帧吸附点（每个 key 一个；s.start + k.t = local→global）
     if (s.animations) {
       for (const path in s.animations) {
         const ch = s.animations[path];
         if (!ch || !ch.keys) continue;
         for (const kf of ch.keys) {
-          pts.push({ time: TimelineMapper.localToGlobal(s, kf.t || 0), type: "keyframe", path });
+          pts.push({ time: TimelineMapper.localToGlobal(s, kf.t || 0), type: "keyframe", path, segKey: k });
         }
       }
     }
   });
-  (Store.state.bookmarks || []).forEach(b => pts.push({ time: b.us, type: "bookmark" }));
-  if (!excludePlayhead) pts.push({ time: Store.state.playheadUs, type: "playhead" });
+  (Store.state.bookmarks || []).forEach(b => pts.push({ time: b.us, type: "bookmark", segKey: null }));
+  if (!excludePlayhead) pts.push({ time: Store.state.playheadUs, type: "playhead", segKey: null });
   return pts;
 }
 // 阈值：OpenCut 默认 10px → 微秒（随缩放变化，pixelPerSec = pps()）
@@ -1935,8 +1988,8 @@ function onPointerMove(e) {
   }
   if (d.mode === "move") {
     let left = Math.max(0, d.s0.start + dUs);
-    if (Store.state.snapOn) {
-      const r = resolveSnap(left, buildSnapPoints(d.key, false));
+    if (Store.state.snapOn && !SnapEngine.isShiftDisabled(e)) {
+      const r = SnapEngine.resolve(left, { excludeSegKey: d.key });
       left = r.snapped;
       r.point ? showSnapGuide(r.point.time) : hideSnapGuide();
     } else hideSnapGuide();
@@ -1960,8 +2013,8 @@ function onPointerMove(e) {
     // 素材头对应时间轴位置：src_start=0 处（再往左没有素材可补，对齐后端 _trim_core clamp）
     const minLeft = d.s0.start - (d.s0.src_start || 0) / speed;
     let left = Math.max(minLeft, Math.min(right - 0.2e6, d.s0.start + dUs));
-    if (Store.state.snapOn) {
-      const r = resolveSnap(left, buildSnapPoints(d.key, false));
+    if (Store.state.snapOn && !SnapEngine.isShiftDisabled(e)) {
+      const r = SnapEngine.resolve(left, { excludeSegKey: d.key });
       left = Math.max(minLeft, Math.min(right - 0.2e6, r.snapped));
       r.point ? showSnapGuide(r.point.time) : hideSnapGuide();
     } else hideSnapGuide();
@@ -1982,22 +2035,60 @@ function onPointerMove(e) {
       ? d.s0.start + (full - ss) / speed
       : Infinity;
     let r2 = Math.max(d.s0.start + 0.2e6, Math.min(maxRight, right + dUs));
-    if (Store.state.snapOn) {
-      const r = resolveSnap(r2, buildSnapPoints(d.key, false));
+    if (Store.state.snapOn && !SnapEngine.isShiftDisabled(e)) {
+      const r = SnapEngine.resolve(r2, { excludeSegKey: d.key });
       r2 = Math.max(d.s0.start + 0.2e6, Math.min(maxRight, r.snapped));
       r.point ? showSnapGuide(r.point.time) : hideSnapGuide();
     } else hideSnapGuide();
     d.curRightUs = r2;
   }
-  // RAF 合并（2026-08-18 收口，FableCut 脏标记思路）：mousemove 高频触发，每帧最多 _emit 一次
-  // 根治"鼠标停了才跟上"卡顿；mousemove 期间只更新 Store.state.drag，下一帧 paint 前统一重绘
-  _scheduleDragRender();
+  // L0-01 (R3)：拖动中只做局部 DOM 渲染（被拖段位置 + 落点指示），不再 Store._emit 全量重绘。
+  // 同步直改 style.left/width，跟手性优于原 RAF/同步 _emit，且零全量 renderAll/renderPreview。
+  renderDragOverlay(d);
 }
-/* 拖拽期间重绘：同步 _emit 立即触发（浏览器自然 vsync 节流到每帧 1 次 paint）。
-   上一轮用 RAF 合并——但 RAF 的 ~16ms 延迟会让段"鼠标停了才跟上"，体感像不跟手。
-   同步 _emit 让 d.curLeftUs 立刻反映到 segGeom（makeSeg.leftUs）→ 段精确跟手。 */
-function _scheduleDragRender() {
-  Store._emit();
+/* L0-01 (R3)：拖动中局部渲染——替代原先的 Store._emit() 全局全量重绘。
+   原每 mousemove 都走 _emit → renderAll（renderMedia+renderTimeline全量重建+renderPreview媒体重seek），是拖动卡顿根因。
+   现改为只局部改被拖段的 DOM 位置 + 落点指示，零全量；松手 refresh 才一次全量。
+   覆盖"同轨 move + 左右 resize"的局部位置预览；跨轨移动的段垂直跟随列为后续增强
+   （拖动中靠目标轨高亮 + dropLine 反馈落点，松手 relocate_segment 落实，体验可接受）。 */
+function renderDragOverlay(d) {
+  if (!d) return;
+  const el = document.querySelector('.seg[data-key="' + d.key + '"]');
+  if (!el) return;
+  const p = pps();
+  if (d.mode === "move") {
+    el.style.left = (d.curLeftUs / 1e6 * p) + "px";
+    el.dataset.leftUs = d.curLeftUs;
+  } else if (d.side === "left") {
+    el.style.left = (d.curLeftUs / 1e6 * p) + "px";
+    const rightUs = d.s0.start + d.s0.duration;
+    el.style.width = ((rightUs - d.curLeftUs) / 1e6 * p) + "px";
+    el.dataset.leftUs = d.curLeftUs;
+  } else { // right resize
+    el.style.width = ((d.curRightUs - d.s0.start) / 1e6 * p) + "px";
+  }
+  updateDropIndicators(d);
+}
+
+/* L0-02 (R3)：落点指示局部化——从全量 renderTimeline 抽出，拖动中只更新 dropLine + 目标轨高亮，不重建。
+   复用 computeDrop 已在 onPointerMove 算好的 d.targetKind/targetDataTi。 */
+function updateDropIndicators(d) {
+  if (!d) return;
+  const content = $("tlContent");
+  content.querySelectorAll(".track").forEach(t => { t.classList.remove("drop-target"); t.classList.remove("drop-disabled"); });
+  content.querySelectorAll(".seg").forEach(s => s.classList.remove("drop-target-seg"));
+  const line = $("dropLine");
+  if (d.targetKind === "existing" && d.targetDataTi != null) {
+    const tracks = content.querySelectorAll(".track");
+    const tEl = tracks[d.targetDataTi];
+    if (tEl) tEl.classList.add("drop-target");
+    line.style.display = "none";
+  } else if (d.targetKind === "new") {
+    line.style.display = "";
+    line.style.left = (d.curLeftUs / 1e6 * pps()) + "px";
+  } else {
+    line.style.display = "none";
+  }
 }
 function onPointerUp() {
   const d = Store.state.drag;
@@ -2404,8 +2495,8 @@ function onPhMove(e) {
   if (!_phScrub) return;
   let us = clientXToUs(e.clientX);
   // 对齐 OpenCut PlayheadController.scrub：snapOn 开且未按 Shift 才吸附（Shift=临时关闭吸附）
-  if (Store.state.snapOn && !e.shiftKey) {
-    const r = resolveSnap(us, buildSnapPoints(null, true));  // 播放头吸附排除自身，避免吸到自己
+  if (Store.state.snapOn && !SnapEngine.isShiftDisabled(e)) {
+    const r = SnapEngine.resolve(us, { excludeSegKey: null, excludePlayhead: true });  // 播放头吸附排除自身，避免吸到自己
     us = r.snapped;
     r.point ? showSnapGuide(r.point.time) : hideSnapGuide();
   } else hideSnapGuide();
@@ -2456,7 +2547,8 @@ function onTimelineDrop(e) {
   // 特效拖入：优先绑定到光标下的 clip（视频/图片/音频/文本/贴纸段）；否则落特效轨（existing=调整层，new=新建特效轨）
   if (data && data.kind === "effect") {
     const rect = $("tlScroll").getBoundingClientRect();
-    const atTimeUs = Math.max(0, Math.round((e.clientX - rect.left + $("tlScroll").scrollLeft) / pps() * 1e6));
+    // L0-04：落点时间吸附到帧网格（TimelineMapper.snapFrame，与后端 snap_frame 同口径，fps 默认 30）
+    const atTimeUs = TimelineMapper.snapFrame(Math.max(0, Math.round((e.clientX - rect.left + $("tlScroll").scrollLeft) / pps() * 1e6)), 30);
     const bindSeg = findSegUnderCursor(e);
     const compatible = bindSeg && ["video", "image", "audio", "text", "sticker"].includes(bindSeg.segType);
     if (compatible) {
@@ -2475,7 +2567,8 @@ function onTimelineDrop(e) {
   if (!data || !data.path) return;
   const wantType = data.type === "audio" ? "audio" : (data.type === "text" ? "text" : "video");
   const rect = $("tlScroll").getBoundingClientRect();
-  const atTimeUs = Math.max(0, Math.round((e.clientX - rect.left + $("tlScroll").scrollLeft) / pps() * 1e6));
+  // L0-04：落点时间吸附到帧网格（TimelineMapper.snapFrame，与后端 snap_frame 同口径，fps 默认 30）
+  const atTimeUs = TimelineMapper.snapFrame(Math.max(0, Math.round((e.clientX - rect.left + $("tlScroll").scrollLeft) / pps() * 1e6)), 30);
   // 统一走 computeDrop：同类型已有轨→精确落点；空白/异类型→新建该类型轨接住（与预览/实际同源）
   // 优先复用 dragover 最后缓存落点（防松手瞬间跨边界错位）
   const cached = window.__libDropCache;
@@ -2487,9 +2580,9 @@ function onTimelineDrop(e) {
   const okHandler = (r) => {
     console.log("[add-result] ok=" + (r && r.ok) + (r && r.start != null ? " start=" + Math.round(r.start / 1e3) / 1e3 + "s" : "") + (r && r.error ? " err=" + r.error : ""));
     if (r && r.ok) { refresh(); if (r.start != null) scrollToSegmentUs(r.start); }
-    else alert("添加素材失败：" + ((r && r.error) ? r.error : "未知错误"));
+    else UiFeedback.showToast({ description: "添加素材失败：" + ((r && r.error) ? r.error : "未知错误"), variant: "error" });
   };
-  const failHandler = (err) => { console.error("[add-call-fail]", err); alert("添加素材调用失败：" + (err || "未知错误（看控制台 [add-call-fail]）")); };
+  const failHandler = (err) => { console.error("[add-call-fail]", err); UiFeedback.showToast({ description: "添加素材调用失败：" + (err || "未知错误（看控制台 [add-call-fail]）"), variant: "error" }); };
   if (drop.kind === "existing") call("add_to_timeline", data.name, data.path, data.type, drop.dataTi, atTimeUs).then(okHandler, failHandler);
   // new 路径：track_index 必须传 null（不是 -1）——后端 track_index 非 None 时优先于 insert_index，
   // 传 -1 会走 append 到组末尾，insert_index（预览的中间显示位）被忽略 → 新轨落错位置（2026-08-18 修）
@@ -2738,7 +2831,7 @@ function setupAssetDrop() {
     if (!files.length) return;
     const MAX = 30 * 1024 * 1024;  // 大文件(视频/音频)走「导入素材」按钮更稳，避免 base64 大桥阻塞
     const big = files.filter(f => f.size > MAX && !f.type.startsWith("image/"));
-    if (big.length) { alert("大文件请点「导入素材」按钮：" + big.map(f => f.name).join(", ")); return; }
+    if (big.length) { UiFeedback.showToast({ description: "大文件请点「导入素材」按钮：" + big.map(f => f.name).join(", "), variant: "warn" }); return; }
     Promise.all(files.map(readFileB64)).then(arr => call("drop_files", arr).then(refresh));
   });
 }
@@ -2772,14 +2865,14 @@ function bindEvents() {
     call("import_jianying_project", p.trim()).then(r => {
       hideImportLoading();
       if (r && r.ok) {
-        alert("导入成功 ✅\n视频轨 " + r.video_tracks + " · 音频轨 " + r.audio_tracks +
+        UiFeedback.showToast({ description: "导入成功 ✅\n视频轨 " + r.video_tracks + " · 音频轨 " + r.audio_tracks +
               " · 文本轨 " + r.text_tracks + " · 贴纸轨 " + r.sticker_tracks + " · 特效轨 " + r.effect_tracks +
-              "\n已复制素材 " + r.assets_copied + " 个（素材缺失的段留空，播放器显示黑底）");
+              "\n已复制素材 " + r.assets_copied + " 个（素材缺失的段留空，播放器显示黑底）", variant: "success", duration: 4000 });
         refresh();
       } else {
-        alert("导入失败：" + (r && r.error ? r.error : "未知错误"));
+        UiFeedback.showToast({ description: "导入失败：" + (r && r.error ? r.error : "未知错误"), variant: "error" });
       }
-    }).catch(e => { hideImportLoading(); alert("导入异常：" + e); });
+    }).catch(e => { hideImportLoading(); UiFeedback.showToast({ description: "导入异常：" + e, variant: "error" }); });
   });
   setupAssetDrop();
   // 媒体底层事件诊断：previewStack 内的 video/audio 动态创建，用事件委托捕获错误
@@ -3023,12 +3116,23 @@ function bindEvents() {
   };
   const stBind = (id, vid, key, dig) => {
     const el = $(id);
+    // L0-03 Slice2 补丁（2026-08-27）：贴纸变换滑块走原生 <input type=range>，不经 SliderField，
+    // 因此必须自己置 __inspectorInteracting，否则 2s 轮询 refresh 会回填后端旧值 → 拖动中途弹回。
     el.addEventListener("input", () => {
+      window.__inspectorInteracting = true;
+      window.__inspectorInteractingAt = Date.now();   // 超时兜底时间戳（见 previewActive）
       const v = parseFloat(el.value);
       $(vid).textContent = dig ? Math.round(v * 100) / 100 : v;
       stLive(key, v);
     });
-    el.addEventListener("change", () => stCommit({ [key]: parseFloat(el.value) }));
+    el.addEventListener("change", () => {
+      window.__inspectorInteracting = false;   // 先解锁再提交：stCommit 内部 refresh 属用户动作，应正常执行
+      stCommit({ [key]: parseFloat(el.value) });
+    });
+    // 兜底解锁：避免异常路径(拖出控件/切焦点)使标志卡死 → 轮询永久停摆、看不到 Agent 改动
+    el.addEventListener("pointerup", () => { window.__inspectorInteracting = false; });
+    el.addEventListener("pointercancel", () => { window.__inspectorInteracting = false; });
+    el.addEventListener("blur", () => { window.__inspectorInteracting = false; });
   };
   stBind("stX", "stXV", "x", true);
   stBind("stY", "stYV", "y", true);
@@ -3059,6 +3163,19 @@ function bindEvents() {
   $("tlScroll").addEventListener("scroll", () => {
     $("tlLabels").scrollTop = $("tlScroll").scrollTop;
     _userScrollUntil = performance.now() + 3000;
+    // L0-05：滚动时按视口重渲标尺（虚拟化，rAF 去抖，仅可见区间）
+    if (typeof renderRuler === "function") {
+      if (_rulerRaf) cancelAnimationFrame(_rulerRaf);
+      _rulerRaf = requestAnimationFrame(() => {
+        _rulerRaf = 0;
+        const ruler = $("ruler");
+        if (!ruler) return;
+        const totalSec = (ruler.offsetWidth || contentWidth()) / pps();
+        const vp = _rulerViewportSec();
+        renderRuler(pps(), totalSec, vp.left, vp.right);
+      });
+    }
+    saveViewStateThrottled();   // L0-05：视图状态持久化（缩放/滚动/播放头）
   });
   // 用户鼠标/手指按在时间轴区域（包括滚动条 thumb）即进入手动滚动保护，3s 内不自动追播放头
   $("tlScroll").addEventListener("pointerdown", () => {
@@ -3092,8 +3209,7 @@ function bindEvents() {
   $("tlScroll").addEventListener("wheel", e => {
     if (e.ctrlKey) {
       e.preventDefault();
-      const step = e.deltaY > 0 ? -30 : 30;
-      setZoom(pps() + step);
+      queueZoomWheel(e.deltaY);   // L0-05：Ctrl+滚轮缩放走指数平滑（rAF）
     } else if (e.shiftKey) {
       e.preventDefault();
       $("tlScroll").scrollLeft += e.deltaY;
@@ -3145,7 +3261,8 @@ function bindEvents() {
       }
     }
     // 落点时间位（与 drop 时同源，避免边界漂移）；isLibrary=true → 落点被占用时改新建轨（不弹末尾）
-    const atTimeUs = Math.max(0, Math.round((e.clientX - contentRect.left + $("tlScroll").scrollLeft) / pps() * 1e6));
+    // L0-04：落点时间吸附到帧网格（TimelineMapper.snapFrame，与后端 snap_frame 同口径，fps 默认 30）
+    const atTimeUs = TimelineMapper.snapFrame(Math.max(0, Math.round((e.clientX - contentRect.left + $("tlScroll").scrollLeft) / pps() * 1e6)), 30);
     // 统一落点：preview/落点线/实际三位一体（computeDrop 单一真源，verticalDragDirection 决定间隙归属）
     const drop = computeDrop(e, wantType, vDir, atTimeUs, true);
     window.__libDropCache = { wantType: wantType, drop: drop };
@@ -3197,8 +3314,8 @@ function bindEvents() {
   $("playBtn").addEventListener("click", togglePlay);
   $("muteBtn").addEventListener("click", toggleMute);
   $("zoomRange").addEventListener("input", e => setZoom(+e.target.value));
-  $("zoomIn").addEventListener("click", () => setZoom(pps() + 40));
-  $("zoomOut").addEventListener("click", () => setZoom(pps() - 40));
+  $("zoomIn").addEventListener("click", () => setZoom(pps() * 1.25));    // L0-05：缩放按钮乘性更顺手
+  $("zoomOut").addEventListener("click", () => setZoom(pps() / 1.25));
   $("splitBtn").addEventListener("click", doSplit);
   $("splitLeftBtn").addEventListener("click", doSplitLeft);
   $("splitRightBtn").addEventListener("click", doSplitRight);
@@ -3212,7 +3329,7 @@ function bindEvents() {
     const a = api(); if (!a) return;
     Promise.resolve(a.undo(selSnapshot())).then(r => {
       if (r && r.ok) { applySelection(r.selection); }
-      else if (r && r.conflict) { alert(r.error); }
+      else if (r && r.conflict) { UiFeedback.showToast({ description: r.error, variant: "error" }); }
       refresh();
     });
   }
@@ -3220,7 +3337,7 @@ function bindEvents() {
     const a = api(); if (!a) return;
     Promise.resolve(a.redo(selSnapshot())).then(r => {
       if (r && r.ok) { applySelection(r.selection); }
-      else if (r && r.conflict) { alert(r.error); }
+      else if (r && r.conflict) { UiFeedback.showToast({ description: r.error, variant: "error" }); }
       refresh();
     });
   }
@@ -3329,6 +3446,18 @@ function refresh() {
     // C4.4（2026-08-20）：refresh 显式全量渲染——不依赖 Store.set 的 _emit
     // （slice 模式下 set 不广播，refresh 若靠 _emit 会白屏；renderAll 保留为"保险路径"）。
     renderAll(Store.state);
+    if (typeof SnapEngine !== "undefined") SnapEngine.invalidate();   // L0-04/05：数据变更后失效吸附点缓存
+    // L0-05：首次全量渲染后恢复上次视图状态（缩放/滚动/播放头），仅执行一次
+    if (!_viewRestored) {
+      _viewRestored = true;
+      const vs = loadViewState();
+      if (vs) {
+        setZoom(vs.pxPerSec);
+        const sc = $("tlScroll");
+        if (sc && vs.scrollLeft != null) sc.scrollLeft = vs.scrollLeft;
+        if (vs.playheadUs != null) { Store.set({ playheadUs: vs.playheadUs }); positionPlayhead(); }
+      }
+    }
     updateToolbarState();
     if (!_suppressPanelRender) renderKfPanelPF();   // 选中态/状态刷新后同步关键帧面板（后台轮询冻结时跳过，避免吞 click）
     applyCanvasRatio();   // 画幅同步（人工切换 / 素材自动匹配 / 外部 Agent 修改后刷新）
@@ -3438,11 +3567,29 @@ let _w = setInterval(() => { if (api()) { clearInterval(_w); boot(); } }, 120);
 const ENABLE_VERSION_GATING = true;
 // 2f：最近一次轮询拿到的草稿 version（门控依据；他人改动使 version 变化时才全量重渲）
 let _lastPolledVersion = null;
+// L0-03 Q2=A：统一“预览态活跃”判定——任何连续交互（画布拖参 / KF 拖拽 / 拖参数面板滑块 / 时间轴拖动 / 素材库拖动）期间
+// 禁止 2s 轮询 refresh，否则轮询回填后端 draft 会覆盖拖参预览态 → “拖参数中途弹回”。
+function previewActive() {
+  try { if (typeof InteractionManager !== "undefined" && InteractionManager.blocksRefresh && InteractionManager.blocksRefresh()) return true; } catch (e) {}
+  if (typeof _kfDragActive !== "undefined" && _kfDragActive) return true;
+  if (typeof _kfEditing !== "undefined" && _kfEditing) return true;
+  if (Store.state.drag) return true;
+  if (typeof isLibraryDragging !== "undefined" && isLibraryDragging) return true;
+  // Inspector 拖参标志带 15s 超时兜底：若解锁事件（change/pointerup/blur）异常未触发，
+  // 标志卡死会让轮询永久停摆 → 看不到 Agent/他人改动（隐蔽故障）。任何 input 都会刷新时间戳，
+  // 所以正常连续操作不会误判过期；只有“改完停手不失焦”超 15s 才自动解锁。
+  if (window.__inspectorInteracting) {
+    if (Date.now() - (window.__inspectorInteractingAt || 0) < 15000) return true;
+    window.__inspectorInteracting = false;   // 超时自动解锁
+  }
+  return false;
+}
+
 // 人和 AI 实时互看：每 2s 拉取后端状态（2f 门控后 2s 无感知）。
 // 关键：拉取期间冻结属性面板重建(_suppressPanelRender)，仅同步 Store 状态与播放头/时间轴；
 // 否则面板每 0.5s 被推倒重建，按钮 click 被吞 → “点不动”。用户动作(选中/tab/提交)走 refresh() 不冻结，正常重渲。
 setInterval(() => {
-  if (booted && !Store.state.drag && !isLibraryDragging) {
+  if (booted && !previewActive()) {
     _suppressPanelRender = true;
     refresh().finally(() => { _suppressPanelRender = false; });
   }

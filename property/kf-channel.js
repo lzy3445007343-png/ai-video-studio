@@ -30,7 +30,7 @@ const KfChannel = {
     if (!seg) return null;
     if (!seg.animations) seg.animations = {};
     if (!seg.animations[path] || typeof seg.animations[path] !== "object") {
-      seg.animations[path] = { keys: [] };
+      seg.animations[path] = { type: "scalar", keys: [] };   // L0-08：通道默认 scalar 类型
     }
     return seg.animations[path];
   },
@@ -78,8 +78,13 @@ const KfChannel = {
       existing.v = v;
       if (segMode) existing.seg = segMode;
     } else {
+      // L0-08（Q1=A）：新建关键帧携带缓动元数据位（默认 linear/无句柄），与后端 add_keyframe 对齐
       keys.push({ id: "local-" + Date.now() + "-" + Math.floor(Math.random() * 1e4),
-                  t: Math.max(0, Math.floor(t)), v, seg: segMode || "linear" });
+                  t: Math.max(0, Math.floor(t)), v, seg: segMode || "linear",
+                  segmentToNext: "linear",
+                  leftHandle: { dt: 0, dv: 0 },
+                  rightHandle: { dt: 0, dv: 0 },
+                  tangentMode: "auto" });
       keys.sort((a, b) => (a.t || 0) - (b.t || 0));
     }
     return ch;

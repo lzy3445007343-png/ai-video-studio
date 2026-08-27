@@ -51,13 +51,17 @@ class SliderField extends PropertyField {
       if (isNaN(v)) return;
       const valEl = this.el.querySelector(".pf-slider-val");
       if (valEl) valEl.textContent = SliderField._fmt(v);
+      window.__inspectorInteracting = true;   // L0-03 Q2=A：拖参期间禁止 2s 轮询 refresh（防预览弹回）
+      window.__inspectorInteractingAt = Date.now();   // 超时兜底时间戳（previewActive 15s 自动解锁）
       if (this.onPreview) this.onPreview(v);     // 拖动中每帧预览，不落库
     });
     this.on(inp, "change", () => {
       const v = parseFloat(inp.value);
       if (isNaN(v)) return;
+      window.__inspectorInteracting = false;  // L0-03 Q2=A：松手解除，轮询恢复
       if (this.onCommit) this.onCommit(v);       // 松手才落库
     });
+    this.on(inp, "pointerup", () => { window.__inspectorInteracting = false; }); // 安全网：range 未触发 change 也释放
   }
 
   static _build(opts) {

@@ -72,10 +72,13 @@ class NumberField extends PropertyField {
     const inp = this.el.querySelector(".pf-num-input");
     if (!inp) return;
     this.on(inp, "input", e => {
+      window.__inspectorInteracting = true;   // L0-03 Q2=A：编辑期间禁止 2s 轮询 refresh（防预览弹回）
+      window.__inspectorInteractingAt = Date.now();   // 超时兜底时间戳（previewActive 15s 自动解锁）
       this._draft.onInput(e.target.value);
       this._lastValue = this._draft.value;
     });
     this.on(inp, "blur", () => {
+      window.__inspectorInteracting = false;  // L0-03 Q2=A：提交/失焦解除，轮询恢复
       this._draft.onCommit();
       this.update(this._lastValue);      // 提交后回显规范化值
     });

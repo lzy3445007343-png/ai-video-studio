@@ -177,7 +177,9 @@ class RotateSession extends GestureSession {
     let delta = curAng - c.startAng;
     if (delta > 180) delta -= 360;
     if (delta < -180) delta += 360;
-    const nr = Math.round((c.startR + delta) * 10) / 10;
+    let nr = Math.round((c.startR + delta) * 10) / 10;
+    // L0-04：旋转 90°±5° 吸附（SnapEngine.snapRotation；按住 Shift 临时关闭吸附）
+    if (!SnapEngine.isShiftDisabled(e)) nr = SnapEngine.snapRotation(nr);
     OverlayState.set(c.target.id, "transform.rotate", nr);
     // 实时预览：位置不动，只覆盖 rotate
     el.style.transform = "scale(" + (t.sx || 1) + "," + (t.sy || 1) + ") rotate(" + nr + "deg)";
