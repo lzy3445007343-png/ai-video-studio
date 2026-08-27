@@ -2425,7 +2425,8 @@ def _clamp_animations_to_duration(anims, new_duration):
 
 # ===================== L0-09 统一不变量管线（写后强制） =====================
 # 集中式 enforce：所有写路径经 CommandManager.execute 后统一触发，消除「UI 与 Agent 产出不一致」。
-# 本切片实装规则1（duration→clampAnimations）；规则2(主轨 start=0)/规则3(空轨剪除) 暂缓（行为变更，需真机验收）。
+# 实装规则1(duration→clampAnimations) / 规则2(主轨起点锁 0) / 规则3(空轨剪除)。
+# 幂等、纯前端数据规整，不改三桶组织。
 
 def _enforce_kf_duration(seg):
     """规则1：段 duration 变化后，将其 animations 所有通道 clamp 到 [0, duration]，无越界键。"""
@@ -2437,15 +2438,34 @@ def _enforce_kf_duration(seg):
     seg["animations"] = _clamp_animations_to_duration(anims, int(seg.get("duration", 0)))
 
 
+def _enforce_main_start_zero(draft):
+    """规则2：主轨（draft.main.segs）整体左移，使最早段 start==0（去掉主轨前导空档，对齐时间轴原点）。
+    幂等：min(start)<=0 时不动作；不改变段间相对排布。"""
+    main = (draft.get("main") or {}).get("segs")
+    if not isinstance(main, list) or not main:
+        return
+    starts = [_seg_num(s.get("start"), 0) for s in main if isinstance(s, dict)]
+    if not starts:
+        return
+    mn = min(starts)
+    if mn <= 0:
+        return
+    for s in main:
+        if isinstance(s, dict):
+            s["start"] = _seg_num(s.get("start"), 0) - mn
+
+
 def _run_enforce_pipeline(api, cmd_id):
-    """L0-09 管线入口：遍历草稿全部段，强制 KF 时长不变量。幂等、纯前端数据规整，不改三桶组织。"""
+    """L0-09 管线入口：写后统一强制不变量（规则1/2/3）。幂等、纯数据规整，不改三桶组织。"""
     if hasattr(api, "draft"):
         draft = api.draft
     else:
         draft = api
     for seg in _iter_all_segs(draft):
         if isinstance(seg, dict):
-            _enforce_kf_duration(seg)
+            _enforce_kf_duration(seg)        # 规则1
+    _enforce_main_start_zero(draft)         # 规则2
+    _collapse_empty_tracks(draft)            # 规则3：空轨剪除（persistent_empty 显式空轨保留）
 
 
 def _write_kf_base(seg, path, val):
