@@ -706,6 +706,10 @@
           <svg viewBox="0 0 20 20" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><path d="M10 2l1.8 5.5L17 9l-5.2 1.5L10 16l-1.8-5.5L3 9l5.2-1.5z"/></svg>
           <span>特效</span>
         </button>
+        <button class="rail-btn" data-tab="graphic" title="图形">
+          <svg viewBox="0 0 20 20" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><rect x="3.5" y="3.5" width="13" height="13" rx="2"/><path d="M6.5 6.5h7v7h-7z"/></svg>
+          <span>图形</span>
+        </button>
       </div>
       <div class="tools-content" id="toolsContent">
     <!-- OpenCut 风格三态 view（独立 div 切 display，绝不清空 root——保护 kfPanel/maskPanel/audioPanel 等子元素） -->
@@ -742,6 +746,10 @@
     <div class="subpanel" id="textPanel">
       <div class="head">文本样式 <span class="property-seg-name" id="textSegName"></span></div>
       <div class="body" id="textBody"></div>
+    </div>
+    <div class="subpanel" id="graphicPanel">
+      <div class="head">图形样式 <span class="property-seg-name" id="graphicSegName"></span></div>
+      <div class="body" id="graphicBody"></div>
     </div>
     <div class="subpanel" id="subPanel">
       <div class="head">字幕生成 <span class="property-seg-name" id="subSegName"></span><button class="head-close" id="subClose" title="取消选择（Esc）">✕</button></div>
@@ -946,6 +954,7 @@
       <button class="tool" id="delBtn" title="删除 (Del)"><svg class="ic" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h12"/><path d="M7 6V4h6v2"/><path d="M6 6l1 11h6l1-11"/></svg><span class="lbl">删除</span></button>
       <button class="tool active" id="snapBtn" title="吸附"><svg class="ic" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4v9a5 5 0 0 0 10 0V4"/><path d="M5 4h3v9a2 2 0 0 0 4 0V4"/></svg><span class="lbl">吸附</span></button>
       <button class="tool" id="rippleBtn" title="波纹编辑 (R)"><svg class="ic" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10c2-4 4-4 6 0s4 4 6 0"/></svg><span class="lbl">波纹</span></button>
+      <button class="tool" id="addGraphicBtn" title="添加图形（矩形，挂文本轨）"><svg class="ic" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><rect x="3.5" y="3.5" width="13" height="13" rx="2"/><path d="M6.5 6.5h7v7h-7z"/></svg><span class="lbl">图形</span></button>
       <span class="spacer"></span>
       <span class="zoom">
         <button class="tool" id="zoomOut" title="缩小"><svg class="ic" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="8.5" cy="8.5" r="5"/><path d="M5.5 8.5h6"/><path d="M12.5 12.5 17 17"/></svg><span class="lbl">缩小</span></button>
@@ -1007,6 +1016,7 @@
 <script src="property/effect-panel.js"></script>
 <script src="property/color-picker.js"></script>
 <script src="property/text-panel.js"></script>
+<script src="property/graphic-panel.js"></script>
 <script src="property/kf-panel.js"></script>
 <script src="property/graph-editor.js"></script>
 <script src="property/preview-drag.js"></script>
@@ -1756,13 +1766,14 @@ const PROPERTY_TABS_BY_TYPE = {
   text:    ["text", "sub", "sticker"],   // L2-02：文本样式 tab 置首位（默认进入）
   sticker: ["sticker", "kf", "effects", "sub"],
   effect:  ["effects", "sub", "sticker"],
+  graphic: ["graphic"],   // L2-04：图形段仅「图形」tab（自含描边/填充/圆角编辑）
 };
 const PROPERTY_DEFAULT_TAB_BY_TYPE = {
-  video: "kf", image: "kf", audio: "audio", text: "sub", sticker: "sticker", effect: "effects",
+  video: "kf", image: "kf", audio: "audio", text: "sub",   sticker: "sticker", effect: "effects", graphic: "graphic",   // L2-04
 };
 const TAB_TO_PANEL = {
   kf: "kfPanel", mask: "maskPanel", sub: "subPanel", sticker: "stickerPanel",
-  audio: "audioPanel", speed: "speedPanel", effects: "effectPanel", text: "textPanel",  // L2-02
+  audio: "audioPanel", speed: "speedPanel", effects: "effectPanel", text: "textPanel", graphic: "graphicPanel",  // L2-02 / L2-04
 };
 const PLACEHOLDER_TITLES = { effects: "特效面板" };
 
@@ -1782,7 +1793,7 @@ function showToolTab(tab) {
 const PROP_ACTIVE_TAB = {};
 
 function hideAllPropertyPanels() {
-  ["kfPanel", "maskPanel", "subPanel", "stickerPanel", "effectPanel", "audioPanel", "speedPanel", "textPanel"].forEach(id => {
+  ["kfPanel", "maskPanel", "subPanel", "stickerPanel", "effectPanel", "audioPanel", "speedPanel", "textPanel", "graphicPanel"].forEach(id => {
     const el = document.getElementById(id); if (el) el.classList.remove("panel-active");
   });
 }
@@ -1830,7 +1841,7 @@ function renderPropertyPanel() {
   const activePanel = TAB_TO_PANEL[activeTab] || "kfPanel";
 
   // 切换 panel-active
-  ["kfPanel", "maskPanel", "subPanel", "stickerPanel", "effectPanel", "audioPanel", "speedPanel", "textPanel"].forEach(id => {
+  ["kfPanel", "maskPanel", "subPanel", "stickerPanel", "effectPanel", "audioPanel", "speedPanel", "textPanel", "graphicPanel"].forEach(id => {
     const el = document.getElementById(id);
     if (!el) return;
     if (id === activePanel) el.classList.add("panel-active");
@@ -1853,6 +1864,7 @@ function renderPropertyPanel() {
   else if (activePanel === "audioPanel") renderAudioTabPF();   // Phase 2：Property Framework 版（property/audio-panel.js）
   else if (activePanel === "speedPanel") renderSpeedTabPF();   // Phase 2：Property Framework 版（property/speed-panel.js）
   else if (activePanel === "textPanel") renderTextPanelPF();   // L2-02：文本可编辑样式 tab
+  else if (activePanel === "graphicPanel") renderGraphicPanelPF();   // L2-04：图形样式 tab
 }
 
 // range "0~20" / "0~1" → [min,max]
@@ -4204,6 +4216,16 @@ function bindEvents() {
   $("exportBtn").addEventListener("click", doExportDraft);
   $("undoBtn").addEventListener("click", doUndo);
   $("redoBtn").addEventListener("click", doRedo);
+  $("addGraphicBtn").addEventListener("click", doAddGraphic);   // L2-04：创建图形段
+  function doAddGraphic() {
+    call("add_graphic", [null, null, Store.state.playheadUs, "rect"]).then(r => {
+      if (!r || !r.ok) { if (window.UiFeedback) UiFeedback.showToast({ description: "创建图形失败：" + ((r && r.error) || "未知"), variant: "error" }); return; }
+      refresh();
+      selectKey("text:" + r.track_index + ":" + r.index);
+      showToolTab("graphic");
+      if (typeof scrollToSegmentUs === "function") scrollToSegmentUs(r.start || 0);
+    });
+  }
   document.addEventListener("dragover", e => { moveDragGhost(e.clientX, e.clientY); });
   document.addEventListener("drop", () => removeDragGhost());
   window.addEventListener("keydown", e => {

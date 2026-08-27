@@ -43,7 +43,15 @@ function getEffectivePropertyValue(seg, path, localTime) {
       if (_o !== undefined) { _tv = _o; _fromText = true; }
     }
   }
-  const explicit = _fromText || !!(seg.params && seg.params[path] !== undefined) ||
+  // L2-04：graphic params 基值落在 seg.params（描边/填充/圆角），嵌套 path 解析
+  let _fromParams = false;
+  if (path.startsWith("params.") && seg.params) {
+    const _parts = path.slice("params.".length).split(".");
+    let _o = seg.params;
+    for (const _p of _parts) { _o = (_o == null) ? undefined : _o[_p]; }
+    if (_o !== undefined) { _tv = _o; _fromParams = true; }
+  }
+  const explicit = _fromText || _fromParams ||
                    !!(typeof LEGACY_READ !== "undefined" && LEGACY_READ[path] && LEGACY_READ[path](seg) !== undefined);
   return { value: _tv, source: explicit ? "static" : "default" };
 }

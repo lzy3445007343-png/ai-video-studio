@@ -2134,6 +2134,19 @@ KF_PROPS = {
     "text.color.g":   {"label": "文字色 G", "default": 1.0, "export": None, "coord": None},
     "text.color.b":   {"label": "文字色 B", "default": 1.0, "export": None, "coord": None},
     "text.color.a":   {"label": "文字色 A", "default": 1.0, "export": None, "coord": None},
+    # L2-04 Graphic（分支 A：overlay 段 type="graphic" 挂 text 轨；params.* 可打帧）。
+    # 颜色四分量标量 path（值域 0~1，与 L2-07 text.color.* 同约定）；base 落在 seg.params（非 sub_style）。
+    # export=None：导出侧 params→剪映映射属 Video DSL 护城河，按 L2-04⑧不动边界单独评估，本次不映射。
+    "params.stroke.width":   {"label": "描边宽度", "default": 4.0, "export": None, "coord": None},
+    "params.stroke.color.r": {"label": "描边色 R", "default": 1.0, "export": None, "coord": None},
+    "params.stroke.color.g": {"label": "描边色 G", "default": 1.0, "export": None, "coord": None},
+    "params.stroke.color.b": {"label": "描边色 B", "default": 1.0, "export": None, "coord": None},
+    "params.stroke.color.a": {"label": "描边色 A", "default": 1.0, "export": None, "coord": None},
+    "params.fill.color.r":   {"label": "填充色 R", "default": 0.0, "export": None, "coord": None},
+    "params.fill.color.g":   {"label": "填充色 G", "default": 0.47, "export": None, "coord": None},
+    "params.fill.color.b":   {"label": "填充色 B", "default": 1.0, "export": None, "coord": None},
+    "params.fill.color.a":   {"label": "填充色 A", "default": 1.0, "export": None, "coord": None},
+    "params.radius":         {"label": "圆角", "default": 0.0, "export": None, "coord": None},
 }
 KF_KEYFRAMEABLE = tuple(KF_PROPS.keys())
 
@@ -3919,6 +3932,14 @@ class Api:
         save_state(self.state)
         return {"ok": True, "volume": seg["volume"]}
 
+    def _deep_merge_params(self, base, patch):
+        """L2-04：params 嵌套合并（stroke/fill 为 dict 逐键合并；标量 radius 整体替换）。"""
+        for k, v in patch.items():
+            if isinstance(v, dict) and isinstance(base.get(k), dict):
+                base[k].update(v)
+            else:
+                base[k] = v
+
     def set_segments_props(self, updates):
         """批量设置多个段属性（OpenCut updateElements 语义，一次 undo）。
 
@@ -3988,6 +4009,11 @@ class Api:
                         seg["sub_style"].update(_patch)
                 if "text" in props and isinstance(props["text"], str):
                     seg["text"] = props["text"]
+                # L2-04 Graphic：params 基值合并（overlay 段 type="graphic" 的描边/填充/圆角）。
+                # 加性扩展现有命令（不新增 Api 签名）；嵌套 dict 深合并（stroke/fill），标量（radius）整体替换。
+                if "params" in props and isinstance(props["params"], dict):
+                    seg.setdefault("params", {})
+                    _deep_merge_params(seg["params"], props["params"])
                 ok_count += 1
             except Exception as e:
                 skipped.append(f"{seg.get('name', '?')}: {e}")
@@ -5591,6 +5617,62 @@ class Api:
         _ensure_seg_ids(self.draft)
         save_state(self.state)
         return {"ok": True, "track_index": idx, "count": len(segs)}
+
+    # ---- L2-04 Graphic（分支 A：overlay 段 type="graphic" 挂 text 轨）----
+    def add_graphic(self, name=None, track_index=None, at_time_us=None, shape="rect"):
+        """新建一个图形（矩形/圆）段。
+
+        分支 A：图形无素材文件，作为 overlay 段 type="graphic" 挂在 text 轨（track_type 三枚举不动），
+        仅含 params（描边/填充/圆角），可关键帧动画（params.* 已加 white-list）。
+        - shape: "rect" | "ellipse"（预留；本次仅 rect 走通渲染无关，仅建数据）。
+        - 创建入口：前端工具栏「图形」按钮 → call("add_graphic", [name, ti, at_time_us, shape])。
+        返回 {ok, track_type:"text", track_index, index, seg_id, start, duration}。
+        """
+        try:
+            self._reload()
+            self._push_undo()
+            if track_index is None:
+                track_index = 0
+            segs = _track_segs(self.draft, "text", track_index, ensure=True)
+            duration = 3_000_000  # 默认 3 秒
+            if at_time_us is not None:
+                start = max(0, int(at_time_us))
+            else:
+                start = sum(s["duration"] for s in segs)
+            # 同轨不重叠（对齐 add_to_timeline：落点被占用→推到最近空位）
+            if any(_segments_overlap({"start": start, "duration": duration}, s) for s in segs):
+                start = _free_start_on_track(segs, start, duration)
+            seg = {
+                "id": uuid.uuid4().hex,
+                "name": name or "图形",
+                "path": "",            # 图形段无素材文件
+                "type": "graphic",
+                "shape": shape,
+                "start": start,
+                "duration": duration,
+                "src_start": 0,
+                "src_end": duration,
+                "speed": 1.0,
+                "change_pitch": False,
+                "animations": {},
+                # 默认样式（描边白 4px / 填充蓝 / 圆角 0）；base 单真源在 seg.params
+                "params": {
+                    "stroke": {"enabled": True, "width": 4.0,
+                               "color": {"r": 1.0, "g": 1.0, "b": 1.0, "a": 1.0}},
+                    "fill":   {"color": {"r": 0.0, "g": 0.47, "b": 1.0, "a": 1.0}},
+                    "radius": 0.0,
+                },
+            }
+            segs.append(seg)
+            _ensure_seg_ids(self.draft)
+            save_state(self.state)
+            return {"ok": True, "track_type": "text", "track_index": track_index,
+                    "index": len(segs) - 1, "seg_id": seg["id"],
+                    "start": start, "duration": duration}
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            return {"ok": False, "error": "add_graphic 异常: %s" % e}
 
     def import_srt(self, track_index, srt_text, style=None):
         """解析 SRT 文本 → 字幕段插入 text 轨。复用标准 SRT 时间戳解析（自实现）。"""

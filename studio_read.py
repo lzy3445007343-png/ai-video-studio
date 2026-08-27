@@ -165,6 +165,10 @@ def get_track_text(track_index, state=None):
     for si, seg in enumerate(segs):
         if not isinstance(seg, dict):
             continue
+        # L2-04（分支 A，🔴L0-07 裁语义）：graphic 段（type=="graphic"）同样挂在 text 轨，
+        # 但字幕文本查询只关心 type=="text" 段，必须跳过，否则图形段污染字幕提取结果。
+        if seg.get("type") != "text":
+            continue
         out.append({
             "idx": si,
             "start_us": seg.get("start", 0),
