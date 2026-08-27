@@ -103,6 +103,10 @@
   /* D3（2026-08-19）：无「预览轨」弹动——OpenCut 同款，段跟手 + 落点线即可。ghost-track 已删除。 */
   /* 拖拽落点反馈（OpenCut 同款：明确可见的蓝线 + 目标轨高亮） */
   .track.drop-target { box-shadow: inset 0 0 0 2.5px #2ea8ff, 0 0 10px rgba(46,168,255,.35); background: rgba(46,168,255,.12); }
+  /* L1-23 落点目标元素高亮：整体 opacity-50（对齐 OpenCut timeline-element.tsx:607 isDropTarget）；与 .drop-target-seg 虚线环分离 */
+  .seg.drop-target-media { opacity: .5; }
+  /* L1-06 预览对齐线层：覆盖预览栈、不挡操作、置于媒体之上手柄之下 */
+  .preview-snap-guides { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 5; overflow: visible; }
   .track.drop-disabled { box-shadow: inset 0 0 0 2px #ff4d4f; background: #ff4d4f18; }
 
   .preview { flex: 1; min-height: 0; min-width: 0; background: #0e0e10; display: flex; flex-direction: column; overflow: hidden; }
@@ -411,6 +415,8 @@
     width: 17px; height: 17px; border-radius: 50%; background: #ff4d4f; border: 2px solid rgba(255,255,255,.7);
     cursor: col-resize; pointer-events: auto; z-index: 11; box-shadow: 0 1px 4px rgba(0,0,0,.5); }
   .playhead-handle:hover, .playhead-handle.dragging { background: #ff6b6d; border-color: #fff; }
+  /* L1-05 吸附实心态：吸附命中时手柄边框实心 + 高亮（对齐 OpenCut timeline-playhead.tsx:109 bg-primary border-primary） */
+  .playhead-handle.snapped { border-color: #fff; background: #ff4d4f; box-shadow: 0 0 6px rgba(255,77,79,.95); }
   .drop-line { position: absolute; top: 28px; bottom: 0; width: 3px; background: #2ea8ff;
     z-index: 9; pointer-events: none; display: none;
     box-shadow: 0 0 8px 2px rgba(46,168,255,.55); }
@@ -1711,17 +1717,21 @@ function onKfDiamondDown(e, path, id, dur) {
   renderKfPanelPF();
   const graphEl = $("kfGraph");
   const diamond = graphEl.querySelector('.kf-diamond[data-id="' + id + '"]');
+  const fps = (Store.state.meta && Store.state.meta.fps) || 30;   // L1-22：帧吸附口径（与 L1-24 / 后端 snap_frame 同源）
+  const snappedT = x => TimelineMapper.snapFrame(Math.round(x * dur), fps);   // L1-22：视觉与提交同源，整帧吸附
   const move = ev => {
     const rect = graphEl.getBoundingClientRect();
     let x = (ev.clientX - rect.left) / rect.width; x = Math.max(0, Math.min(1, x));
-    if (diamond) diamond.style.left = (x * 100) + "%";
+    const t = snappedT(x);   // L1-22：拖动中即吸附到整帧（对齐 OpenCut roundToFrame）
+    if (diamond) diamond.style.left = (t / dur * 100) + "%";
   };
   const up = ev => {
     document.removeEventListener("mousemove", move);
     document.removeEventListener("mouseup", up);
     const rect = graphEl.getBoundingClientRect();
     let x = (ev.clientX - rect.left) / rect.width; x = Math.max(0, Math.min(1, x));
-    const t = Math.round(x * dur);
+    // L1-22 分支 B：仅加帧吸附，不加激活阈值（阈值统一留 Q14 收口）；move/up 同函数保证视觉=提交
+    const t = snappedT(x);
     call("update_keyframe", ...kfSegArgs(), path, id, null, t, null, Store.state.selectedSegId).then(() => refresh());
   };
   document.addEventListener("mousemove", move);
@@ -2523,6 +2533,7 @@ function scheduleScrubPreview() {
     if (_phScrub) renderPreviewMaybe(Store.state);  // 每帧一次确定性 seek
   });
 }
+function setPlayheadSnapped(on) { const h = $("playheadHandle"); if (h) h.classList.toggle("snapped", !!on); }
 function onPhMove(e) {
   if (!_phScrub) return;
   _lastPhEvent = e;   // L1-04：缓存，边缘滚动重放用
@@ -2531,8 +2542,9 @@ function onPhMove(e) {
   if (Store.state.snapOn && !SnapEngine.isShiftDisabled(e)) {
     const r = SnapEngine.resolve(us, { excludeSegKey: null, excludePlayhead: true });  // 播放头吸附排除自身，避免吸到自己
     us = r.snapped;
-    r.point ? showSnapGuide(r.point.time) : hideSnapGuide();
-  } else hideSnapGuide();
+    if (r.point) { showSnapGuide(r.point.time); setPlayheadSnapped(true); }   // L1-05：吸附命中 → 手柄实心
+    else { hideSnapGuide(); setPlayheadSnapped(false); }
+  } else { hideSnapGuide(); setPlayheadSnapped(false); }
   // 拖动期间不走 Store.set → 不触发全局 renderAll（整条时间轴重建 + 媒体 seek），
   // 否则每 mousemove 一次全量重绘，主线程被打满、红线追不上鼠标。
   // 改走「逐帧拖拽」模式：直接改真相源（不 _emit）+ 只做三件便宜的事：
@@ -2549,6 +2561,7 @@ function onPhUp() {
   stopEdgeScroll();   // L1-04：scrub 结束停止边缘滚动
   $("playheadHandle").classList.remove("dragging");
   hideSnapGuide();              // 播放头拖拽结束：隐藏吸附参考线
+  setPlayheadSnapped(false);    // L1-05：清理吸附实心态
   window.removeEventListener("mousemove", onPhMove);
   window.removeEventListener("mouseup", onPhUp);
   Store.set({ playheadUs: Store.state.playheadUs });  // 提交：走一次完整 renderAll（含 renderPreview 确定性 seek）
@@ -2645,6 +2658,9 @@ function onTimelineDrop(e) {
     return;
   }
   if (!data || !data.path) return;
+  // L1-23：媒体拖到可接收元素上松手 → 替换素材占位（真实替换归 L2-18 + Q20；本卡只占位，草稿数据零变化）
+  const bc = window.__libDropCache;
+  if (bc && bc.bindSeg) { UiFeedback.showToast({ description: "替换素材 coming soon（即将在 L2-18 支持）", variant: "warn" }); return; }
   const wantType = data.type === "audio" ? "audio" : (data.type === "text" ? "text" : "video");
   const rect = $("tlScroll").getBoundingClientRect();
   // L0-04：落点时间吸附到帧网格（TimelineMapper.snapFrame，与后端 snap_frame 同口径，fps 默认 30）
@@ -2988,6 +3004,61 @@ function bindEvents() {
   // 右键菜单（2026-08-16 对齐 OpenCut context-menu.tsx）
   let ctxKey = null;
   function hideCtxMenu() { const m = $("ctxMenu"); if (m) m.style.display = "none"; ctxKey = null; }
+    /* L1-13 预览画布右键菜单（最小集分支 A：适应屏幕 / 实际大小 + 命中元素则复制/删除段；
+     * 全屏 / 保存快照归 L2-12 / L2-25，本卡仅占灰位）。
+     * L0-11 的 openContextMenu API 本仓库尚未提供，这里用轻量实现复用 .ctx-menu 样式 + UiFeedback.showToast。 */
+    function openContextMenu(opts) {
+      const o = opts || {};
+      let m = $("previewCtxMenu");
+      if (!m) { m = document.createElement("div"); m.id = "previewCtxMenu"; m.className = "ctx-menu"; m.style.display = "none"; document.body.appendChild(m); }
+      m.innerHTML = "";
+      (o.items || []).forEach(it => {
+        if (it.sep) { const s = document.createElement("div"); s.className = "sep"; m.appendChild(s); return; }
+        const b = document.createElement("button");
+        b.textContent = it.label;
+        if (it.disabled) { b.disabled = true; b.style.opacity = ".4"; b.style.cursor = "default"; }
+        else b.addEventListener("click", () => { closeContextMenu(); try { it.onClick && it.onClick(); } catch (err) { console.error("[previewCtxMenu]", err); } });
+        m.appendChild(b);
+      });
+      m.style.display = "block";
+      const r = m.getBoundingClientRect();
+      m.style.position = "fixed";
+      m.style.left = Math.min(o.x || 0, window.innerWidth - r.width - 8) + "px";
+      m.style.top = Math.min(o.y || 0, window.innerHeight - r.height - 8) + "px";
+    }
+    function closeContextMenu() { const m = $("previewCtxMenu"); if (m) m.style.display = "none"; }
+    function buildPreviewContextItems(e) {
+      const items = [
+        { label: "适应屏幕", onClick: () => { if (typeof PreviewCoordinate !== "undefined") PreviewCoordinate.fitToScreen(); } },
+        { label: "实际大小", onClick: () => { if (typeof PreviewCoordinate !== "undefined") PreviewCoordinate.setActualSize(); } },
+      ];
+      const wrap = (e.target && e.target.closest) ? e.target.closest("[data-preview-el]") : null;
+      if (wrap && wrap.id) {
+        const rec = (typeof previewState !== "undefined" && previewState.visualEls) ? previewState.visualEls.get(wrap.id) : null;
+        const key = rec && rec.key;
+        if (key) {
+          items.push({ sep: true });
+          items.push({ label: "复制选中段", onClick: () => { if (typeof selectKey === "function") selectKey(key); if (typeof doCopy === "function") doCopy(); } });
+          items.push({ label: "删除选中段", onClick: () => { if (typeof selectKey === "function") selectKey(key); if (typeof doDelete === "function") doDelete(); } });
+        }
+      }
+      items.push({ sep: true });
+      items.push({ label: "全屏（即将支持）", disabled: true });
+      items.push({ label: "保存快照（即将支持）", disabled: true });
+      return items;
+    }
+    const __ps = $("previewStack");
+    if (__ps) {
+      __ps.addEventListener("contextmenu", e => {
+        e.preventDefault();
+        if (typeof InteractionManager !== "undefined" && InteractionManager.activeSession) return;
+        openContextMenu({ x: e.clientX, y: e.clientY, items: buildPreviewContextItems(e) });
+      });
+      __ps.addEventListener("pointerdown", e => { if (e.button === 2) closeContextMenu(); });
+      document.addEventListener("click", e => { const m = $("previewCtxMenu"); if (m && m.style.display !== "none" && !m.contains(e.target)) closeContextMenu(); });
+      document.addEventListener("keydown", e => { if (e.key === "Escape") closeContextMenu(); });
+    }
+
   $("tlContent").addEventListener("contextmenu", e => {
     const seg = e.target.closest(".seg");
     if (!seg) return;
@@ -3302,6 +3373,17 @@ function bindEvents() {
      ③ placement 接受 verticalDragDirection（dragstartY vs 当前 Y，5px 阈值）→
         间隙归属上/下轨（OpenCut 同款）
      ④ dragover 期间零整树重建（沿用 bd2eb76 轻量方案） */
+  /* L1-23：统一清理落点指示（轨道高亮 / 段绑段环 / 段命中透明 / DragLine / 影子段 / 新轨 hint）。
+   * 三态（特效 bindTo / 媒体命中元素 / 轨道级）互斥，进入任一分支前都先清旧，避免残留高亮。 */
+  function clearDropIndicators() {
+    const content = $("tlContent");
+    if (content) {
+      content.querySelectorAll(".track").forEach(t => { t.classList.remove("drop-target"); t.classList.remove("drop-disabled"); });
+      content.querySelectorAll(".seg").forEach(s => { s.classList.remove("drop-target-seg"); s.classList.remove("drop-target-media"); });
+    }
+    hideDragLine(); hideClipGhost();
+    const hint = $("dropNewTrackHint"); if (hint) hint.style.display = "none";
+  }
   let tlDragEnterCount = 0;
   $("timeline").addEventListener("dragenter", e => {
     e.preventDefault();
@@ -3340,12 +3422,27 @@ function bindEvents() {
         return;
       }
     }
+    // L1-23：媒体拖到「可接收元素」上 → 目标元素 opacity-50（二选一互斥），隐藏轨道级反馈
+    if (!isEffect) {
+      const bindSeg = findSegUnderCursor(e);
+      const mediaType = dragTrackType();   // 被拖素材类型（video/image/audio/text）
+      const compatible = bindSeg && (mediaType === "video" || mediaType === "image")
+        && ["video", "image", "text", "sticker"].includes(bindSeg.segType);
+      if (compatible) {
+        clearDropIndicators();   // 互斥：命中元素时清掉 DragLine/影子段/轨高亮（不画横线、不显示 hint）
+        const segEl = $("tlContent").querySelector('.seg[data-key="' + bindSeg.type + ":" + bindSeg.ti + ":" + bindSeg.si + '"]');
+        if (segEl) segEl.classList.add("drop-target-media");
+        // 缓存命中元素，drop 时同源判定（防高亮 A 落轨 B）；bindSeg 非空 → drop 走替换占位
+        window.__libDropCache = { wantType: wantType, drop: null, bindSeg: bindSeg };
+        return;
+      }
+    }
     // 落点时间位（与 drop 时同源，避免边界漂移）；isLibrary=true → 落点被占用时改新建轨（不弹末尾）
     // L0-04：落点时间吸附到帧网格（TimelineMapper.snapFrame，与后端 snap_frame 同口径，fps 默认 30）
     const atTimeUs = TimelineMapper.snapFrame(Math.max(0, Math.round((e.clientX - contentRect.left + $("tlScroll").scrollLeft) / pps() * 1e6)), 30);
     // 统一落点：preview/落点线/实际三位一体（computeDrop 单一真源，verticalDragDirection 决定间隙归属）
     const drop = computeDrop(e, wantType, vDir, atTimeUs, true);
-    window.__libDropCache = { wantType: wantType, drop: drop };
+    window.__libDropCache = { wantType: wantType, drop: drop, bindSeg: null };
     if (drop.kind === "existing") {
       // 命中同类型已有轨（落点空闲）：① 目标轨高亮 ② DragLine 蓝细横线在目标轨顶部 ③ 影子段在 X+Y
       const tr = buildTracks()[drop.displayIndex];
@@ -3388,9 +3485,9 @@ function bindEvents() {
   $("timeline").addEventListener("dragleave", e => {
     if (tlDragEnterCount === 0) return;
     tlDragEnterCount--;
-    if (tlDragEnterCount === 0) { hideDropPreview(); hideDragLine(); hideClipGhost(); window.__libDropCache = null; }
+    if (tlDragEnterCount === 0) { clearDropIndicators(); window.__libDropCache = null; }
   });
-  $("timeline").addEventListener("drop", e => { tlDragEnterCount = 0; hideDragLine(); hideClipGhost(); onTimelineDrop(e); window.__libDropCache = null; });
+  $("timeline").addEventListener("drop", e => { tlDragEnterCount = 0; clearDropIndicators(); onTimelineDrop(e); window.__libDropCache = null; });
   $("playBtn").addEventListener("click", togglePlay);
   $("muteBtn").addEventListener("click", toggleMute);
   $("zoomRange").addEventListener("input", e => setZoom(+e.target.value));

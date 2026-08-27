@@ -44,6 +44,44 @@ function _previewScale() {
 /* L1-16：拖动激活阈值（逻辑像素，对齐 OpenCut MIN_DRAG_DISTANCE=0.5；按显示缩放换算，手感一致） */
 const MIN_DRAG_DISTANCE = 0.5;
 
+/* L1-06：预览区对齐线渲染（消费 SnapEngine.snapPreviewPosition 返回的 lines）。
+ * 引擎返回 lines：axis="vertical" → 竖线（x=pos），axis="horizontal" → 横线（y=pos）；
+ * pos 是相对画布中心的逻辑坐标（center=0, left=-W/2, right=W/2），经 PreviewCoordinate.toOverlay 转屏幕 px。
+ * 注意：不与 renderer.js 的 SVGNS 重名（classic 脚本共享全局词法作用域，重声明即报错），故用 SVG_NS。 */
+const SVG_NS = "http://www.w3.org/2000/svg";
+function renderPreviewSnapGuides(lines) {
+  const stack = $("previewStack");
+  if (!stack) return;
+  let g = $("previewSnapGuides");
+  if (!g) {
+    g = document.createElementNS(SVG_NS, "svg");
+    g.id = "previewSnapGuides";
+    g.setAttribute("class", "preview-snap-guides");
+    stack.appendChild(g);
+  }
+  const W = stack.clientWidth, H = stack.clientHeight;
+  g.setAttribute("width", W); g.setAttribute("height", H);
+  while (g.firstChild) g.removeChild(g.firstChild);
+  if (!lines || !lines.length) return;
+  const map = (lx, ly) => PreviewCoordinate.toOverlay(lx, ly);
+  for (const ln of lines) {
+    const l = document.createElementNS(SVG_NS, "line");
+    l.setAttribute("stroke", "rgba(255,255,255,.7)");
+    l.setAttribute("stroke-width", "1");
+    if (ln.axis === "vertical") {
+      const x = map(ln.pos, 0).x;
+      l.setAttribute("x1", x); l.setAttribute("x2", x);
+      l.setAttribute("y1", 0); l.setAttribute("y2", H);
+    } else {
+      const y = map(0, ln.pos).y;
+      l.setAttribute("y1", y); l.setAttribute("y2", y);
+      l.setAttribute("x1", 0); l.setAttribute("x2", W);
+    }
+    g.appendChild(l);
+  }
+}
+function hidePreviewSnapGuides() { const g = $("previewSnapGuides"); if (g) while (g.firstChild) g.removeChild(g.firstChild); }
+
 class DragSession extends GestureSession {
   constructor(ctx) {
     super(ctx);
@@ -58,8 +96,20 @@ class DragSession extends GestureSession {
     this.moved = true;
     this.state = "active";
     // 从 path 快照算新值（v2：snapshot 是 path 化的，与 C1 kernel 对齐）
-    const nx = Math.round((c.snapshot["transform.positionX"] + dx / sc) * 100) / 100;
-    const ny = Math.round((c.snapshot["transform.positionY"] + dy / sc) * 100) / 100;
+    let nx = Math.round((c.snapshot["transform.positionX"] + dx / sc) * 100) / 100;
+    let ny = Math.round((c.snapshot["transform.positionY"] + dy / sc) * 100) / 100;
+    // L1-06：预览区位置吸附（中心 + 四边对齐线，8 屏像素阈值；Shift 临时禁用吸附）。
+    // 消费 SnapEngine.snapPreviewPosition（注意签名是 options 对象 {W,H,scale}，非位置参数）。
+    if (typeof SnapEngine !== "undefined" && !SnapEngine.isShiftDisabled(e)) {
+      const cp = canvasPxJS();
+      const r = SnapEngine.snapPreviewPosition(nx, ny, { W: cp.W, H: cp.H, scale: sc });
+      nx = r.x; ny = r.y;
+      this._snapLines = r.lines;
+      renderPreviewSnapGuides(this._snapLines);
+    } else {
+      this._snapLines = null;
+      hidePreviewSnapGuides();
+    }
     OverlayState.set(c.target.id, "transform.positionX", nx);
     OverlayState.set(c.target.id, "transform.positionY", ny);
     const t = resolveTransform(c.seg, c.localSnap);
@@ -73,6 +123,7 @@ class DragSession extends GestureSession {
   }
   onPointerUp(e) {
     if (e.cancelable) e.preventDefault();
+    hidePreviewSnapGuides(); this._snapLines = null;   // L1-06：松手清理对齐线（先于 commit，避免残留）
     if (!this.moved) { InteractionManager.end(); return; }   // 单击 → 仅选中（已 selectKey）
     InteractionManager.commit();   // session.commit() 落库 + end()（destroy → clear overlay + 补刷）
   }
@@ -137,7 +188,7 @@ class DragSession extends GestureSession {
       }), { actor: "ui", paths }), { onError: e => console.error("[preview-drag] 写 transform 失败:", e) });
     }
   }
-  cancel() { /* 不落库，丢弃 overlay */ }
+  cancel() { hidePreviewSnapGuides(); this._snapLines = null; }  // L1-06：不落库，丢弃 overlay + 对齐线
   destroy() {
     OverlayState.clear(this.ctx.target.id);
     const need = InteractionManager.takePendingRefresh();
