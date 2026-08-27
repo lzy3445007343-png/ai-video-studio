@@ -2123,6 +2123,13 @@ KF_PROPS = {
     # 音量关键帧（OpenCut AudioTab ◆ 按钮）：value 存音量倍率(0~2)，与 seg["volume"] 同单位；
     # 预览/导出时若有该通道则按播放头插值覆盖 base（对齐 OpenCut 动画通道覆盖 base 语义）
     "volume":              {"label": "音量", "default": 1.0, "export": "volume", "coord": None},
+    # L2-07 颜色关键帧（分支 A-1：四分量独立 scalar path，值域 0~1，均为数字不碰 add_keyframe 校验）
+    # export=None：导出侧颜色通道→剪映映射属 Video DSL 护城河，按 L2-07⑧不动边界单独评估，本次不映射。
+    # base 回写（删光帧→播放头处解析色写回文本颜色字段）由前端在 WYSIWYG 逻辑做（KF_PATH_TO_BASE_FIELD 不加颜色，避免后端改）。
+    "text.color.r":   {"label": "文字色 R", "default": 1.0, "export": None, "coord": None},
+    "text.color.g":   {"label": "文字色 G", "default": 1.0, "export": None, "coord": None},
+    "text.color.b":   {"label": "文字色 B", "default": 1.0, "export": None, "coord": None},
+    "text.color.a":   {"label": "文字色 A", "default": 1.0, "export": None, "coord": None},
 }
 KF_KEYFRAMEABLE = tuple(KF_PROPS.keys())
 

@@ -36,6 +36,14 @@ const KF_GROUPS = [
       ["transform.opacity", "不透明度", 0.1, 1],
     ],
   },
+  {
+    title: "文字",
+    icon: "💬",
+    pairs: [],
+    singles: [
+      ["text.color", "文字颜色", "color"],  // L2-07：kind="color" → buildColorRow（四分量合并成单 ColorRow + 成组 ◆）
+    ],
+  },
 ];
 
 let _kfPropPanel = null;
@@ -51,7 +59,7 @@ function renderKfPanelPF() {
   const nameEl = $("kfSegName"), rowsEl = $("kfRows"), graphEl = $("kfGraph"),
         selEl = $("kfSel"), emptyEl = $("kfEmpty"), hintEl = $("kfHint");
   const s = selectedSeg();
-  const KF_VISUAL = ["video", "image", "sticker"];
+  const KF_VISUAL = ["video", "image", "sticker", "text"];  // L2-07：文本段也进 KF 面板（渲染"文字"颜色组）
   if (!s || !KF_VISUAL.includes(s.type)) {
     if (_kfPropPanel) { _kfPropPanel.destroy(); _kfPropPanel = null; }
     _kfLastKey = null;
@@ -61,9 +69,6 @@ function renderKfPanelPF() {
     if (s && s.type === "audio") {
       emptyEl.style.display = "none"; rowsEl.style.display = "";
       rowsEl.innerHTML = '<div class="kf-empty-hint">音频段不支持位移/缩放/旋转关键帧（无画面）；调音量请切到 🔊 audio tab。</div>';
-    } else if (s && s.type === "text") {
-      emptyEl.style.display = "none"; rowsEl.style.display = "";
-      rowsEl.innerHTML = '<div class="kf-empty-hint">文本段的字号/颜色等字段在字幕面板（💬 sub tab），不在 transform 关键帧里。</div>';
     } else {
       emptyEl.style.display = ""; rowsEl.style.display = "none";
     }
@@ -105,8 +110,10 @@ function kfOnOff(anims, path) {
 /* —— 整体重建 #kfRows（结构变化时才调用） —— */
 function buildKfSections(rowsEl, anims, local) {
   rowsEl.innerHTML = "";
+  const s = selectedSeg();
   for (let gi = 0; gi < KF_GROUPS.length; gi++) {
     const g = KF_GROUPS[gi];
+    if (s && s.type === "text" && g.title !== "文字") continue;  // L2-07：文本段只渲染"文字"组（颜色），不显示变换/融合
     const collapsed = !!_kfSecCollapsed[gi];
     const sec = document.createElement("div");
     sec.className = "kf-section" + (collapsed ? " is-collapsed" : "");
@@ -154,8 +161,9 @@ function buildKfSections(rowsEl, anims, local) {
       body.appendChild(pairEl);
     }
     // 单行字段
-    for (const [path, lab, step, def] of g.singles) {
-      body.appendChild(buildKfRow(path, lab, step, def, anims, local));
+    for (const item of g.singles) {
+      if (item[2] === "color") body.appendChild(buildColorRow(item[0], item[1], anims, local));  // L2-07：颜色组 → ColorRow
+      else body.appendChild(buildKfRow(item[0], item[1], item[2], item[3], anims, local));
     }
     sec.appendChild(body);
     rowsEl.appendChild(sec);
@@ -355,6 +363,103 @@ function buildKfRow(path, lab, step, def, anims, local) {
   return row;
 }
 
+/* —— L2-07：颜色关键帧（分支 A-1 四分量独立 scalar path text.color.r/g/b/a）
+ *   ColorRow = 触发色块(ColorPicker) + 成组 ◆（四分量同 t 一起打/删）
+ *   base 颜色(sub_style.color)写回衔接 L2-02（本卡不新增后端 Api，仅做 KF 通道机制 + 预览）
+ */
+function resolveColorAtTime(s, local) {
+  const a = s.animations || {};
+  const rv = kfVal(a, "text.color.r", local), gv = kfVal(a, "text.color.g", local),
+        bv = kfVal(a, "text.color.b", local), av = kfVal(a, "text.color.a", local);
+  const r = rv == null ? 1 : rv, g = gv == null ? 1 : gv, b = bv == null ? 1 : bv, al = av == null ? 1 : av;
+  return ColorPickerUtils.rgbaToHex(r, g, b, al);
+}
+function buildColorRow(pathBase, lab, anims, local) {
+  const s = selectedSeg();
+  const inRange = TimelineMapper.isPlayheadWithinRange(s);
+  const hasKf = ["text.color.r", "text.color.g", "text.color.b", "text.color.a"].some(p => KfChannel.isAnimated(s, p));
+  const cur = resolveColorAtTime(s, local);
+  const row = document.createElement("div");
+  row.className = "kf-row kf-row-color";
+  row.dataset.kind = "color";
+  row.dataset.pathBase = pathBase;
+  row.innerHTML =
+    '<button class="kf-kf-toggle' + (hasKf ? ' is-active' : '') + '" data-act="tog" title="成组打/删颜色关键帧（r/g/b/a 同帧）">' +
+      kfDiamondSVG("dia", "currentColor") + '</button>' +
+    '<span class="lab">' + lab + '</span>' +
+    '<span class="kf-color-wrap"></span>';
+  const togBtn = row.querySelector('[data-act="tog"]');
+  if (!inRange) { togBtn.disabled = true; togBtn.style.opacity = "0.5"; togBtn.style.pointerEvents = "none"; togBtn.title = "播放头不在元素范围内，无法打/删关键帧"; }
+  togBtn.addEventListener("click", () => toggleColorKf(pathBase));
+  const wrap = row.querySelector(".kf-color-wrap");
+  const cp = new ColorPickerField({ value: cur, onPreview: previewColor, onCommit: commitColor });
+  cp.mount(wrap);
+  row._cp = cp;
+  return row;
+}
+function previewColor(hex) {
+  const s = selectedSeg(); if (!s) return;
+  const { r, g, b, a } = ColorPickerUtils.hexToRgba(hex);
+  ["text.color.r", "text.color.g", "text.color.b", "text.color.a"].forEach((p, i) => {
+    const v = [r, g, b, a][i];
+    if (typeof PreviewState !== "undefined") PreviewState.set(s.id, p, v);
+  });
+  if (typeof PreviewState !== "undefined") PreviewState.notifyPreviewConsumers(s.id);
+  renderPreview();
+}
+function commitColor(hex) {
+  const s = selectedSeg(); if (!s) return;
+  const { r, g, b, a } = ColorPickerUtils.hexToRgba(hex);
+  const inRange = TimelineMapper.isPlayheadWithinRange(s);
+  const hasKf = ["text.color.r", "text.color.g", "text.color.b", "text.color.a"].some(p => KfChannel.isAnimated(s, p));
+  const k = Store.state.selectedKey ? Store.state.selectedKey.split(":") : null;
+  if (!k || k.length < 3) return;
+  const args = kfSegArgs();
+  const segId = Store.state.selectedSegId;
+  const local = TimelineMapper.playheadLocal(s);
+  if (typeof PreviewState !== "undefined") PreviewState.discardPreview(s.id);
+  if (hasKf && inRange) {
+    // 写四分量当前帧（一次事务 ×4 同 t）
+    const paths = ["text.color.r", "text.color.g", "text.color.b", "text.color.a"];
+    const vals = [r, g, b, a];
+    const run = i => {
+      if (i >= 4) { setTimeout(() => refresh(), 60); return; }
+      call("add_keyframe", ...args, paths[i], local, vals[i], "linear", segId).then(() => run(i + 1));
+    };
+    CommandService.withTx("color-kf-edit", () => run(0));
+  }
+  // 无帧：base 写回 sub_style.color 由 L2-02 接入命令（本卡不新增后端 Api，仅预览）
+}
+function toggleColorKf(pathBase) {
+  const s = selectedSeg(); if (!s) return;
+  if (!TimelineMapper.isPlayheadWithinRange(s)) return;  // L2-10 门控：范围外不响应
+  const local = TimelineMapper.playheadLocal(s);
+  const k = Store.state.selectedKey ? Store.state.selectedKey.split(":") : null;
+  if (!k || k.length < 3) return;
+  const args = kfSegArgs();
+  const segId = Store.state.selectedSegId;
+  const anims = s.animations || {};
+  const paths = ["text.color.r", "text.color.g", "text.color.b", "text.color.a"];
+  const hit = paths.some(p => KfChannel.hitAtPlayhead(s, p, local));
+  if (hit) {
+    paths.forEach(p => {
+      const keys = (anims[p] && anims[p].keys) ? anims[p].keys : [];
+      const hk = keys.find(kk => Math.abs((kk.t || 0) - local) <= KfChannel.KF_HIT_TOLERANCE_US);
+      if (hk) call("remove_keyframe", ...args, p, hk.id, segId, Store.state.playheadUs);
+    });
+    setTimeout(() => refresh(), 60);
+  } else {
+    const cur = resolveColorAtTime(s, local);
+    const { r, g, b, a } = ColorPickerUtils.hexToRgba(cur);
+    const vals = [r, g, b, a];
+    const run = i => {
+      if (i >= 4) { setTimeout(() => refresh(), 60); return; }
+      call("add_keyframe", ...args, paths[i], local, vals[i], "linear", segId).then(() => run(i + 1));
+    };
+    CommandService.withTx("color-kf", () => run(0));
+  }
+}
+
 /* —— key 相同时只更新值 + L2-10 实时刷新范围门控禁用态（跳过正在编辑的输入框，避免吞输入） —— */
 function updateKfRowValues(rowsEl, anims, local) {
   const s = selectedSeg();
@@ -362,6 +467,14 @@ function updateKfRowValues(rowsEl, anims, local) {
   const inRange = TimelineMapper.isPlayheadWithinRange(s);   // L2-10：播放头实时门控（拖播放头进出范围时刷新 ◆/＋ 禁用态）
   rowsEl.querySelectorAll(".kf-row").forEach(row => {
     const path = row.dataset.path;
+    // L2-07：颜色行（kind=color）单独处理——合成当前色 + 刷新 ◆ 门控（不进通用值更新，避免 getEffectivePropertyValue 对 base path 失败）
+    if (row.dataset.kind === "color") {
+      const ctog = row.querySelector('[data-act="tog"]');
+      if (ctog) { ctog.disabled = !inRange; ctog.style.opacity = inRange ? "" : "0.5"; ctog.style.pointerEvents = inRange ? "" : "none"; }
+      const cur = resolveColorAtTime(s, local);
+      if (row._cp && document.activeElement !== row._cp.el) row._cp.setColor(cur, null);
+      return;
+    }
     const tog = row.querySelector('[data-act="tog"]');
     const add = row.querySelector('[data-act="add"]');
     // L2-10/L2-06：范围门控每帧刷新（即便无 dataset.path 的锁定行也生效）

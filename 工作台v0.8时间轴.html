@@ -555,6 +555,20 @@
     text-align: center; opacity: 0; transition: opacity .12s; cursor: pointer; pointer-events: none; }
   .media-card:hover .del { opacity: 1; pointer-events: auto; }
   .assets.drag-over { outline: 2px dashed var(--accent); outline-offset: -3px; background: rgba(64,150,255,.06); }
+  /* L2-07 ColorPicker（对齐 OpenCut 行为圣经 §1.6） */
+  .cp-swatch { display:inline-block; width:22px; height:22px; border-radius:4px; border:1px solid #555; cursor:pointer; position:relative; overflow:hidden; vertical-align:middle; margin-left:6px; }
+  .cp-swatch-cur { position:absolute; inset:0; }
+  .cp-pop { position:fixed; z-index:9999; width:248px; background:#1e1e1e; border:1px solid #444; border-radius:8px; padding:10px; box-shadow:0 8px 24px rgba(0,0,0,.5); }
+  .cp-sat { position:relative; width:100%; height:140px; border-radius:4px; cursor:crosshair; margin-bottom:8px; }
+  .cp-sat-dot { position:absolute; width:12px; height:12px; border:2px solid #fff; border-radius:50%; transform:translate(-50%,-50%); pointer-events:none; box-shadow:0 0 2px #000; }
+  .cp-hue { width:100%; height:14px; border-radius:4px; margin-bottom:6px; cursor:ew-resize; background:linear-gradient(90deg,#f00,#ff0,#0f0,#0ff,#00f,#f0f,#f00); }
+  .cp-alpha { position:relative; width:100%; height:14px; border-radius:4px; margin-bottom:8px; cursor:ew-resize; }
+  .cp-alpha-fill { position:absolute; inset:0; border-radius:4px; }
+  .cp-bar { display:flex; gap:6px; align-items:center; }
+  .cp-bar select { background:#2a2a2a; color:#eee; border:1px solid #444; border-radius:4px; padding:2px 4px; }
+  .cp-hex { flex:1; background:#2a2a2a; color:#eee; border:1px solid #444; border-radius:4px; padding:3px 6px; text-transform:uppercase; font-family:monospace; }
+  .cp-eye { background:#2a2a2a; color:#eee; border:1px solid #444; border-radius:4px; padding:3px 8px; cursor:pointer; }
+  .kf-color-wrap { display:inline-flex; align-items:center; }
 </style>
 </head>
 <body>
@@ -978,6 +992,7 @@
 <script src="property/speed-panel.js"></script>
 <script src="property/mask-panel.js"></script>
 <script src="property/effect-panel.js"></script>
+<script src="property/color-picker.js"></script>
 <script src="property/kf-panel.js"></script>
 <script src="property/preview-drag.js"></script>
 <script src="property/viewport-input.js"></script>
@@ -1995,7 +2010,8 @@ const KF_PATHS_BY_TYPE = {
             ["transform.scaleX", "缩放 X", 0.1, 1], ["transform.scaleY", "缩放 Y", 0.1, 1],
             ["transform.rotate", "旋转", 5, 0], ["transform.opacity", "不透明度", 0.1, 1]],
   audio:   [],   // audio 无画面，transform 关键帧无意义（OpenCut 行为）
-  text:    [],   // 文本字段在 sub_style（字号/颜色等），不在 transform 关键帧
+  text:    [["text.color.r", "文字色 R", 0.1, 1], ["text.color.g", "文字色 G", 0.1, 1],
+            ["text.color.b", "文字色 B", 0.1, 1], ["text.color.a", "文字色 A", 0.1, 1]],  // L2-07 颜色四分量 KF（分支 A-1 独立 scalar path）
 };
 // 兼容旧引用（kfGraph 等）：默认 video 的 KF_PATHS
 const KF_PATHS = KF_PATHS_BY_TYPE.video;
