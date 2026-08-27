@@ -107,6 +107,12 @@
     animation: adp-slide 1.1s ease-in-out infinite; }
   .assets-drag-progress .adp-text { font-size: 11px; color: var(--muted); }
   @keyframes adp-slide { 0% { transform: translateX(-110%); } 100% { transform: translateX(280%); } }
+  /* L2-19 设置 tab 只读偏好清单 */
+  .media-empty .ph-settings { display: flex; flex-direction: column; gap: 6px; width: 100%; max-width: 200px; margin-top: 6px;
+    padding-top: 10px; border-top: 1px solid var(--border); }
+  .media-empty .ph-row { display: flex; justify-content: space-between; font-size: 12px; }
+  .media-empty .ph-k { color: var(--muted); }
+  .media-empty .ph-v { color: var(--text); }
   /* 素材面板固定双列网格视图（2026-08-17 移除 grid/list 切换，避免鸡肋空 UI） */
   .media-card { background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px;
     overflow: hidden; cursor: grab; position: relative; }
@@ -565,6 +571,10 @@
         <div class="tab" data-f="audio">音频</div>
         <div class="tab" data-f="text">文本</div>
         <div class="tab" data-f="effect">特效</div>
+        <div class="tab" data-f="transitions" data-tip="转场">转场</div>
+        <div class="tab" data-f="adjustment" data-tip="调节">调节</div>
+        <div class="tab" data-f="captions" data-tip="字幕">字幕</div>
+        <div class="tab" data-f="settings" data-tip="设置">设置</div>
       </div>
       <div class="media-list-wrapper">
         <div class="media-list" id="mediaList"></div>
@@ -1195,6 +1205,13 @@ let _mediaSig = "";
 let _effectSig = "";   // 特效库独立渲染签名：不共享 _mediaSig，否则异步回填 effects 后不重绘
 let _lastRenderedFilter = ""; // filter 切换时强制重建，避免 tab 切回时缓存命中导致显示错位
 function renderMedia(s) {
+  // L2-19 占位 tab 前置分派：transitions/adjustment/captions/settings 绝不落入素材/特效过滤
+  if (s && ["transitions", "adjustment", "captions", "settings"].includes(s.filter)) {
+    _lastRenderedFilter = s.filter;
+    _mediaSig = "ph:" + s.filter;   // 标记占位，切回素材时 filterChanged 兜底强制重建（避免占位 DOM 残留）
+    renderPlaceholderTab(s.filter);
+    return;
+  }
   const filterChanged = _lastRenderedFilter !== s.filter;
   _lastRenderedFilter = s.filter;
   if (s.filter === "effect") {
@@ -1281,6 +1298,37 @@ function renderMedia(s) {
   }
 }
 
+// L2-19 占位 tab（转场/调节/字幕/设置 coming soon；纯前端，不碰 Api/draft schema/seg_id）
+function renderPlaceholderTab(kind) {
+  const box = $("mediaList");
+  const PH = {
+    transitions: { icon: "🔀", title: "转场视图开发中…", sub: "转场能力将在后续版本提供" },
+    adjustment: { icon: "🎚", title: "调节视图开发中…", sub: "亮度 / 对比度 / 饱和度等调节将在后续版本提供" },
+    captions:   { icon: "💬", title: "字幕提取（语音转字幕）开发中…", sub: "当前可手动放置 .srt 到素材目录后刷新" },
+    settings:   { icon: "⚙", title: "设置开发中…", sub: "当前可查看前端偏好现状" }
+  };
+  const p = PH[kind] || { icon: "🚧", title: "开发中…", sub: "" };
+  let inner = '<div class="me-icon">' + p.icon + '</div>'
+    + '<div class="me-title">' + p.title + '</div>'
+    + '<div class="me-sub">' + p.sub + '</div>';
+  if (kind === "settings") {
+    const ar = $("aspectGroup") ? $("aspectGroup").querySelector(".asp-btn.active") : null;
+    inner += '<div class="ph-settings">'
+      + phRow("吸附开关", Store.state.snapOn ? "开" : "关")
+      + phRow("波纹动画", Store.state.rippleOn ? "开" : "关")
+      + phRow("画幅锁定", ar ? ar.textContent.trim() : "自动")
+      + '</div>';
+  }
+  if (kind === "captions") {
+    inner += '<button class="me-btn" id="phSrtBtn">导入 SRT 字幕</button>';
+  }
+  box.innerHTML = '<div class="media-empty">' + inner + '</div>';
+  if (kind === "captions") {
+    const b = $("phSrtBtn");
+    if (b) b.addEventListener("click", () => UiFeedback.showToast({ description: "字幕导入开发中：可手动放置 .srt 到素材目录后刷新", variant: "warn" }));
+  }
+}
+function phRow(k, v) { return '<div class="ph-row"><span class="ph-k">' + k + '</span><span class="ph-v">' + v + '</span></div>'; }
 // 特效库（v0.9 P0）：左栏「特效」tab，卡片来自后端 get_effect_registry(EFFECT_META)，点击加特效。
 function renderEffectLibrary(s, box) {
   const reg = Store.state.effects || {};
