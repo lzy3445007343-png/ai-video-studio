@@ -80,8 +80,12 @@
     border-radius: 6px; font-size: 12px; }
   .tabs { display: flex; gap: 4px; padding: 8px 10px 4px; flex-wrap: wrap; }
   .tabs .tab { padding: 4px 9px; border-radius: 14px; font-size: 12px; color: var(--muted);
-    background: var(--panel-2); border: 1px solid transparent; }
-  .tabs .tab.active { color: var(--text); background: #34343c; border-color: var(--border); }
+    background: var(--panel-2); border: 1px solid transparent; display: flex; align-items: center; gap: 4px; cursor: pointer; }
+  .tabs .tab svg { width: 14px; height: 14px; pointer-events: none; flex: none; }   /* L2-20 图标不吞 click */
+  .tabs .tab.active { color: #fff; background: var(--primary-dim); border-color: var(--primary); }   /* L2-20 激活态 secondary 浅蓝底 */
+  .media-list-wrap { flex: 1; min-height: 0; position: relative; display: flex; flex-direction: column; }   /* L2-20 滚动渐隐遮罩定位锚 */
+  .media-fade-top { position: absolute; top: 0; left: 0; right: 0; height: 18px; pointer-events: none; z-index: 5;
+    background: linear-gradient(to bottom, var(--panel), rgba(0,0,0,0)); opacity: 0; transition: opacity .15s; }
   .media-list-wrapper { flex: 1; overflow-y: auto; min-height: 0; overscroll-behavior: contain; }
   .media-list-wrapper::-webkit-scrollbar { width: 6px; }
   .media-list-wrapper::-webkit-scrollbar-track { background: transparent; }
@@ -567,17 +571,20 @@
     <div class="assets">
       <div class="head"><button class="btn" id="importBtn">+ 导入素材</button><button class="btn" id="importJyBtn">导入剪映</button></div>
       <div class="tabs" id="mediaTabs">
-        <div class="tab active" data-f="media">媒体</div>
-        <div class="tab" data-f="audio">音频</div>
-        <div class="tab" data-f="text">文本</div>
-        <div class="tab" data-f="effect">特效</div>
-        <div class="tab" data-f="transitions" data-tip="转场">转场</div>
-        <div class="tab" data-f="adjustment" data-tip="调节">调节</div>
-        <div class="tab" data-f="captions" data-tip="字幕">字幕</div>
-        <div class="tab" data-f="settings" data-tip="设置">设置</div>
+        <div class="tab active" data-f="media" data-tip="媒体"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/></svg><span>媒体</span></div>
+        <div class="tab" data-f="audio" data-tip="音频"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 14v-2a8 8 0 0 1 16 0v2"/><rect x="3" y="13" width="4" height="7" rx="1.6"/><rect x="17" y="13" width="4" height="7" rx="1.6"/></svg><span>音频</span></div>
+        <div class="tab" data-f="text" data-tip="文本"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M5 6h14M12 6v13"/></svg><span>文本</span></div>
+        <div class="tab" data-f="effect" data-tip="特效"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M15 4l.9 2.1L18 7l-2.1.9L15 10l-.9-2.1L12 7l2.1-.9L15 4z"/><path d="M9 15l6 6"/></svg><span>特效</span></div>
+        <div class="tab" data-f="transitions" data-tip="转场"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h13"/><path d="M11 8l4 4-4 4"/><path d="M16 8l4 4-4 4"/></svg><span>转场</span></div>
+        <div class="tab" data-f="adjustment" data-tip="调节"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M5 8h9M16 8h3M5 16h3M12 16h7"/><circle cx="14" cy="8" r="2"/><circle cx="10" cy="16" r="2"/></svg><span>调节</span></div>
+        <div class="tab" data-f="captions" data-tip="字幕"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M7 10h4M7 14h6M13 10h4M13 14h4"/></svg><span>字幕</span></div>
+        <div class="tab" data-f="settings" data-tip="设置"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M19 5l-2 2M7 17l-2 2"/></svg><span>设置</span></div>
       </div>
-      <div class="media-list-wrapper">
-        <div class="media-list" id="mediaList"></div>
+      <div class="media-list-wrap">
+        <div class="media-fade-top" id="mediaFadeTop"></div>
+        <div class="media-list-wrapper">
+          <div class="media-list" id="mediaList"></div>
+        </div>
       </div>
     </div>
 
@@ -3336,6 +3343,16 @@ function bindEvents() {
     }).catch(e => { hideImportLoading(); UiFeedback.showToast({ description: "导入异常：" + e, variant: "error" }); });
   });
   setupAssetDrop();
+  // L2-20 素材列表滚动渐隐遮罩（顶部 fade，scrollTop>4 显示）
+  (function initMediaFade() {
+    const wrap = document.querySelector(".media-list-wrapper");
+    const fade = $("mediaFadeTop");
+    if (wrap && fade) {
+      const sync = () => { fade.style.opacity = wrap.scrollTop > 4 ? "1" : "0"; };
+      wrap.addEventListener("scroll", sync);
+      sync();
+    }
+  })();
   // 媒体底层事件诊断：previewStack 内的 video/audio 动态创建，用事件委托捕获错误
   $("previewStack").addEventListener("error", e => {
     const t = e.target;
@@ -3361,6 +3378,10 @@ function bindEvents() {
       $("mediaTabs").querySelectorAll(".tab").forEach(t => t.classList.remove("active"));
       tab.classList.add("active");
       Store.set({ filter: tab.dataset.f }); // → 自动重绘素材面板
+    });
+    tab.addEventListener("mouseenter", () => {   // L2-20 自绘 Tooltip（消费 L0-11 showTooltip）
+      const tip = tab.dataset.tip || tab.textContent.trim();
+      if (tip) UiFeedback.showTooltip(tab, tip);
     });
   });
   // 资产面板 grid/list 切换（2026-08-16 对齐 OpenCut assets.tsx mode 切换）
