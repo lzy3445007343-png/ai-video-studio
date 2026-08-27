@@ -142,51 +142,26 @@ class DragSession extends GestureSession {
     const k = c.key.split(":");
     const args = { track_type: k[0], track_index: +k[1], index: +k[2] };
     const paths = ["transform.positionX", "transform.positionY"];
-    if (c.hasAnimX || c.hasAnimY) {
-      // 有动画通道 → 在当前 localSnap 处打关键帧（事务：一次拖动 = 一条 undo）
-      // ── KF-AUDIT：打印 X/Y 实际发送给后端的 time_us（应相等，若不等即根因）──
-      // ★ KET：time_us 用 EditContext 锁定的 localUs（GPT §8：X/Y 都用 context.localUs）
-      const _tx = (c.editCtx && c.editCtx.editTime) ? c.editCtx.editTime.localUs : c.localSnap;
-      console.log("[KF-AUDIT] preview-drag commit", JSON.stringify({
-        gestureId: c.gestureId || "?", localSnap: c.localSnap, editLocalUs: _tx,
-        xTimeUs: _tx, yTimeUs: _tx,
-        hasAnimX: c.hasAnimX, hasAnimY: c.hasAnimY,
-      }));
-      // ────────────────────────────────────────────────────────────────────
-      const jobs = [];
-      const _tu = (c.editCtx && c.editCtx.editTime) ? c.editCtx.editTime.localUs : c.localSnap;
-      if (c.hasAnimX) jobs.push(CommandService.run("add_keyframe", Object.assign({}, args, {
-        path: "transform.positionX", time_us: _tu, value: nx, seg_mode: "linear",
-      }), { actor: "ui", paths: ["transform.positionX"] }));
-      if (c.hasAnimY) jobs.push(CommandService.run("add_keyframe", Object.assign({}, args, {
-        path: "transform.positionY", time_us: _tu, value: ny, seg_mode: "linear",
-      }), { actor: "ui", paths: ["transform.positionY"] }));
-      CommandService.withTx("drag-transform-kf", () => Promise.all(jobs).then(rs => {
-        const bad = rs.find(r => !r || r.ok === false);
-        if (bad) return { ok: false, error: (bad.error || "add_keyframe 失败") };
-        return { ok: true };
-      }), { onError: e => console.error("[preview-drag] add_keyframe 失败:", e) });
-    } else {
-      // 无动画通道 → 写静态 transform（C1.3：setProperty 统一 params + legacy mirror）
-      const seg = c.seg;
-      setProperties(seg, {
-        "transform.positionX": nx,
-        "transform.positionY": ny,
-      });
-      // 后端落盘（合并保留其他字段，从 params/旧字段取）
-      const tr = seg.transform || {};
-      const next = {
-        x: nx, y: ny,
-        scaleX: (typeof getProperty === "function") ? getProperty(seg, "transform.scaleX") : (tr.scaleX != null ? tr.scaleX : 1),
-        scaleY: (typeof getProperty === "function") ? getProperty(seg, "transform.scaleY") : (tr.scaleY != null ? tr.scaleY : 1),
-        rotation: (typeof getProperty === "function") ? getProperty(seg, "transform.rotate") : (tr.rotation != null ? tr.rotation : 0),
-        opacity: (typeof getProperty === "function") ? getProperty(seg, "transform.opacity") : (tr.opacity != null ? tr.opacity : 1),
-      };
-      // 位置参数经 execute 包装：execute(cmd_id, args_dict) → fn(**args)——args 键名=Python 签名参数名
-      CommandService.withTx("drag-transform", () => CommandService.run("update_segment_transform", Object.assign({}, args, {
-        segid: c.target.id, transform: next,
-      }), { actor: "ui", paths }), { onError: e => console.error("[preview-drag] 写 transform 失败:", e) });
-    }
+    // L1-09（分支 A，对齐 OpenCut）：Player 拖动只改 base transform，不自动打关键帧。
+    // 有动画通道的段：base 改变但通道插值优先（播放头处画面由 KF 决定），符合 OpenCut"拖-only-base"语义。
+    const seg = c.seg;
+    setProperties(seg, {
+      "transform.positionX": nx,
+      "transform.positionY": ny,
+    });
+    // 后端落盘（合并保留其他字段，从 params/旧字段取）
+    const tr = seg.transform || {};
+    const next = {
+      x: nx, y: ny,
+      scaleX: (typeof getProperty === "function") ? getProperty(seg, "transform.scaleX") : (tr.scaleX != null ? tr.scaleX : 1),
+      scaleY: (typeof getProperty === "function") ? getProperty(seg, "transform.scaleY") : (tr.scaleY != null ? tr.scaleY : 1),
+      rotation: (typeof getProperty === "function") ? getProperty(seg, "transform.rotate") : (tr.rotation != null ? tr.rotation : 0),
+      opacity: (typeof getProperty === "function") ? getProperty(seg, "transform.opacity") : (tr.opacity != null ? tr.opacity : 1),
+    };
+    // 位置参数经 execute 包装：execute(cmd_id, args_dict) → fn(**args)——args 键名=Python 签名参数名
+    CommandService.withTx("drag-transform", () => CommandService.run("update_segment_transform", Object.assign({}, args, {
+      segid: c.target.id, transform: next,
+    }), { actor: "ui", paths }), { onError: e => console.error("[preview-drag] 写 transform 失败:", e) });
   }
   cancel() { hidePreviewSnapGuides(); this._snapLines = null; }  // L1-06：不落库，丢弃 overlay + 对齐线
   destroy() {

@@ -2314,6 +2314,15 @@ function startKfMarkerDrag(e) {
     for (const t of session.targets) {
       if (t.el) t.el.style.left = visualPx(t) + "px";   // 视觉临时移动（不落库），纯计算
     }
+    // L1-21 方案 A（过渡，L0-03 落地前）：写临时 keys.t（只改 t 不改 v）+ 三方同步。
+    // 注意：只改 seg.animations[path].keys[kid].t（正式数据内存副本），t.t（原始基准）不动，避免视觉/数据双重计数。
+    // _kfDragActive 已置 true → refresh 跳过（HTML:3591），无轮询覆盖风险。
+    for (const t of session.targets) {
+      const kf = (seg.animations && seg.animations[t.path] && seg.animations[t.path].keys || []).find(k => k.id === t.kid);
+      if (kf) kf.t = clampSeg(t.t + session.deltaTicks);
+    }
+    if (typeof updateKfPanelValues === "function") updateKfPanelValues();   // 方向①：Inspector ◆ 命中态/显示值实时
+    if (typeof renderPreview === "function") renderPreview();               // 方向①（档位 A）：Player 实时插值
   };
   const up = ev => {
     document.removeEventListener("mousemove", move);
@@ -2342,6 +2351,26 @@ function startKfMarkerDrag(e) {
   };
   document.addEventListener("mousemove", move);
   document.addEventListener("mouseup", up);
+}
+
+// L1-21 方向②（Inspector→时间轴 marker 实时）：只局部挪选中段 .kf-marker 的 left，不整树重建（对齐 L0-02 收窄）。
+// 消费 seg.animations[path].keys[].t（Inspector input 经 KfChannel.upsertLocal 已写入本地临时态）。
+function refreshSegKfMarkers(seg) {
+  const key = Store.state.selectedKey;
+  if (!key) return;
+  const segEl = document.querySelector('.seg[data-key="' + key + '"]');
+  if (!segEl) return;
+  segEl.querySelectorAll(".kf-marker").forEach(m => {
+    const paths = (m.dataset.paths || "").split(",").filter(Boolean);
+    const kids = (m.dataset.kids || "").split(",").filter(Boolean);
+    let nt = +m.dataset.kftime || 0;
+    for (let i = 0; i < paths.length; i++) {
+      const kf = (seg && seg.animations && seg.animations[paths[i]] && seg.animations[paths[i]].keys || []).find(k => k.id === kids[i]);
+      if (kf) { nt = kf.t; break; }
+    }
+    m.style.left = (nt / 1e6 * pps()) + "px";
+    m.dataset.kftime = nt;
+  });
 }
 
 function onTimelineDown(e) {
@@ -3358,9 +3387,9 @@ function bindEvents() {
   });
   /* 滚轮：Ctrl+滚轮缩放，Shift+滚轮横向滚动 */
   $("tlScroll").addEventListener("wheel", e => {
-    if (e.ctrlKey) {
+    if (e.ctrlKey && e.shiftKey) {
       e.preventDefault();
-      queueZoomWheel(e.deltaY);   // L0-05：Ctrl+滚轮缩放走指数平滑（rAF）
+      queueZoomWheel(e.deltaY);   // L1-12（分支 A）：Ctrl+Shift+滚轮=时间轴缩放（Ctrl/Meta+滚轮让位画布缩放）
     } else if (e.shiftKey) {
       e.preventDefault();
       $("tlScroll").scrollLeft += e.deltaY;

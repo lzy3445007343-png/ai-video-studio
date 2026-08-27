@@ -71,13 +71,16 @@ function buildEffectFields(c) {
         label: pm.label || pname,
         value: val,
         min: mn, max: mx, step,
-        onPreview: (v) => { if (s.params) s.params[pname] = v; },   // 拖动中改内存（值显示 SliderField 自带），不落库
-        onCommit: (v) => {                                          // 松手 debounce 250ms 落库
+        onPreview: (v) => {
+          if (s.params) s.params[pname] = v;       // 拖动中改内存（保留）
+          if (typeof renderPreview === "function") renderPreview();   // L1-20：实时预览（路线 B：直接重渲；L0-03 落地后收敛到 getPreviewSeg 隔离 overlay）
+        },
+        onCommit: (v) => {                                            // L1-20：去 250ms debounce，松手即提交一条 undo
           if (ti == null || idx == null) return;
           clearTimeout(_effTimers[pname]);
-          _effTimers[pname] = setTimeout(() => {
-            call("update_effect", ti, idx, { params: { [pname]: v } }, Store.state.selectedSegId).then(refresh);
-          }, 250);
+          CommandService.withTx("effect-param-" + pname, () =>
+            call("update_effect", ti, idx, { params: { [pname]: v } }, Store.state.selectedSegId).then(refresh),
+          { onError: e => console.error("[effect-panel] update_effect 失败:", e) });
         },
       }));
     }

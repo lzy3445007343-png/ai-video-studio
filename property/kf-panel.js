@@ -217,6 +217,7 @@ function buildKfRow(path, lab, step, def, anims, local) {
       setProperty(s, path, v);   // C1 静态值本地态（params + legacy mirror）
     }
     renderPreview();   // 预览跟手
+    if (typeof refreshSegKfMarkers === "function") refreshSegKfMarkers(s);   // L1-21 方向②：时间轴 marker 实时跟随
   });
   inp.addEventListener("blur", () => {
     _kfEditing = false;

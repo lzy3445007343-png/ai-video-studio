@@ -2,7 +2,7 @@
  * property/viewport-input.js —— C5.3 Viewport Input（画布输入手势）
  * =====================================================================
  * 约定（2026-08-20 用户拍板，防与时间轴冲突）：
- *   Ctrl+滚轮  = 时间轴缩放（tlScroll wheel handler，不抢）
+ *   Ctrl/Meta+滚轮 = 画布缩放（本文件，对齐 OpenCut；时间轴缩放改 Ctrl+Shift+滚轮）
  *   Shift+滚轮 = 时间轴横向滚动（同上，不抢）
  *   Alt/Cmd+滚轮 = 画布缩放（本文件，指数平滑 + RAF 防抖）
  *   中键拖拽     = 画布平移（本文件，zoom>1 才可平移，对齐 OpenCut canPan）
@@ -20,7 +20,7 @@ function bindViewportInput() {
   /* 1. Alt/Cmd+滚轮 → 缩放（指数平滑，对齐 OpenCut zoom.ts: zoomFactor=exp(-delta/300)） */
   stack.addEventListener("wheel", e => {
     if (PreviewCoordinate.mode !== "viewport") return;
-    if (!(e.altKey || e.metaKey)) return;          // 只接管 Alt/Cmd+滚轮，Ctrl/Shift 留给时间轴
+    if (!(e.ctrlKey || e.metaKey)) return;          // L1-12（分支 A，对齐 OpenCut）：Ctrl/Meta+滚轮=画布缩放；Shift 留给时间轴横向滚动
     e.preventDefault();
     const factor = Math.exp(-e.deltaY / 300);
     PreviewCoordinate.scaleZoom(factor);

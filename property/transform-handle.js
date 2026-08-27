@@ -131,8 +131,8 @@ class ResizeSession extends GestureSession {
       const dx = e.clientX - c.anchorCX, dy = e.clientY - c.anchorCY;
       const curDist = Math.sqrt(dx * dx + dy * dy) || 1;
       const factor = curDist / c.initialDist;
-      nsx = Math.max(0.05, c.startSX * factor);
-      nsy = Math.max(0.05, c.startSY * factor);
+      nsx = Math.max(0.01, c.startSX * factor);
+      nsy = Math.max(0.01, c.startSY * factor);
       if (e.shiftKey) {   // shift 锁定比例：以 start 比例统一
         const pr = c.startSY / (c.startSX || 1);
         nsy = nsx * pr;
@@ -145,9 +145,9 @@ class ResizeSession extends GestureSession {
         ? (dx * Math.cos(rot) + dy * Math.sin(rot)) * (c.h === "edge-l" ? -1 : 1)
         : (-dx * Math.sin(rot) + dy * Math.cos(rot)) * (c.h === "edge-t" ? -1 : 1);
       if (c.h === "edge-r" || c.h === "edge-l") {
-        nsx = Math.max(0.05, proj / ((c.startW || 1) / 2));
+        nsx = Math.max(0.01, proj / ((c.startW || 1) / 2));
       } else {
-        nsy = Math.max(0.05, proj / ((c.startH || 1) / 2));
+        nsy = Math.max(0.01, proj / ((c.startH || 1) / 2));
       }
     }
     OverlayState.set(c.target.id, "transform.scaleX", Math.round(nsx * 100) / 100);
