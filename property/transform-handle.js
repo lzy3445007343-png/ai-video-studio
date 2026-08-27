@@ -27,6 +27,21 @@ function _transformOverlay() {
   return ov;
 }
 
+/* L1-15：按手柄类型 × 元素当前旋转角给出方向光标（对齐 OpenCut getResizeCursor） */
+function getResizeCursor(h, rotDeg) {
+  if (h === "rotation") return "grab";
+  const base = {
+    "edge-l": 0, "edge-r": 0, "edge-t": 90, "edge-b": 90,
+    "corner-tl": -45, "corner-br": -45, "corner-tr": 45, "corner-bl": 45,
+  }[h];
+  // 归一到 [0,180)
+  const a = (((base + (rotDeg || 0)) % 180) + 180) % 180;
+  if (a < 22.5 || a >= 157.5) return "ew-resize";
+  if (a < 67.5) return "nwse-resize";
+  if (a < 112.5) return "ns-resize";
+  return "nesw-resize";
+}
+
 /* —— 渲染选中 video/image 段的手柄（选中态/非播放时） —— */
 function renderTransformHandles() {
   // 2026-08-20 修复：交互进行中（缩放/旋转 session active）绝不重建 overlay——
@@ -64,16 +79,26 @@ function renderTransformHandles() {
   box.setAttribute("transform", `rotate(${t.r || 0} ${cxs} ${cys})`);
   ov.appendChild(box);
   // 8 手柄（4 角 + 4 边）+ 顶部旋转手柄
+  // L1-16：命中层（r=9 透明，pointer-events:auto）包视觉层（r=6，pointer-events:none）；
+  //        data-h 挂在 g 上，命中层在外 3px 仍可命中；光标由 L1-15 getResizeCursor 决定。
   const mk = (kind, x, y) => {
-    const c = document.createElementNS(SVGNS, "circle");
-    c.setAttribute("class", "th-handle" + (kind.startsWith("rot") ? " rot" : ""));
-    c.setAttribute("data-h", kind);
-    c.setAttribute("cx", x.toFixed(1)); c.setAttribute("cy", y.toFixed(1)); c.setAttribute("r", 6);
-    ov.appendChild(c);
+    const g = document.createElementNS(SVGNS, "g");
+    g.setAttribute("data-h", kind);
+    const hit = document.createElementNS(SVGNS, "circle");
+    hit.setAttribute("class", "th-handle-hit");
+    hit.setAttribute("cx", x.toFixed(1)); hit.setAttribute("cy", y.toFixed(1)); hit.setAttribute("r", 9);
+    hit.style.cursor = getResizeCursor(kind, t.r || 0);
+    g.appendChild(hit);
+    const vis = document.createElementNS(SVGNS, "circle");
+    vis.setAttribute("class", "th-handle" + (kind.startsWith("rot") ? " rot" : ""));
+    vis.setAttribute("cx", x.toFixed(1)); vis.setAttribute("cy", y.toFixed(1)); vis.setAttribute("r", 6);
+    g.appendChild(vis);
+    ov.appendChild(g);
   };
   const corners = [["tl", -hw, -hh], ["tr", hw, -hh], ["br", hw, hh], ["bl", -hw, hh]];
   for (const [k, dx, dy] of corners) { const [x, y] = rp(dx, dy); mk("corner-" + k, cxs + x, cys + y); }
-  const edges = [["r", hw, 0], ["l", -hw, 0], ["t", 0, -hh], ["b", 0, hh]];
+  // L1-16：去 top 边 → 8 点（4 角 + 3 边 + 旋转柄），对齐 OpenCut
+  const edges = [["r", hw, 0], ["l", -hw, 0], ["b", 0, hh]];
   for (const [k, dx, dy] of edges) { const [x, y] = rp(dx, dy); mk("edge-" + k, cxs + x, cys + y); }
   const [rx, ry] = rp(0, -(hh + 26));
   const line = document.createElementNS(SVGNS, "line");
@@ -212,8 +237,9 @@ class RotateSession extends GestureSession {
 
 /* —— 手柄 pointerdown → 启动 Resize/Rotate session —— */
 function onTransformHandleDown(e) {
-  const hEl = e.target;
-  const h = hEl && hEl.getAttribute ? hEl.getAttribute("data-h") : null;
+  // L1-16：data-h 现挂在 g 上；视觉圆 pointer-events:none，必须沿 DOM 树向上找最近的 [data-h]
+  const hEl = e.target && e.target.closest ? e.target.closest("[data-h]") : null;
+  const h = hEl ? hEl.getAttribute("data-h") : null;
   if (!h) return;
   if (typeof isPlaying !== "undefined" && isPlaying) return;   // 播放中禁止
   e.stopPropagation(); e.preventDefault();

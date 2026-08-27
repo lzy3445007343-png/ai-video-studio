@@ -58,7 +58,8 @@ class NumberField extends PropertyField {
   }
 
   _parse(raw) {
-    const n = parseFloat(raw);
+    // L1-19：表达式求值（1920/2→960、100*1.5→150），否则退化为 parseFloat
+    const n = (typeof ExprParse !== "undefined") ? ExprParse.parseNumeric(raw) : parseFloat(raw);
     if (isNaN(n)) return null;
     // 步进吸附 + 钳制（对齐 OpenCut snapToStep + clamp）
     let v = n;
@@ -77,14 +78,21 @@ class NumberField extends PropertyField {
       this._draft.onInput(e.target.value);
       this._lastValue = this._draft.value;
     });
+    // L1-18：点击全选（mousedown 阻止原生 caret 放置并 focus+select；focus 兜底再 select 防二次点击取消）
+    this.on(inp, "mousedown", e => {
+      e.preventDefault();
+      inp.focus();
+      inp.select();
+    });
+    this.on(inp, "focus", () => { inp.select(); });
     this.on(inp, "blur", () => {
       window.__inspectorInteracting = false;  // L0-03 Q2=A：提交/失焦解除，轮询恢复
       this._draft.onCommit();
       this.update(this._lastValue);      // 提交后回显规范化值
     });
     this.on(inp, "keydown", e => {
-      if (e.key === "Enter") { e.preventDefault(); inp.blur(); }
-      if (e.key === "Escape") { e.preventDefault(); this._draft.reset(); this.update(this._lastValue); inp.blur(); }
+      // L1-18 分支 A（对齐 OpenCut）：Enter / Escape 均提交（blur 触发 commit），无"丢弃"
+      if (e.key === "Enter" || e.key === "Escape") { e.preventDefault(); inp.blur(); }
     });
     const rst = this.el.querySelector(".pf-num-reset");
     if (rst) this.on(rst, "click", () => {

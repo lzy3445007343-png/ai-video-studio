@@ -99,14 +99,18 @@ function buildAudioFields(c) {
       const rst = fld.el.querySelector("#audVolReset");
       // 两阶段（PropertyDraft）：input→preview（内存态+预览渲染），blur/Enter→commit（后端落库）
       fld._draft = new PropertyDraft({
-        parse: raw => { const n = parseFloat(raw); if (isNaN(n)) return null; return Math.max(-60, Math.min(6, n)); },
+        // L1-19：表达式求值（如 1920/2→960），否则 parseFloat
+        parse: raw => { const n = (typeof ExprParse !== "undefined") ? ExprParse.parseNumeric(raw) : parseFloat(raw); if (isNaN(n)) return null; return Math.max(-60, Math.min(6, n)); },
         getValue: () => { const n = parseFloat(inp.value); return isNaN(n) ? 0 : n; },
         preview: previewAudioVolume,
         commit: commitAudioVolume,
       });
+      // L1-18：点击全选 + Escape 提交（分支 A）
+      fld.on(inp, "mousedown", e => { e.preventDefault(); inp.focus(); inp.select(); });
+      fld.on(inp, "focus", () => { inp.select(); });
       fld.on(inp, "input", e => fld._draft.onInput(e.target.value));
       fld.on(inp, "blur", () => { fld._draft.onCommit(); fld.update(fld._draft.value); });
-      fld.on(inp, "keydown", e => { if (e.key === "Enter") { e.preventDefault(); inp.blur(); } });
+      fld.on(inp, "keydown", e => { if (e.key === "Enter" || e.key === "Escape") { e.preventDefault(); inp.blur(); } });
       if (rst) fld.on(rst, "click", () => { inp.value = "0.0"; fld._draft.onInput("0.0"); fld._draft.onCommit(); });
       if (kfBtn) fld.on(kfBtn, "click", () => { const r = buildSegRefs(); if (r.length) toggleVolKf(r); });
     },

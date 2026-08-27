@@ -41,6 +41,9 @@ function _previewScale() {
   return (w && cp.W) ? w / cp.W : 1;
 }
 
+/* L1-16：拖动激活阈值（逻辑像素，对齐 OpenCut MIN_DRAG_DISTANCE=0.5；按显示缩放换算，手感一致） */
+const MIN_DRAG_DISTANCE = 0.5;
+
 class DragSession extends GestureSession {
   constructor(ctx) {
     super(ctx);
@@ -50,10 +53,10 @@ class DragSession extends GestureSession {
     const c = this.ctx;
     c.pointer.currentX = e.clientX; c.pointer.currentY = e.clientY;
     const dx = e.clientX - c.pointer.startX, dy = e.clientY - c.pointer.startY;
-    if (!this.moved && Math.hypot(dx, dy) < 3) return;   // 单击阈值（3px 内=选中）
+    const sc = _previewScale();
+    if (!this.moved && Math.hypot(dx, dy) < MIN_DRAG_DISTANCE / sc) return;   // L1-16：0.5 逻辑像素激活（分支 A）
     this.moved = true;
     this.state = "active";
-    const sc = _previewScale();
     // 从 path 快照算新值（v2：snapshot 是 path 化的，与 C1 kernel 对齐）
     const nx = Math.round((c.snapshot["transform.positionX"] + dx / sc) * 100) / 100;
     const ny = Math.round((c.snapshot["transform.positionY"] + dy / sc) * 100) / 100;

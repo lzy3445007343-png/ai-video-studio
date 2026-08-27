@@ -694,7 +694,8 @@
     /* C5.4 变换手柄（选中 video/image 段时显示：8 手柄 + 顶部旋转柄） */
     .transform-overlay { position:absolute; inset:0; width:100%; height:100%; z-index:39; pointer-events:none; overflow:visible; }
     .transform-overlay .th-box { fill:none; stroke:#3da9ff; stroke-width:1.4; pointer-events:none; }
-    .transform-overlay .th-handle { fill:#fff; stroke:#3da9ff; stroke-width:1.4; cursor:pointer; pointer-events:auto; }
+    .transform-overlay .th-handle { fill:#fff; stroke:#3da9ff; stroke-width:1.4; cursor:inherit; pointer-events:none; }
+    .transform-overlay .th-handle-hit { fill:transparent; stroke:none; pointer-events:auto; }
     .transform-overlay .th-handle.rot { fill:#ffd166; stroke:#b8860b; }
     .transform-overlay .th-rotline { stroke:#ffd166; stroke-width:1.2; pointer-events:none; }
     .stickerpanel .empty { font-size: 12px; color: var(--muted); line-height: 1.5; }
@@ -817,6 +818,7 @@
 <script src="property/Field.js"></script>
 <script src="property/DraftStore.js"></script>
 <script src="property/NumberField.js"></script>
+<script src="property/expr-parse.js"></script>
 <script src="property/SliderField.js"></script>
 <script src="property/PropertyPanel.js"></script>
 <script src="property/audio-panel.js"></script>
@@ -1946,7 +1948,7 @@ function startPointer(e, seg, mode, side) {
       segId,   // A 方案：拖动全程用稳定段 id 定位/匹配，折叠后 ti 漂移也不影响
       isGroup: !!(inSel && multi && !e.ctrlKey && !e.metaKey && mode === "move"),
       anchorKey: key,
-      startMouseX: e.clientX, startMouseY: e.clientY, s0,
+      startMouseX: e.clientX, startMouseY: e.clientY, offsetY: 0, s0,
       curLeftUs: s0.start, curRightUs: s0.start + s0.duration,
       groupDeltaUs: 0,
       // 跨轨落点：默认目标=源轨；移动中由 computeDrop 实时更新（displayIndex 单一真源）
@@ -1966,6 +1968,7 @@ function hitTrack(e) {
   return null; // 轨道区下方空白 → 新建同类型轨
 }
 function onPointerMove(e) {
+  _lastDragEvent = e;   // L1-04：缓存最近 mousemove，边缘滚动重放用
   let d = Store.state.drag;
   const pd = Store.state.pendingDrag;
   if (!d && !pd) return;
@@ -1975,6 +1978,7 @@ function onPointerMove(e) {
     if (pd.mode === "move" && Math.abs(dx) < THRESHOLD) return;
     d = Object.assign({}, pd, { moved: true });
     Store.set({ drag: d, pendingDrag: null });
+    startEdgeScroll(e.clientX, e.clientY, onDragScroll);   // L1-04：升 drag 即挂边缘滚动（重放走 onDragScroll，不在每帧重挂）
   }
   const dx = e.clientX - d.startMouseX;
   if (!d.moved) { d.moved = true; }
@@ -1987,6 +1991,7 @@ function onPointerMove(e) {
     else d.verticalDragDirection = null;
   }
   if (d.mode === "move") {
+    d.offsetY = e.clientY - d.startMouseY;   // L1-01：纵向落轨跟随（translate3d，纯视觉临时态，不改数据/不改动 DOM 归属）
     let left = Math.max(0, d.s0.start + dUs);
     if (Store.state.snapOn && !SnapEngine.isShiftDisabled(e)) {
       const r = SnapEngine.resolve(left, { excludeSegKey: d.key });
@@ -2068,6 +2073,14 @@ function renderDragOverlay(d) {
     el.style.width = ((d.curRightUs - d.s0.start) / 1e6 * p) + "px";
   }
   updateDropIndicators(d);
+  // L1-01：纵向落轨跟随——纯视觉 translate3d（不写数据、不改 DOM 归属）
+  if (d.mode === "move" && d.offsetY) {
+    el.style.transform = "translate3d(0," + d.offsetY + "px,0)";
+    el.style.willChange = "transform";
+  } else {
+    el.style.transform = "";
+    el.style.willChange = "";
+  }
 }
 
 /* L0-02 (R3)：落点指示局部化——从全量 renderTimeline 抽出，拖动中只更新 dropLine + 目标轨高亮，不重建。
@@ -2095,6 +2108,7 @@ function onPointerUp() {
   const pd = Store.state.pendingDrag;
   window.removeEventListener("mousemove", onPointerMove);
   window.removeEventListener("mouseup", onPointerUp);
+  stopEdgeScroll();   // L1-04：拖动结束彻底停止边缘滚动
   $("dropLine").style.display = "none";   // 移动结束：隐藏蓝色落点线
   hideSnapGuide();              // 吸附参考线一并隐藏
   window.__dragStartY = null;  // 清拖拽起点 Y（避免污染下一次落点方向判定）
@@ -2345,16 +2359,26 @@ function onTimelineDown(e) {
   // 滚动容器空白（轨道下方/右侧留白）→ 直接取消选中
   if (e.target.closest(".tl-scroll")) { selectKey(null); return; }
 }
+/* L1-03：框选激活阈值（对齐 OpenCut delta>5；与 THRESHOLD=5 同源，Q14=A 统一 5px） */
+const BOX_SELECT_ACTIVATE_THRESHOLD = 5;
 /* 框选：拖出矩形，松手把相交片段并入 selectedKeys（Shift 增选） */
 function startBoxSelect(e) {
   if (e.button !== 0) return;
   e.preventDefault();
   Store.set({ pendingBox: { x0: e.clientX, y0: e.clientY, shift: e.shiftKey } });
+  startEdgeScroll(e.clientX, e.clientY, () => { if (_lastBoxEvent) onBoxMove(_lastBoxEvent); });   // L1-04
   window.addEventListener("mousemove", onBoxMove);
   window.addEventListener("mouseup", onBoxUp);
 }
 function onBoxMove(e) {
+  _lastBoxEvent = e;   // L1-04：缓存，边缘滚动重放用
   const b = Store.state.pendingBox; if (!b) return;
+  // L1-03：超激活阈值才显示矩形 + 实时相交；未超阈值（点按）不显示、不改选中
+  if (typeof b.active !== "boolean") {
+    const dx = e.clientX - b.x0, dy = e.clientY - b.y0;
+    if (Math.abs(dx) <= BOX_SELECT_ACTIVATE_THRESHOLD && Math.abs(dy) <= BOX_SELECT_ACTIVATE_THRESHOLD) return;
+    b.active = true;
+  }
   const rect = $("tlContent").getBoundingClientRect();
   const x = Math.min(b.x0, e.clientX), x2 = Math.max(b.x0, e.clientX);
   const y = Math.min(b.y0, e.clientY), y2 = Math.max(b.y0, e.clientY);
@@ -2364,23 +2388,29 @@ function onBoxMove(e) {
   box.style.top = (y - rect.top) + "px";
   box.style.width = (x2 - x) + "px";
   box.style.height = (y2 - y) + "px";
+  // L1-03：实时相交 → 直改 DOM .sel（不每帧 Store.set）；松手一次性落 selectedKeys
+  const live = [];
+  $("tlContent").querySelectorAll(".seg").forEach(seg => {
+    const r = seg.getBoundingClientRect();
+    const hit = r.left < x2 && r.right > x && r.top < y2 && r.bottom > y;
+    seg.classList.toggle("sel", b.shift ? (seg.classList.contains("sel") || hit) : hit);
+    if (hit) live.push(seg.dataset.key);
+  });
+  b.liveKeys = live;
 }
 function onBoxUp(e) {
   window.removeEventListener("mousemove", onBoxMove);
   window.removeEventListener("mouseup", onBoxUp);
+  stopEdgeScroll();   // L1-04：框选结束停止边缘滚动
   const b = Store.state.pendingBox;
   Store.set({ pendingBox: null });
   const box = $("selBox");
-  const moved = b && (Math.abs(e.clientX - b.x0) > THRESHOLD || Math.abs(e.clientY - b.y0) > THRESHOLD);
   box.style.display = "none";
-  if (!moved) { if (!b || !b.shift) selectKey(null); return; }  // 纯点空白 → 取消选中
-  const r = box.getBoundingClientRect();
-  const keys = [];
-  $("tlContent").querySelectorAll(".seg").forEach(seg => {
-    const sr = seg.getBoundingClientRect();
-    if (sr.left < r.right && sr.right > r.left && sr.top < r.bottom && sr.bottom > r.top) keys.push(seg.dataset.key);
-  });
-  if (keys.length === 0) { if (!b.shift) selectKey(null); return; }
+  if (!b) return;
+  // L1-03：未超激活阈值 = 点按空白 → 取消选中（保留现状语义）
+  if (!b.active) { if (!b.shift) selectKey(null); return; }
+  const keys = b.liveKeys || [];
+  if (keys.length === 0 && !b.shift) { selectKey(null); return; }
   if (b.shift) {
     const set = new Set(Store.state.selectedKeys); keys.forEach(k => set.add(k));
     const arr = [...set];
@@ -2468,6 +2498,7 @@ function onPlayheadDown(e) {
   _phScrub = true;
   $("playheadHandle").classList.add("dragging");
   Store.set({ playheadUs: clientXToUs(e.clientX) });
+  startEdgeScroll(e.clientX, e.clientY, () => { if (_lastPhEvent) onPhMove(_lastPhEvent); });   // L1-04
   window.addEventListener("mousemove", onPhMove);
   window.addEventListener("mouseup", onPhUp);
 }
@@ -2479,20 +2510,22 @@ function onRulerDown(e) {
   _phScrub = true;
   $("playheadHandle").classList.add("dragging");
   Store.set({ playheadUs: clientXToUs(e.clientX) });
+  startEdgeScroll(e.clientX, e.clientY, () => { if (_lastPhEvent) onPhMove(_lastPhEvent); });   // L1-04
   window.addEventListener("mousemove", onPhMove);
   window.addEventListener("mouseup", onPhUp);
 }
-let _scrubPreviewTimer = 0;
+let _scrubPreviewRAF = 0;
 function scheduleScrubPreview() {
-  // 播放头拖动期间：媒体预览 seek 节流（~80ms 一次），避免 <video> 解码跟不上、主线程被预览重建占满。
-  if (_scrubPreviewTimer) return;
-  _scrubPreviewTimer = setTimeout(() => {
-    _scrubPreviewTimer = 0;
-    if (_phScrub) renderPreviewMaybe(Store.state);  // 节流后的预览重建 + 确定性 seek
-  }, 80);
+  // L1-11：80ms setTimeout 节流 → rAF 合并（去滞后；前提 L0-01 已收窄 renderPreview 作用域）
+  if (_scrubPreviewRAF) return;
+  _scrubPreviewRAF = requestAnimationFrame(() => {
+    _scrubPreviewRAF = 0;
+    if (_phScrub) renderPreviewMaybe(Store.state);  // 每帧一次确定性 seek
+  });
 }
 function onPhMove(e) {
   if (!_phScrub) return;
+  _lastPhEvent = e;   // L1-04：缓存，边缘滚动重放用
   let us = clientXToUs(e.clientX);
   // 对齐 OpenCut PlayheadController.scrub：snapOn 开且未按 Shift 才吸附（Shift=临时关闭吸附）
   if (Store.state.snapOn && !SnapEngine.isShiftDisabled(e)) {
@@ -2512,7 +2545,8 @@ function onPhMove(e) {
 function onPhUp() {
   if (!_phScrub) return;
   _phScrub = false;
-  if (_scrubPreviewTimer) { clearTimeout(_scrubPreviewTimer); _scrubPreviewTimer = 0; }
+  if (_scrubPreviewRAF) { cancelAnimationFrame(_scrubPreviewRAF); _scrubPreviewRAF = 0; }   // L1-11：rAF 清理
+  stopEdgeScroll();   // L1-04：scrub 结束停止边缘滚动
   $("playheadHandle").classList.remove("dragging");
   hideSnapGuide();              // 播放头拖拽结束：隐藏吸附参考线
   window.removeEventListener("mousemove", onPhMove);
@@ -2531,6 +2565,52 @@ function ensurePlayheadVisible() {
   if (phX < viewLeft + 12) scroll.scrollLeft = Math.max(0, phX - 40);
   else if (phX > viewLeft + viewW - 12) scroll.scrollLeft = phX - viewW + 40;
 }
+
+/* L1-04 边缘自动滚动（对齐 OpenCut useEdgeAutoScroll：阈值 100px、上限 15px/帧）
+ * 独立的 rAF 驱动机制，只在"交互激活期"运行；只改 tlScroll.scrollLeft/Top，不碰 Store、不触发渲染。
+ * 交互方的位置重算通过回调完成（消费 L0-01 局部渲染纪律）。 */
+const EDGE_SCROLL_THRESHOLD_PX = 100;
+const EDGE_SCROLL_MAX_PX_PER_FRAME = 15;
+let _edgeScrollCtx = null;
+let _edgeScrollRaf = 0;
+let _lastDragEvent = null;
+let _lastPhEvent = null;
+let _lastBoxEvent = null;
+function startEdgeScroll(clientX, clientY, onScroll) {
+  _edgeScrollCtx = { clientX, clientY, onScroll };
+  if (_edgeScrollRaf) cancelAnimationFrame(_edgeScrollRaf);
+  _edgeScrollRaf = requestAnimationFrame(edgeScrollTick);
+}
+function stopEdgeScroll() {
+  _edgeScrollCtx = null;
+  if (_edgeScrollRaf) cancelAnimationFrame(_edgeScrollRaf);
+  _edgeScrollRaf = 0;
+}
+function edgeScrollTick() {
+  if (!_edgeScrollCtx) { _edgeScrollRaf = 0; return; }
+  // 兜底：三路交互都结束时停止，防 rAF 泄漏
+  if (!Store.state.drag && !Store.state.pendingBox && !_phScrub) { stopEdgeScroll(); return; }
+  const scroll = $("tlScroll");
+  if (!scroll) { _edgeScrollRaf = 0; _edgeScrollCtx = null; return; }
+  const r = scroll.getBoundingClientRect();
+  const { clientX: mx, clientY: my, onScroll } = _edgeScrollCtx;
+  let dx = 0, dy = 0, distX = 0, distY = 0;
+  if (mx < r.left + EDGE_SCROLL_THRESHOLD_PX) { dx = -1; distX = r.left + EDGE_SCROLL_THRESHOLD_PX - mx; }
+  else if (mx > r.right - EDGE_SCROLL_THRESHOLD_PX) { dx = 1; distX = mx - (r.right - EDGE_SCROLL_THRESHOLD_PX); }
+  if (my < r.top + EDGE_SCROLL_THRESHOLD_PX) { dy = -1; distY = r.top + EDGE_SCROLL_THRESHOLD_PX - my; }
+  else if (my > r.bottom - EDGE_SCROLL_THRESHOLD_PX) { dy = 1; distY = my - (r.bottom - EDGE_SCROLL_THRESHOLD_PX); }
+  let scrolled = false;
+  if (dx || dy) {
+    const k = EDGE_SCROLL_MAX_PX_PER_FRAME / EDGE_SCROLL_THRESHOLD_PX;
+    if (dx) scroll.scrollLeft = Math.max(0, scroll.scrollLeft + dx * Math.max(1, Math.round(distX * k)));
+    if (dy) scroll.scrollTop = Math.max(0, scroll.scrollTop + dy * Math.max(1, Math.round(distY * k)));
+    scrolled = true;
+    _userScrollUntil = performance.now() + 200;   // 复用 ensurePlayheadVisible 守卫，防抢滚动条
+  }
+  if (scrolled && onScroll) onScroll();
+  _edgeScrollRaf = requestAnimationFrame(edgeScrollTick);
+}
+function onDragScroll() { if (_lastDragEvent && Store.state.drag) onPointerMove(_lastDragEvent); }   // L1-04
 
 /* 素材拖入时间轴进轨（提交后端 → get_state 回填 Store，无双控） */
 function onTimelineDrop(e) {
@@ -3574,6 +3654,7 @@ function previewActive() {
   if (typeof _kfDragActive !== "undefined" && _kfDragActive) return true;
   if (typeof _kfEditing !== "undefined" && _kfEditing) return true;
   if (Store.state.drag) return true;
+  if (Store.state.pendingBox) return true;   // L1-03：框选中禁 2s 轮询 refresh（防实时 .sel 被重建清掉）
   if (typeof isLibraryDragging !== "undefined" && isLibraryDragging) return true;
   // Inspector 拖参标志带 15s 超时兜底：若解锁事件（change/pointerup/blur）异常未触发，
   // 标志卡死会让轮询永久停摆 → 看不到 Agent/他人改动（隐蔽故障）。任何 input 都会刷新时间戳，

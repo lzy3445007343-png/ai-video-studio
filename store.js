@@ -134,7 +134,7 @@ const Store = {
 };
 
 /* ---------- 工具 ---------- */
-const THRESHOLD = 4; // 点击 vs 拖拽 的像素阈值（根治"点一下弹回"）
+const THRESHOLD = 5; // L1-03 Q14=A：统一 5px（对齐 OpenCut TIMELINE_DRAG_THRESHOLD_PX；框选/拖动判定同源）
 let $ = id => document.getElementById(id);
 let api = () => (window.pywebview && window.pywebview.api) || null;
 // 2c（M2）：选中快照 / 还原——撤销时后端返回「操作前选中」，前端据此还原焦点。

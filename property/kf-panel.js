@@ -199,8 +199,10 @@ function buildKfRow(path, lab, step, def, anims, local) {
       _editCtx = createEditContext(Store.state.selectedKey);   // lockTime 默认 true
     }
   });
+  inp.addEventListener("mousedown", e => { e.preventDefault(); inp.focus(); inp.select(); });  // L1-18 点击全选
   inp.addEventListener("input", () => {
-    const v = parseFloat(inp.value);
+    // L1-19：表达式求值（1920/2→960），否则 parseFloat
+    const v = (typeof ExprParse !== "undefined") ? ExprParse.parseNumeric(inp.value) : parseFloat(inp.value);
     if (isNaN(v)) return;
     const s = selectedSeg();   // 每次取最新段引用（Store 刷新替换 draft 后旧引用失效）
     if (!s) return;
@@ -246,9 +248,11 @@ function buildKfRow(path, lab, step, def, anims, local) {
       );
     }
   });
-  inp.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); inp.blur(); } });
+  inp.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === "Escape") { e.preventDefault(); inp.blur(); } });  // L1-18 分支 A：Escape=提交
   row.querySelector('[data-act="add"]').addEventListener("click", () => {
-    addKfAtPlayhead(path, inp.value);
+    // L1-19：＋ 打点前先求值表达式（否则后端收字符串）
+    const ev = (typeof ExprParse !== "undefined") ? ExprParse.parseNumeric(inp.value) : inp.value;
+    addKfAtPlayhead(path, ev);
   });
   return row;
 }
