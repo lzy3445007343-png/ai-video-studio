@@ -146,7 +146,15 @@
   #canvasFrame { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
     border: 1px solid #ffffff2e; pointer-events: none; z-index: 5;
     box-shadow: 0 0 0 2000px rgba(0, 0, 0, .55); }
-  .preview .tc { font-variant-numeric: tabular-nums; color: var(--muted); font-size: 12px; min-width: 96px; }
+  /* L2-11：安全框/网格叠层（branch A 仅渲染层，pointer-events:none，不碰 player/Api/DSL） */
+  #guideOverlay { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); pointer-events: none; z-index: 4; display: none; }
+  #guideSafe { position: absolute; border: 1px solid rgba(255,255,255,.5); pointer-events: none; box-sizing: border-box; }
+  #guideSafe .guide-label { position: absolute; left: 6px; top: 3px; font-size: 10px; line-height: 1; color: rgba(255,255,255,.7); white-space: nowrap; text-shadow: 0 1px 2px #000; }
+  .preview .tc { font-variant-numeric: tabular-nums; color: var(--muted); font-size: 12px; min-width: 160px; }
+  .preview .tc .tc-cur { color: var(--text); cursor: text; }
+  .preview .tc .tc-sep { color: var(--muted); margin: 0 4px; }
+  .preview .tc .tc-total { color: var(--muted); font-size: 11px; }
+  .preview .tc .tc-edit { width: 120px; background: #1a1a1e; color: var(--text); border: 1px solid var(--primary); border-radius: 4px; font: inherit; font-size: 12px; text-align: center; padding: 1px 4px; outline: none; }
 
   .skill { width: 220px; flex: none; background: var(--panel); border-left: 1px solid var(--border);
     display: flex; flex-direction: column; overflow: hidden; min-height: 0; }
@@ -1256,10 +1264,65 @@ function addEffectFromLibrary(type, drop) {
 }
 
 /* ---------- 渲染：时间轴（只读 Store，含拖拽临时态） ---------- */
-function renderTimecode(s) {
-  let dur = 0; forEachSeg(seg => { const e = seg.start + seg.duration; if (e > dur) dur = e; });
-  $("timecode").textContent = usToTime(Store.state.playheadUs) + " / " + usToTime(dur);
+/* L2-13：时间码 HH:MM:SS:FF（对齐项，可编辑；不碰 usToTime，fps 走 meta 或默认 30） */
+let timecodeEditing = false;
+function currentFps() { const m = Store.state.meta; return (m && m.fps) || 30; }
+function usToTimecode(us, fps) {
+  fps = fps || 30; if (us < 0) us = 0;
+  const ffus = 1e6 / fps;
+  const totalFrames = Math.floor(us / ffus);
+  const f = totalFrames % fps;
+  let s = Math.floor(totalFrames / fps);
+  const ss = s % 60; s = Math.floor(s / 60);
+  const mm = s % 60; s = Math.floor(s / 60);
+  const hh = s;
+  const p2 = n => String(n).padStart(2, "0");
+  return (hh > 0 ? hh + ":" : "") + p2(mm) + ":" + p2(ss) + ":" + p2(f);
 }
+function parseTimecode(str, fps) {
+  fps = fps || 30; str = (str || "").trim();
+  const parts = str.split(":").map(p => parseInt(p, 10));
+  if (!parts.length || parts.some(isNaN)) return null;
+  let hh = 0, mm = 0, ss = 0, ff = 0;
+  if (parts.length === 4) [hh, mm, ss, ff] = parts;
+  else if (parts.length === 3) [mm, ss, ff] = parts;
+  else if (parts.length === 2) [ss, ff] = parts;
+  else [ff] = parts;
+  const ffus = 1e6 / fps;
+  return Math.round((hh * 3600 + mm * 60 + ss) * 1e6 + ff * ffus);
+}
+function startEditTimecode() {
+  const tc = $("timecode"); if (!tc || timecodeEditing) return;
+  const fps = currentFps();
+  const input = document.createElement("input");
+  input.type = "text"; input.className = "tc-edit"; input.value = usToTimecode(Store.state.playheadUs, fps);
+  tc.innerHTML = ""; tc.appendChild(input); input.focus(); input.select();
+  timecodeEditing = true;
+  const done = (commit) => {
+    if (commit) { const us = parseTimecode(input.value, fps); if (us != null) seekPlayhead(us); }
+    timecodeEditing = false; renderTimecode();
+  };
+  input.addEventListener("keydown", e => {
+    if (e.key === "Enter") { e.preventDefault(); done(true); }
+    else if (e.key === "Escape") { e.preventDefault(); done(false); }
+    e.stopPropagation();
+  });
+  input.addEventListener("blur", () => done(false));
+}
+function renderTimecode(s) {
+  if (timecodeEditing) return;   // L2-13：编辑态保护，避免播放中逐帧覆盖输入框
+  let dur = 0; forEachSeg(seg => { const e = seg.start + seg.duration; if (e > dur) dur = e; });
+  const fps = currentFps();
+  const tc = $("timecode"); if (!tc) return;
+  tc.innerHTML = '<span class="tc-cur">' + usToTimecode(Store.state.playheadUs, fps) + '</span>' +
+    '<span class="tc-sep">/</span>' +
+    '<span class="tc-total">' + usToTimecode(dur, fps) + '</span>';
+}
+(function bindTimecodeEdit() {
+  const bind = () => { const tc = $("timecode"); if (tc) tc.addEventListener("click", () => startEditTimecode()); };
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", bind);
+  else bind();
+})();
 
 /* =====================================================================
  * Phase 5.2 播放头 UI 切片订阅者（ADR-2026-08-20 v2，GPT 审阅约束）
@@ -1649,11 +1712,69 @@ function canvasPxJS() {
   return { W, H };
 }
 // 画幅：预览画布框跟随 draft.canvas.ratio（16:9/9:16/4:3/3:4/1:1/自动）——暗色边框+外圈阴影突出画布范围
+/* L2-11：安全框/网格叠层（branch A 仅渲染层，纯前端，不碰 Api/draft/player/DSL） */
+const GUIDE_KEY = "aivs.guide";
+const GUIDE_CYCLE = ["none", "grid", "tiktok", "reels"];
+function loadGuide() {
+  try {
+    const d = JSON.parse(localStorage.getItem(GUIDE_KEY));
+    if (d && typeof d === "object") {
+      return { activeGuide: d.activeGuide || "none", gridConfig: { rows: (d.gridConfig && d.gridConfig.rows) || 3, cols: (d.gridConfig && d.gridConfig.cols) || 3 } };
+    }
+  } catch (e) {}
+  return { activeGuide: "none", gridConfig: { rows: 3, cols: 3 } };
+}
+let GuideState = loadGuide();
+function saveGuide() { try { localStorage.setItem(GUIDE_KEY, JSON.stringify(GuideState)); } catch (e) {} }
+function paintGuide(g) {
+  const a = GuideState.activeGuide;
+  const safe = $("guideSafe");
+  if (a === "none") { g.style.display = "none"; if (safe) safe.style.display = "none"; return; }
+  g.style.display = "block";
+  const rc = GuideState.gridConfig;
+  if (a === "grid") {
+    g.style.backgroundImage =
+      "linear-gradient(rgba(255,255,255,.35) 1px, transparent 1px)," +
+      "linear-gradient(90deg, rgba(255,255,255,.35) 1px, transparent 1px)";
+    g.style.backgroundSize = (100 / rc.cols) + "% " + (100 / rc.rows) + "%";
+    if (safe) safe.style.display = "none";
+  } else {
+    g.style.backgroundImage = "none"; g.style.backgroundSize = "auto";
+    if (safe) {
+      safe.style.display = "block";
+      safe.style.left = "8%"; safe.style.right = "8%"; safe.style.top = "12%"; safe.style.bottom = "12%";
+      const lbl = safe.querySelector(".guide-label");
+      if (lbl) lbl.textContent = (a === "tiktok") ? "TikTok 安全区" : "Reels 安全区";
+    }
+  }
+}
+function syncGuideOverlay() {
+  const fr = $("canvasFrame"), g = $("guideOverlay");
+  if (!fr || !g) return;
+  g.style.width = fr.style.width; g.style.height = fr.style.height;
+  paintGuide(g);
+}
+function cycleGuide() {
+  const i = GUIDE_CYCLE.indexOf(GuideState.activeGuide);
+  GuideState.activeGuide = GUIDE_CYCLE[(i + 1) % GUIDE_CYCLE.length];
+  saveGuide(); syncGuideOverlay();
+}
+
 function applyCanvasRatio() {
   const stage = $("stage");
   if (!stage) return;
   let frame = $("canvasFrame");
   if (!frame) { frame = document.createElement("div"); frame.id = "canvasFrame"; stage.appendChild(frame); }
+  // L2-11：安全框/网格叠层（branch A 仅渲染层，随 canvasFrame 几何，pointer-events:none）
+  let guide = $("guideOverlay");
+  if (!guide) { guide = document.createElement("div"); guide.id = "guideOverlay"; stage.appendChild(guide); }
+  let safe = $("guideSafe");
+  if (!safe) { safe = document.createElement("div"); safe.id = "guideSafe"; safe.innerHTML = '<span class="guide-label"></span>'; guide.appendChild(safe); }
+  // canvasFrame 几何（缩放/平移/画幅）变化即重算叠层，避免 hook PreviewCoordinate
+  if (!guide._obs && typeof MutationObserver !== "undefined") {
+    guide._obs = new MutationObserver(() => syncGuideOverlay());
+    guide._obs.observe(frame, { attributes: true, attributeFilter: ["style"] });
+  }
   const cp = canvasPxJS();
   const sw = stage.clientWidth || 1, sh = stage.clientHeight || 1;
   const s = Math.min(sw / cp.W, sh / cp.H);
@@ -1671,6 +1792,7 @@ function applyCanvasRatio() {
     const r = b.dataset.ratio;
     b.classList.toggle("on", (r === "auto") ? !locked : (r === cur));
   });
+  syncGuideOverlay();   // L2-11：画幅切换后重算网格/安全框叠层
 }
 function setAspect(ratio) {
   const ap = api(); if (!ap) return;
@@ -3641,6 +3763,7 @@ function bindEvents() {
     else if (e.key === "r" || e.key === "R") { toggleRipple(); return; }    // 波纹编辑开关（对齐 OpenCut ripple）
     else if (e.key === "j" || e.key === "J") { e.preventDefault(); pausePlay(); seekPlayhead(Store.state.playheadUs - 1e6); return; }   // 后退 1 秒（OpenCut seek-backward）
     else if (e.key === "l" || e.key === "L") { e.preventDefault(); pausePlay(); seekPlayhead(Store.state.playheadUs + 1e6); return; }   // 前进 1 秒（OpenCut seek-forward）
+    else if (e.key === "g" || e.key === "G") { cycleGuide(); return; }   // 网格/安全框循环切换（L2-11 branch A 入口：none→grid→tiktok→reels）
     else if (e.key === "Home") { e.preventDefault(); seekPlayhead(0); return; }                                   // 到起点（OpenCut goto-start）
     else if (e.key === "End") { e.preventDefault(); seekPlayhead(totalDurationUs()); return; }                   // 到终点（OpenCut goto-end）
   });
