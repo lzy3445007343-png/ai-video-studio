@@ -155,6 +155,9 @@
   .media-list.view-list .media-card .name { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .media-card .mtag { display: none; font-size: 10px; color: var(--muted); }
   .media-list.view-list .media-card .mtag { display: inline; flex: none; }
+  .media-card .dur { position: absolute; left: 6px; bottom: 30px; z-index: 3; padding: 1px 5px;
+    font-size: 10px; line-height: 1.4; color: #fff; background: rgba(0,0,0,.62); border-radius: 4px; pointer-events: none; }
+  .media-list.view-list .media-card .dur { position: static; flex: none; margin-left: auto; }   // 列表视图时长靠右
   .media-list.view-list .media-card .add, .media-list.view-list .media-card .del { position: static; opacity: 1; pointer-events: auto; width: 22px; height: 22px; line-height: 22px; }
     border-radius: 6px; overflow: hidden; box-shadow: 0 6px 24px rgba(0,0,0,.55); border: 2px solid var(--primary);
     background: #15151a center/cover no-repeat; display: flex; align-items: center; justify-content: center; }
@@ -1240,6 +1243,20 @@ function compareMaterials(a, b, by, order) {
   if (r === 0) r = String(a.name || "").localeCompare(String(b.name || ""), "zh");   // 同键回退 name 稳定
   return order === "desc" ? -r : r;
 }
+// L2-17 时长徽标取值（数据源待 L0-07 裁定：分支A 后端在 material 上返回 duration 字段即自动点亮；
+//   当前前端模型无 material_id→segment 链路，分支B 段推导不可行，故仅消费 m.duration，无则 null 不渲染）
+function materialDurationOf(m) {
+  let d = (m && typeof m.duration === "number") ? m.duration : 0;
+  if (!d) return null;
+  if (d >= 1000) d = d / 1e6;          // 微秒 → 秒
+  if (d < 0.5 || d > 86400) return null;
+  return d;
+}
+function fmtDur(sec) {
+  sec = Math.max(0, Math.round(sec));
+  const m = Math.floor(sec / 60), s = sec % 60;
+  return (m < 10 ? "0" : "") + m + ":" + (s < 10 ? "0" : "") + s;
+}
 function renderMedia(s) {
   // L2-19 占位 tab 前置分派：transitions/adjustment/captions/settings 绝不落入素材/特效过滤
   if (s && ["transitions", "adjustment", "captions", "settings"].includes(s.filter)) {
@@ -1311,10 +1328,12 @@ function renderMedia(s) {
     const bg = isImg ? fileURL(m.path) : (m.thumbnail ? fileURL(m.thumbnail) : "");
     const icon = m.type === "video" ? "🎬" : m.type === "audio" ? "♪" : m.type === "image" ? "" : "T";
     const typeLabel = m.type === "video" ? "视频" : m.type === "audio" ? "音频" : m.type === "image" ? "图片" : "文本";
+    const _dur = materialDurationOf(m);   // L2-17 时长徽标（m.duration 到位即渲染，否则 null）
     card.innerHTML =
       '<div class="thumb" style="' + (bg ? "background-image:url('" + bg + "')" : "") + '">' + (bg ? "" : icon) + '</div>' +
       '<div class="name" title="' + esc(m.name || "") + '">' + esc(truncateName(m.name || "")) + '</div>' +
-      '<span class="mtag">' + typeLabel + '</span>' +   // L2-16 列表视图行内类型标签（时长徽标待 L2-17）
+      '<span class="mtag">' + typeLabel + '</span>' +   // L2-16 列表视图行内类型标签
+      (_dur ? '<span class="dur">' + fmtDur(_dur) + '</span>' : "") +   // L2-17 时长徽标
       '<div class="add" title="在播放头加入">+</div>' +
       '<div class="del" title="删除素材 (Del)">🗑</div>';
     card.addEventListener("dragstart", e => {
