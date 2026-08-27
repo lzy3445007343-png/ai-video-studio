@@ -914,7 +914,7 @@ function setZoom(v) {
     const phXNew = phUs / 1e6 * pps();
     scroll.scrollLeft = Math.max(0, phXNew - offset);
     positionPlayhead();
-    if (isPlaying) repositionTimelineZoom();   // 播放期 renderTimeline 冻结，缩放必须手动重定位片段块+标尺，否则播放头与片段错位
+    repositionTimelineZoom();                  // 任何时刻缩放都必须让片段块+标尺跟随新 pps 重定位，否则标尺已刷新而素材位置冻结（L0-05 回归）
     drawAllWaves();
   });
 }
