@@ -263,23 +263,35 @@ function buildKfRow(path, lab, step, def, anims, local) {
   return row;
 }
 
-/* —— key 相同时只更新值（跳过正在编辑的输入框，避免吞输入） —— */
+/* —— key 相同时只更新值 + L2-10 实时刷新范围门控禁用态（跳过正在编辑的输入框，避免吞输入） —— */
 function updateKfRowValues(rowsEl, anims, local) {
+  const s = selectedSeg();
+  if (!s) return;
+  const inRange = TimelineMapper.isPlayheadWithinRange(s);   // L2-10：播放头实时门控（拖播放头进出范围时刷新 ◆/＋ 禁用态）
   rowsEl.querySelectorAll(".kf-row").forEach(row => {
     const path = row.dataset.path;
     // B2.1：显示值收口到 EffectivePropertyResolver；source 驱动 ◆ 外观
-    const s = selectedSeg();
-    if (!s) return;
     const { value: cur, source } = getEffectivePropertyValue(s, path, local);
     if (cur == null) return;
     const inp = row.querySelector('[data-act="val"]');
     if (inp && document.activeElement !== inp) inp.value = round2(cur);
     // B2.1（GPT 定案）：◆ 外观 = 播放头是否踩中 KF（source==="keyframe"）——拖播放头实时亮灭
     const tog = row.querySelector('[data-act="tog"]');
+    const add = row.querySelector('[data-act="add"]');
     if (tog) {
       const hit = source === "keyframe";
-      tog.classList.toggle("is-active", hit);
-      tog.title = hit ? "删除当前位置关键帧" : "在播放头处打关键帧";
+      tog.classList.toggle("is-active", hit && inRange);
+      // L2-10：范围外 → 灰禁（与 buildKfRow 一致），点击不触发（toggleKf 另有函数级门控兜底）
+      tog.disabled = !inRange;
+      tog.style.opacity = inRange ? "" : "0.5";
+      tog.style.pointerEvents = inRange ? "" : "none";
+      tog.title = !inRange ? "播放头不在该元素时间范围内，无法打/删关键帧"
+                           : (hit ? "删除当前位置关键帧" : "在播放头处打关键帧");
+    }
+    if (add) {
+      add.disabled = !inRange;
+      add.style.opacity = inRange ? "" : "0.5";
+      add.style.pointerEvents = inRange ? "" : "none";
     }
   });
 }

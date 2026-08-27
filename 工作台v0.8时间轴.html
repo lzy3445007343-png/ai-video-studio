@@ -2217,6 +2217,7 @@ function toggleKf(path) {
   //   未命中 → add_keyframe(当前位置, 当前面板显示值)
   // 绝不 clear_channel()（否则三个点被一次点击全删，反直觉）
   const s = selectedSeg(); if (!s) return;
+  if (!TimelineMapper.isPlayheadWithinRange(s)) return;   // L2-10：播放头范围门控（段外不响应，对齐 OpenCut）
   const local = TimelineMapper.playheadLocal(s);
   // P0① 动态验证（2026-08-22，疑点 C）：◆ 打点是否实时读播放头——两次点击间播放头微动→X/Y 错位。
   // 复现：打 X ◆ → 再打 Y ◆，对比两次日志的 playheadUs；若不同 → C 确诊。
@@ -2238,6 +2239,7 @@ function toggleKf(path) {
 
 function addKfAtPlayhead(path, valStr) {
   const s = selectedSeg(); if (!s) return;
+  if (!TimelineMapper.isPlayheadWithinRange(s)) return;   // L2-10：播放头范围门控（段外不响应，对齐 OpenCut）
   const local = TimelineMapper.playheadLocal(s);
   let v = parseFloat(valStr); if (isNaN(v)) v = KF_PATHS.find(p => p[0] === path)[3];
   call("add_keyframe", ...kfSegArgs(), path, local, v, "linear", Store.state.selectedSegId).then(() => refresh());
