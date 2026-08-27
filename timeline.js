@@ -572,7 +572,9 @@ function _renderTimelineKeyed(content, labels, ruler) {
     bm.className = "bm-mark";
     bm.style.left = (b.us / 1e6 * pps()) + "px";
     bm.dataset.us = b.us;
-    bm.title = (b.name || "书签") + " · " + usToTime(b.us);
+    const _meta = getBookmarkMeta(b.us);
+    if (_meta && _meta.color) bm.style.setProperty("--bmc", _meta.color);
+    bm.title = ((_meta && _meta.note) ? _meta.note : (b.name || "书签")) + " · " + usToTime(b.us);
     ruler.appendChild(bm);
   });
   // 重建轨道标签（廉价：轨道数少；保证静音/隐藏/锁定图标与名称实时）
@@ -667,7 +669,9 @@ function renderTimeline(s) {
     bm.className = "bm-mark";
     bm.style.left = (b.us / 1e6 * pps()) + "px";
     bm.dataset.us = b.us;
-    bm.title = (b.name || "书签") + " · " + usToTime(b.us);
+    const _meta = getBookmarkMeta(b.us);
+    if (_meta && _meta.color) bm.style.setProperty("--bmc", _meta.color);
+    bm.title = ((_meta && _meta.note) ? _meta.note : (b.name || "书签")) + " · " + usToTime(b.us);
     ruler.appendChild(bm);
   });
   // 拖拽中：被拖段实时显示在目标位置（OpenCut previewElements 语义——段跟手，无虚线预览轨）

@@ -479,8 +479,17 @@
     box-shadow: 0 0 8px 2px rgba(46,168,255,.55); }
   /* 吸附参考线：拖拽/拖播放头吸附命中时，在吸附点位置贯穿时间轴画一条蓝线（对齐 OpenCut SnapGuides vertical） */
   .snap-guide { position: absolute; top: 0; bottom: 0; width: 2px; background: #4096ff; z-index: 40; pointer-events: none; display: none; box-shadow: 0 0 6px rgba(64,150,255,.85); }
-  .ruler .bm-mark { position: absolute; top: 0; width: 0; height: 15px; border-left: 2px solid #009dff; transform: translateX(-1px); cursor: pointer; pointer-events: auto; z-index: 12; }
-  .ruler .bm-mark::before { content: ""; position: absolute; top: 0; left: -4px; border: 5px solid transparent; border-top-color: #009dff; }
+  .ruler .bm-mark { position: absolute; top: 0; width: 0; height: 15px; border-left: 2px solid var(--bmc, #009dff); transform: translateX(-1px); cursor: pointer; pointer-events: auto; z-index: 12; }
+  .ruler .bm-mark::before { content: ""; position: absolute; top: 0; left: -4px; border: 5px solid transparent; border-top-color: var(--bmc, #009dff); }
+  .bm-editor { position: fixed; z-index: 9600; display: none; flex-direction: column; gap: 8px; padding: 10px; width: 200px;
+    background: var(--panel); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 6px 20px rgba(0,0,0,.4); }
+  .bm-editor-row { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text); }
+  .bm-editor-row label { width: 36px; flex: none; color: var(--muted); }
+  .bm-editor-row input { flex: 1; background: var(--panel-2); border: 1px solid var(--border); border-radius: 4px; padding: 4px 6px; color: var(--text); font-size: 12px; }
+  .bm-editor-row input[type=color] { width: 32px; height: 24px; flex: none; border: 1px solid var(--border); border-radius: 4px; background: none; padding: 1px; }
+  .bm-editor-actions { display: flex; gap: 8px; justify-content: flex-end; }
+  .bm-editor-actions button { padding: 4px 12px; border-radius: 6px; border: 1px solid var(--border); background: var(--panel-2); color: var(--text); font-size: 12px; cursor: pointer; }
+  .bm-editor-actions button:hover { background: #2a2e37; }
   /* 框选覆盖层 */
   .sel-box { position: absolute; border: 1px dashed #faad14; background: rgba(250,173,20,.12); z-index: 12; pointer-events: none; display: none; }
   /* 整组缩放包围盒：跨选中段时间轴跨度，含左右把手 */
@@ -3538,7 +3547,43 @@ function bindEvents() {
   $("stFlipV").addEventListener("change", e => { stLive("flipV", e.target.checked); stCommit({ flipV: e.target.checked }); });
   $("ruler").addEventListener("mousedown", onRulerDown);
   // 标尺双击任意处：该位置切换书签；点击书签标记：跳转播放头；右键书签：删除
+  window.getBookmarkMetaMap = function () { try { return JSON.parse(localStorage.getItem("aivs.bookmarksMeta") || "{}"); } catch (e) { return {}; } };
+  window.getBookmarkMeta = function (us) { return window.getBookmarkMetaMap()[us] || null; };
+  window.setBookmarkMeta = function (us, m) {
+    const map = window.getBookmarkMetaMap();
+    if (m && (m.note || m.color)) map[us] = m; else delete map[us];
+    try { localStorage.setItem("aivs.bookmarksMeta", JSON.stringify(map)); } catch (e) {}
+  };
+  function openBookmarkEditor(us) {
+    // L2-25 书签双击编辑 Popover（分支A：note/color 落 localStorage，不碰 Api 契约）
+    let pop = document.getElementById("bmEditor");
+    if (!pop) { pop = document.createElement("div"); pop.id = "bmEditor"; pop.className = "bm-editor"; document.body.appendChild(pop); }
+    pop.innerHTML = "";
+    const meta = window.getBookmarkMeta(us) || {};
+    const row1 = document.createElement("div"); row1.className = "bm-editor-row";
+    const l1 = document.createElement("label"); l1.textContent = "备注";
+    const noteEl = document.createElement("input"); noteEl.value = meta.note || "";
+    row1.appendChild(l1); row1.appendChild(noteEl);
+    const row2 = document.createElement("div"); row2.className = "bm-editor-row";
+    const l2 = document.createElement("label"); l2.textContent = "颜色";
+    const colorEl = document.createElement("input"); colorEl.type = "color"; colorEl.value = meta.color || "#009dff";
+    row2.appendChild(l2); row2.appendChild(colorEl);
+    const acts = document.createElement("div"); acts.className = "bm-editor-actions";
+    const saveBtn = document.createElement("button"); saveBtn.textContent = "保存";
+    const cancelBtn = document.createElement("button"); cancelBtn.textContent = "取消";
+    acts.appendChild(saveBtn); acts.appendChild(cancelBtn);
+    pop.appendChild(row1); pop.appendChild(row2); pop.appendChild(acts);
+    const bmEl = document.querySelector('#ruler .bm-mark[data-us="' + us + '"]');
+    if (bmEl) { const r = bmEl.getBoundingClientRect(); pop.style.left = Math.max(8, r.left) + "px"; pop.style.top = (r.bottom + 4) + "px"; }
+    pop.style.display = "block";
+    const save = () => { window.setBookmarkMeta(us, { note: noteEl.value.trim(), color: colorEl.value }); pop.style.display = "none"; renderTimeline(); };
+    saveBtn.addEventListener("click", save);
+    cancelBtn.addEventListener("click", () => { pop.style.display = "none"; });
+    setTimeout(() => noteEl.focus(), 0);
+  }
   $("ruler").addEventListener("dblclick", e => {
+    const bm = e.target.closest(".bm-mark");
+    if (bm) { openBookmarkEditor(+bm.dataset.us); return; }   // 双击旗形 = 编辑（不 toggle）
     const us = Math.round(clientXToUs(e.clientX));
     call("toggle_bookmark", us).then(r => { if (r && r.ok) { Store.set({ bookmarks: r.bookmarks }); renderTimeline(); } });
   });
@@ -3550,7 +3595,7 @@ function bindEvents() {
     const bm = e.target.closest(".bm-mark");
     if (!bm) return;
     e.preventDefault();
-    call("remove_bookmark", +bm.dataset.us).then(r => { if (r && r.ok) { Store.set({ bookmarks: r.bookmarks }); renderTimeline(); } });
+    call("remove_bookmark", +bm.dataset.us).then(r => { if (r && r.ok) { window.setBookmarkMeta(+bm.dataset.us, null); Store.set({ bookmarks: r.bookmarks }); renderTimeline(); } });
   });
   $("playhead").addEventListener("mousedown", onPlayheadDown);   // 整条红线可拖（含透明命中区），对齐 OpenCut 整线命中
   // 右侧时间轴滚动时，左侧轨道头部标签必须实时跟随，否则垂直方向错开。
