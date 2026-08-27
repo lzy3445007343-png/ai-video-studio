@@ -400,6 +400,17 @@ function segGeom(s, type, ti, idx) {
   }
   return { leftUs, widthUs: rightUs - leftUs };
 }
+// L2-26 按类型分轨道高度（对齐 OpenCut layout.ts；纯前端布局，不改 track_type 枚举）
+function trackHeightOf(type) {
+  switch (type) {
+    case "video":   return 65;
+    case "audio":   return 50;
+    case "text":    return 25;
+    case "sticker": return 25;
+    case "effect":  return 25;
+    default:        return 48;
+  }
+}
 function makeSeg(s, type, ti, idx, overrideLeftUs, forceDragging) {
   const key = type + ":" + ti + ":" + idx;
   const g = segGeom(s, type, ti, idx);
@@ -419,7 +430,7 @@ function makeSeg(s, type, ti, idx, overrideLeftUs, forceDragging) {
   // 瓦片高度 = 片段实际高度（轨道高 - 上下 4px 内边距），宽度 = 高 × 16/9，随轨道高度自适应。
   let bgStyle = "";      // 背景样式字符串（放入 div.fill 的 style）
   let waveCanvas = "";   // 波形 canvas（替代 div.fill）
-  const th = TRACK_H - 8;   // 片段可视高度 = 轨道高 - 上下各 4px 内边距
+  const th = trackHeightOf(type) - 8;   // 片段可视高度 = 按类型轨高 - 上下各 4px 内边距
   const tileW = th * 16 / 9;
   if (type === "video" || type === "image") {
     // 视频段需要显式缩略图（抽帧 jpg），不能 fallback 到视频源文件本身：
@@ -586,6 +597,9 @@ function _renderTimelineKeyed(content, labels, ruler) {
     const m = trackMeta(tr.type, tr.ti);
     dt.classList.toggle("track-hidden", !!m.hidden);
     dt.classList.toggle("track-muted", !!(m.muted && (tr.type === "audio" || tr.type === "video")));
+    const isSelTrack = tr.segs.some(seg => Store.state.selectedSegId && seg.id && Store.state.selectedSegId === seg.id)
+      || Store.state.selectedKeys.some(k => k.indexOf(tr.type + ":" + tr.ti + ":") === 0);
+    dt.classList.toggle("track-selected", isSelTrack);
     const domSegs = [...dt.querySelectorAll(".seg")];
     for (let j = 0; j < tr.segs.length; j++) {
       const seg = tr.segs[j], el = domSegs[j];
@@ -692,6 +706,10 @@ function renderTimeline(s) {
     if (m.hidden) track.classList.add("track-hidden");
     if (m.muted && (tr.type === "audio" || tr.type === "video")) track.classList.add("track-muted");
     if (isMove && targetType && targetTi != null && tr.type === targetType && tr.ti === targetTi) track.classList.add("drop-target");
+    // L2-24 选中轨行高亮：整条轨道行柔和高亮（与 drop-target 蓝框并存、视觉区分）
+    const isSelTrack = tr.segs.some(seg => Store.state.selectedSegId && seg.id && Store.state.selectedSegId === seg.id)
+      || Store.state.selectedKeys.some(k => k.indexOf(tr.type + ":" + tr.ti + ":") === 0);
+    if (isSelTrack) track.classList.add("track-selected");
     let childCount = 0;
     // 被拖段显示位置（OpenCut previewElements）：existing → 目标轨；new → 留在源轨跟手 X（落点线指示新轨 Y）
     // A 方案：用稳定段 id 定位被拖段（drag.segId），不依赖 key 的 ti
