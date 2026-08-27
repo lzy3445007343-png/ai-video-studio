@@ -14,21 +14,13 @@
  * 依赖：无（纯内核，业务在各自 session）
  * ===================================================================== */
 
-/* ---------- 1. OverlayState：通用 path overlay ---------- */
+/* ---------- 1. OverlayState：通用 path overlay（L0-03 收口到 PreviewState 统一共享预览态）---------- */
 const OverlayState = {
-  transforms: {},      // segId -> { "transform.positionX": 300, ... }
-  set(segId, path, value) {
-    let t = this.transforms[segId];
-    if (!t) t = this.transforms[segId] = {};
-    t[path] = value;
-  },
-  get(segId, path) {
-    const t = this.transforms[segId];
-    return t ? t[path] : undefined;
-  },
-  seg(segId) { return this.transforms[segId] || null; },
-  clear(segId) { delete this.transforms[segId]; },
-  clearAll() { this.transforms = {}; },
+  set: (segId, path, value) => PreviewState.set(segId, path, value),
+  get: (segId, path) => PreviewState.get(segId, path),
+  seg: (segId) => (PreviewState.has(segId) ? PreviewState._overlay[segId] : null),
+  clear: (segId) => PreviewState.clear(segId),
+  clearAll: () => PreviewState.clearAll(),
 };
 
 /* ---------- 2. GestureSession 基类 ---------- */

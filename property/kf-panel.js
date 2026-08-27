@@ -212,10 +212,13 @@ function buildKfRow(path, lab, step, def, anims, local) {
                 : TimelineMapper.playheadLocal(s);
     _draft = { v, hasKf, local };
     if (hasKf) {
-      KfChannel.upsertLocal(s, path, local, v, "linear");   // 本地打点（预览插值用，不进后端/undo）
+      KfChannel.upsertLocal(s, path, local, v, "linear");   // L0-03：本地打点写入 overlay（不污染 seg）
     } else {
-      setProperty(s, path, v);   // C1 静态值本地态（params + legacy mirror）
+      // L0-03：静态值也走 overlay（不污染 seg.params），Player 经 getPreviewSeg 实时显示
+      if (typeof PreviewState !== "undefined") PreviewState.set(s.id, path, v);
+      else setProperty(s, path, v);
     }
+    if (typeof PreviewState !== "undefined") PreviewState.notifyPreviewConsumers(s.id);  // L1-10 三方联动
     renderPreview();   // 预览跟手
     if (typeof refreshSegKfMarkers === "function") refreshSegKfMarkers(s);   // L1-21 方向②：时间轴 marker 实时跟随
   });
@@ -226,6 +229,8 @@ function buildKfRow(path, lab, step, def, anims, local) {
     _draft = null;
     _editCtx = null;   // 手势结束，释放时间锁（下次 focus 重新锁定）
     const s = selectedSeg();
+    const segId = s ? s.id : null;
+    if (typeof PreviewState !== "undefined" && segId) PreviewState.discardPreview(segId);  // L0-03：无论提交与否都清预览态（零残留）
     if (!s) return;
     const k = Store.state.selectedKey ? Store.state.selectedKey.split(":") : null;
     if (!k || k.length < 3) return;

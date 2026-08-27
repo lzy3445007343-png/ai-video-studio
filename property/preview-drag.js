@@ -163,7 +163,7 @@ class DragSession extends GestureSession {
       segid: c.target.id, transform: next,
     }), { actor: "ui", paths }), { onError: e => console.error("[preview-drag] 写 transform 失败:", e) });
   }
-  cancel() { hidePreviewSnapGuides(); this._snapLines = null; }  // L1-06：不落库，丢弃 overlay + 对齐线
+  cancel() { hidePreviewSnapGuides(); this._snapLines = null; if (this.ctx && this.ctx.target) PreviewState.discardPreview(this.ctx.target.id); }  // L1-06/L0-03：不落库，丢弃 overlay + 对齐线
   destroy() {
     OverlayState.clear(this.ctx.target.id);
     const need = InteractionManager.takePendingRefresh();

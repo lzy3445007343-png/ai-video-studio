@@ -471,8 +471,15 @@ function makeSeg(s, type, ti, idx, overrideLeftUs, forceDragging) {
     //   同一时间点的多通道 KF（如 X+Y 同点打）渲染【一个】菱形，data-kids/data-paths 存全部。
     //   否则多个重叠 marker 只会命中上层一个 → 拖拽"复制移动一个、另一个原地"（用户反馈 B13）。
     const byTime = new Map();
-    for (const path in s.animations) {
-      const ch = s.animations[path];
+    // L0-03：合并 seg.animations + 预览态 overlay 通道（拖 KF 时实时反映到时间轴 marker）
+    const channels = {};
+    if (s.animations) for (const path in s.animations) channels[path] = s.animations[path];
+    if (typeof PreviewState !== "undefined") {
+      const ov = PreviewState._overlay[s.id];
+      if (ov) for (const key in ov) if (key.indexOf("__kf__") === 0) channels[key.slice(6)] = ov[key];
+    }
+    for (const path in channels) {
+      const ch = channels[path];
       if (!ch || !ch.keys || !ch.keys.length) continue;
       for (const k of ch.keys) {
         const t = k.t || 0;

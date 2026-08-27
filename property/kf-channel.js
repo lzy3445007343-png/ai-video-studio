@@ -69,10 +69,12 @@ const KfChannel = {
     return (typeof getProperty === "function") ? getProperty(seg, path) : null;
   },
 
-  /** 前端本地打点（±1帧 合并，同点更新值）——B1 交互临时态，不进后端/undo */
+  /** 前端本地打点（±1帧 合并，同点更新值）——L0-03：写入共享预览态 overlay，不污染 seg.animations */
   upsertLocal(seg, path, t, v, segMode) {
-    const ch = this.ensure(seg, path);
-    const keys = ch.keys || (ch.keys = []);
+    const segId = seg.id;
+    // 构建预览通道（复制 seg 既有 keys，不写 seg.animations）：供插值/渲染/时间轴 marker 实时
+    const baseCh = (seg.animations && seg.animations[path]) ? seg.animations[path] : null;
+    const keys = baseCh && baseCh.keys ? baseCh.keys.map(k => Object.assign({}, k)) : [];
     const existing = keys.find(k => Math.abs((k.t || 0) - t) <= KfChannel.KF_HIT_TOLERANCE_US);
     if (existing) {
       existing.v = v;
@@ -87,11 +89,27 @@ const KfChannel = {
                   tangentMode: "auto" });
       keys.sort((a, b) => (a.t || 0) - (b.t || 0));
     }
+    const ch = { keys };
+    if (segId != null) {
+      PreviewState.set(segId, path, v);                  // 普通属性路径预览值
+      PreviewState.setPreviewChannel(segId, path, ch);    // 整通道预览（applyKfTransform 插值 / 时间轴 marker）
+    }
     return ch;
   },
 
-  /** 前端本地删点（±1帧内）；删空通道自动清理 */
+  /** 前端本地删点（±1帧内）——L0-03：优先操作预览态 overlay；无 overlay 时回退 seg.animations（原有行为） */
   removeLocal(seg, path, t) {
+    const segId = seg.id;
+    const ov = (segId != null && typeof PreviewState !== "undefined") ? PreviewState.previewChannel(segId, path) : null;
+    if (ov && ov.keys) {
+      const idx = ov.keys.findIndex(k => Math.abs((k.t || 0) - t) <= KfChannel.KF_HIT_TOLERANCE_US);
+      if (idx >= 0) {
+        ov.keys.splice(idx, 1);
+        if (!ov.keys.length) PreviewState.clear(segId);   // 通道删空 → 清 overlay（回退 base）
+        return true;
+      }
+      return false;
+    }
     if (!seg || !seg.animations || !seg.animations[path]) return false;
     const keys = seg.animations[path].keys || [];
     const idx = keys.findIndex(k => Math.abs((k.t || 0) - t) <= KfChannel.KF_HIT_TOLERANCE_US);

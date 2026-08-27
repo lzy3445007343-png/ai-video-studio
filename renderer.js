@@ -121,6 +121,7 @@ function renderPreview(s) {
 
   // 每条 video 轨道一个容器；同轨内当前最多一个段命中
   for (const h of visualHits) {
+    const segView = (typeof PreviewState !== "undefined") ? PreviewState.getPreviewSeg(h.seg) : h.seg;  // L0-03：读共享预览态（拖参/KF 实时）
     const layerKey = "video:" + h.ti;
     activeVisualKeys.add(layerKey);
     let rec = previewState.visualEls.get(layerKey);
@@ -133,15 +134,15 @@ function renderPreview(s) {
     }
     // 音量：C1.2 走 PropertyResolver（动画覆盖静态，旧通道名 volume 兼容；对齐 OpenCut 动画通道覆盖 base）
     const _vol = (typeof resolveProperty === "function")
-      ? resolveProperty(h.seg, "audio.volume", Math.max(0, Math.min(us - h.seg.start, h.seg.duration)))
-      : (h.seg.volume == null ? 1 : h.seg.volume);
+      ? resolveProperty(segView, "audio.volume", Math.max(0, Math.min(us - h.seg.start, h.seg.duration)))
+      : (segView.volume == null ? 1 : segView.volume);
     const changed = _setVisualContent(rec.el, h.seg.type, resolveSegPath(h.seg), isTrackMuted(h.type, h.ti) || h.seg.muted, _vol);
     _applyVisualSize(rec.el, h.seg);   // R1：wrap 尺寸 = 素材 contain 尺寸（黑边不再跟着素材跑）
     rec.el.style.display = "";
     rec.el.style.zIndex = zIndexOf(h);
     rec.key = h.key;
     rec.seg = h.seg;
-    applyKfTransform(rec.el, h.seg, Math.max(0, Math.min(us - h.seg.start, h.seg.duration)));
+    applyKfTransform(rec.el, segView, Math.max(0, Math.min(us - h.seg.start, h.seg.duration)));
     applySegMask(h.seg, h.key, rec.el);   // 遮罩：把 mask 形状挂成 clip-path（对齐 OpenCut masks）
     // 切源后等 canplay 再 seek；平时直接 seek
     if (changed) {

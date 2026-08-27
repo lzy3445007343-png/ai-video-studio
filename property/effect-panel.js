@@ -72,8 +72,9 @@ function buildEffectFields(c) {
         value: val,
         min: mn, max: mx, step,
         onPreview: (v) => {
-          if (s.params) s.params[pname] = v;       // 拖动中改内存（保留）
-          if (typeof renderPreview === "function") renderPreview();   // L1-20：实时预览（路线 B：直接重渲；L0-03 落地后收敛到 getPreviewSeg 隔离 overlay）
+          if (s.params) s.params[pname] = v;       // 拖动中改内存（保留现有预览行为）
+          if (typeof PreviewState !== "undefined") PreviewState.notifyPreviewConsumers(s.id);  // L0-03/L1-20：通知三方（基础设施）
+          if (typeof renderPreview === "function") renderPreview();   // 预览跟手
         },
         onCommit: (v) => {                                            // L1-20：去 250ms debounce，松手即提交一条 undo
           if (ti == null || idx == null) return;
