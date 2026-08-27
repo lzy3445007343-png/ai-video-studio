@@ -77,9 +77,24 @@ function renderRuler(p, totalSec, viewLeftSec, viewRightSec) {
     ruler.appendChild(tick);
   }
 }
+// 轨道标签图标（L2-27 子项9：emoji→内联SVG，stroke=currentColor 自动继承 off 态红色，
+// pointer-events:none 防止 SVG 吞掉 .icon 的点击委托 closest(".icon[data-act]")）
+const TRACK_ICONS = {
+  speaker: '<svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"><path d="M11 5 6 9H2v6h4l5 4V5z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M19 5a9 9 0 0 1 0 14"/></svg>',
+  speakerOff: '<svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"><path d="M11 5 6 9H2v6h4l5 4V5z"/><line x1="22" y1="9" x2="16" y2="15"/><line x1="16" y1="9" x2="22" y2="15"/></svg>',
+  eye: '<svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>',
+  eyeOff: '<svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19M1 1l22 22"/></svg>',
+  lock: '<svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>',
+  lockOpen: '<svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 9.9-1"/></svg>'
+};
 function rulerLabel(us, p) {
   const s = us / 1e6, m = Math.floor(s / 60), sec = s - m * 60;
-  if (p >= 500) return String(m).padStart(2, "0") + ":" + sec.toFixed(3).padStart(6, "0");
+  // L2-27 子项8：高密度（p>=500，约每帧一刻度）改 MM:SSfFF 帧标签，替代原 秒.毫秒 三位小数
+  if (p >= 500) {
+    const frameUs = (typeof TimelineMapper !== "undefined" && TimelineMapper.frameUs) ? TimelineMapper.frameUs(30) : 33333;
+    const ff = Math.round((sec - Math.floor(sec)) * 1e6 / frameUs);
+    return String(m).padStart(2, "0") + ":" + String(Math.floor(sec)).padStart(2, "0") + "f" + String(ff).padStart(2, "0");
+  }
   return String(m).padStart(2, "0") + ":" + String(Math.round(sec)).padStart(2, "0");
 }
 function contentWidth() {
@@ -497,7 +512,10 @@ function makeSeg(s, type, ti, idx, overrideLeftUs, forceDragging) {
         g.paths.push(path);
       }
     }
+    // L2-27 子项5：段宽 <40px 时 KF 菱形密集糊成一团，直接跳过不渲染 marker
+    const segWidthPx = (s.duration || 0) / 1e6 * pps();
     for (const [t, g] of byTime) {
+      if (segWidthPx < 40) continue;
       const tSec = Math.max(0, Math.min(durSec, t / 1e6));
       const xPx = tSec * pps();
       kfMarkersHtml += '<div class="kf-marker" data-kftime="' + t + '" data-kids="' + g.kids.join(",") + '" data-paths="' + g.paths.join(",") + '" style="left:' + xPx + 'px">' + kfDiamondSVG("", "#fff") + '</div>';
@@ -556,9 +574,9 @@ function _renderTimelineKeyed(content, labels, ruler) {
     const showMute = tr.type === "video" || tr.type === "audio";
     const showHide = tr.type === "video" || tr.type === "text" || tr.type === "sticker" || tr.type === "effect";
     let icons = "";
-    if (showMute) { const on = !m.muted; icons += '<span class="icon' + (on ? "" : " off") + '" data-act="mute" title="静音/取消静音">' + (on ? "🔊" : "🔇") + '</span>'; }
-    if (showHide) { const on = !m.hidden; icons += '<span class="icon' + (on ? "" : " off") + '" data-act="hide" title="显示/隐藏">' + (on ? "👁" : "🚫") + '</span>'; }
-    icons += '<span class="icon' + (m.locked ? " off" : "") + '" data-act="lock" title="锁定/解锁轨道（锁定后禁止编辑该轨）">' + (m.locked ? "🔒" : "🔓") + '</span>';
+    if (showMute) { const on = !m.muted; icons += '<span class="icon' + (on ? "" : " off") + '" data-act="mute" title="静音/取消静音">' + (on ? TRACK_ICONS.speaker : TRACK_ICONS.speakerOff) + '</span>'; }
+    if (showHide) { const on = !m.hidden; icons += '<span class="icon' + (on ? "" : " off") + '" data-act="hide" title="显示/隐藏">' + (on ? TRACK_ICONS.eye : TRACK_ICONS.eyeOff) + '</span>'; }
+    icons += '<span class="icon' + (m.locked ? " off" : "") + '" data-act="lock" title="锁定/解锁轨道（锁定后禁止编辑该轨）">' + (m.locked ? TRACK_ICONS.lock : TRACK_ICONS.lockOpen) + '</span>';
     label.innerHTML = icons + '<span class="name" title="' + esc(tr.label) + '">' + esc(truncateName(tr.label)) + '</span>';
     labels.appendChild(label);
   }
@@ -658,14 +676,14 @@ function renderTimeline(s) {
     let icons = "";
     if (showMute) {
       const on = !m.muted;
-      icons += '<span class="icon' + (on ? "" : " off") + '" data-act="mute" title="静音/取消静音">' + (on ? "🔊" : "🔇") + '</span>';
+      icons += '<span class="icon' + (on ? "" : " off") + '" data-act="mute" title="静音/取消静音">' + (on ? TRACK_ICONS.speaker : TRACK_ICONS.speakerOff) + '</span>';
     }
     if (showHide) {
       const on = !m.hidden;
-      icons += '<span class="icon' + (on ? "" : " off") + '" data-act="hide" title="显示/隐藏">' + (on ? "👁" : "🚫") + '</span>';
+      icons += '<span class="icon' + (on ? "" : " off") + '" data-act="hide" title="显示/隐藏">' + (on ? TRACK_ICONS.eye : TRACK_ICONS.eyeOff) + '</span>';
     }
     // 轨道锁定（2026-08-16 对齐 OpenCut TrackLabelsPanel lock）：锁定的轨禁止编辑
-    icons += '<span class="icon' + (m.locked ? " off" : "") + '" data-act="lock" title="锁定/解锁轨道（锁定后禁止编辑该轨）">' + (m.locked ? "🔒" : "🔓") + '</span>';
+    icons += '<span class="icon' + (m.locked ? " off" : "") + '" data-act="lock" title="锁定/解锁轨道（锁定后禁止编辑该轨）">' + (m.locked ? TRACK_ICONS.lock : TRACK_ICONS.lockOpen) + '</span>';
     label.innerHTML = icons + '<span class="name" title="' + esc(tr.label) + '">' + esc(truncateName(tr.label)) + '</span>';
     labels.appendChild(label);
     const track = document.createElement("div");

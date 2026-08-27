@@ -377,7 +377,7 @@
   .tl-labels { width: var(--label-w); flex: none; background: var(--panel-2); border-right: 1px solid var(--border);
     overflow-y: auto; overflow-x: hidden; scrollbar-width: none; -ms-overflow-style: none; }
   .tl-labels::-webkit-scrollbar { display: none; }
-  .tl-labels .ruler-spacer { height: 28px; border-bottom: 1px solid var(--border); flex: none; }
+  .tl-labels .ruler-spacer { height: 22px; border-bottom: 1px solid var(--border); flex: none; }
   .tl-labels .scrollbar-spacer { flex: none; background: transparent; }
   .track-label { height: var(--track-h); display: flex; align-items: center; gap: 6px; padding: 0 8px;
     border-bottom: 1px solid var(--border); }
@@ -389,7 +389,7 @@
 
   .tl-scroll { flex: 1; overflow: auto; position: relative; }
   .tl-content { position: relative; min-width: 100%; }
-  .ruler { height: 28px; position: sticky; top: 0; background: var(--panel); border-bottom: 1px solid var(--border);
+  .ruler { height: 22px; position: sticky; top: 0; background: var(--panel); border-bottom: 1px solid var(--border);
     z-index: 5; cursor: pointer; }
   /* 两级刻度（2026-08-16 对齐 OpenCut）：minor 顶部短竖线（细刻度），major 贯穿长线（主刻度带文字） */
   .ruler .tick { position: absolute; top: 0; border-left: 1px solid var(--border); }
@@ -401,9 +401,9 @@
   .track.track-muted.audio .seg { opacity: .55; }
   .track .empty-hint { position: absolute; inset: 0; border: 1px dashed var(--border); border-radius: 4px; margin: 4px; }
 
-  .tl-content .seg { position: absolute; top: 4px; bottom: 4px; border-radius: 4px; overflow: hidden;
+  .tl-content .seg { position: absolute; top: 4px; bottom: 4px; border-radius: 4px; overflow: hidden; z-index: 10;
     box-shadow: 0 0 0 1.5px transparent; cursor: grab; }
-  .seg.sel { box-shadow: 0 0 0 2.5px var(--primary); }
+  .seg.sel { box-shadow: 0 0 0 1.5px var(--primary); }
   .seg.dragging { opacity: .85; cursor: grabbing; pointer-events: none; }
   .seg.drop-target-seg { box-shadow: 0 0 0 2.5px var(--accent) !important; }
   .seg .fill { position: absolute; inset: 0; background-position: left center; pointer-events: none; }
@@ -428,26 +428,26 @@
     background: rgba(0,0,0,.55); color: #fff; padding: 1px 3px; border-radius: 3px; pointer-events: none;
     z-index: 4; }
 
-  .playhead { position: absolute; top: 0; bottom: 0; width: 2px; background: #ff4d4f; z-index: 8; pointer-events: auto; cursor: col-resize; }
+  .playhead { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--primary); z-index: 30; pointer-events: auto; cursor: col-resize; }
   /* 透明命中扩展：把 2px 红线变成 ~12px 可点区（对齐 OpenCut 整线可拖；WebView2 下细线难命中） */
   .playhead::after { content: ""; position: absolute; top: 0; bottom: 0; left: -6px; right: -6px; pointer-events: auto; }
-  .playhead::before { content: ""; position: absolute; top: 0; left: -5px; border: 6px solid transparent; border-top-color: #ff4d4f; pointer-events: none; }
+  .playhead::before { content: ""; position: absolute; top: 0; left: -5px; border: 6px solid transparent; border-top-color: var(--primary); pointer-events: none; }
   /* 顶部可拖拽帽（对齐 OpenCut TimelinePlayhead 的拖拽圆点）；position:sticky 钉在视口顶部，竖向滚动后仍能抓到 */
   .playhead-handle { position: sticky; top: 2px; left: 50%; margin-left: -8px;
-    width: 17px; height: 17px; border-radius: 50%; background: #ff4d4f; border: 2px solid rgba(255,255,255,.7);
+    width: 17px; height: 17px; border-radius: 50%; background: var(--primary); border: 2px solid rgba(255,255,255,.7);
     cursor: col-resize; pointer-events: auto; z-index: 11; box-shadow: 0 1px 4px rgba(0,0,0,.5); }
-  .playhead-handle:hover, .playhead-handle.dragging { background: #ff6b6d; border-color: #fff; }
+  .playhead-handle:hover, .playhead-handle.dragging { background: var(--primary); border-color: #fff; }
   /* L1-05 吸附实心态：吸附命中时手柄边框实心 + 高亮（对齐 OpenCut timeline-playhead.tsx:109 bg-primary border-primary） */
-  .playhead-handle.snapped { border-color: #fff; background: #ff4d4f; box-shadow: 0 0 6px rgba(255,77,79,.95); }
-  .drop-line { position: absolute; top: 28px; bottom: 0; width: 3px; background: #2ea8ff;
-    z-index: 9; pointer-events: none; display: none;
+  .playhead-handle.snapped { border-color: #fff; background: var(--primary); box-shadow: 0 0 6px var(--primary); }
+  .drop-line { position: absolute; top: 22px; bottom: 0; width: 3px; background: #2ea8ff;
+    z-index: 20; pointer-events: none; display: none;
     box-shadow: 0 0 8px 2px rgba(46,168,255,.55); }
   /* 吸附参考线：拖拽/拖播放头吸附命中时，在吸附点位置贯穿时间轴画一条蓝线（对齐 OpenCut SnapGuides vertical） */
-  .snap-guide { position: absolute; top: 0; bottom: 0; width: 2px; background: #4096ff; z-index: 7; pointer-events: none; display: none; box-shadow: 0 0 6px rgba(64,150,255,.85); }
-  .ruler .bm-mark { position: absolute; top: 0; width: 0; height: 15px; border-left: 2px solid #ff4d4f; transform: translateX(-1px); cursor: pointer; pointer-events: auto; z-index: 6; }
-  .ruler .bm-mark::before { content: ""; position: absolute; top: 0; left: -4px; border: 5px solid transparent; border-top-color: #ff4d4f; }
+  .snap-guide { position: absolute; top: 0; bottom: 0; width: 2px; background: #4096ff; z-index: 40; pointer-events: none; display: none; box-shadow: 0 0 6px rgba(64,150,255,.85); }
+  .ruler .bm-mark { position: absolute; top: 0; width: 0; height: 15px; border-left: 2px solid #009dff; transform: translateX(-1px); cursor: pointer; pointer-events: auto; z-index: 12; }
+  .ruler .bm-mark::before { content: ""; position: absolute; top: 0; left: -4px; border: 5px solid transparent; border-top-color: #009dff; }
   /* 框选覆盖层 */
-  .sel-box { position: absolute; border: 1px dashed #faad14; background: rgba(250,173,20,.12); z-index: 6; pointer-events: none; display: none; }
+  .sel-box { position: absolute; border: 1px dashed #faad14; background: rgba(250,173,20,.12); z-index: 12; pointer-events: none; display: none; }
   /* 整组缩放包围盒：跨选中段时间轴跨度，含左右把手 */
   .group-box { position: absolute; border: 1px solid #faad14; z-index: 6; pointer-events: none; display: none; }
   .group-box .gh { position: absolute; top: 0; bottom: 0; width: 8px; background: #faad14; cursor: ew-resize; pointer-events: auto; }
@@ -2160,6 +2160,8 @@ function onPointerMove(e) {
   const dx = e.clientX - d.startMouseX;
   if (!d.moved) { d.moved = true; }
   const dUs = dx / pps() * 1e6;
+  // L2-27 子项10：裁剪最小时长改为 1 帧（对齐 TimelineMapper.frameUs），原 0.2s 常量
+  const MIN_DUR_US = (typeof TimelineMapper !== "undefined" && TimelineMapper.frameUs) ? TimelineMapper.frameUs((Store.state.meta && Store.state.meta.fps) || 30) : 33333;
   // 轴内移动的 verticalDragDirection（gap 归属方向，OpenCut 同款）—— 后续 computeDrop 用
   if (typeof d.startMouseY === "number") {
     const dy = e.clientY - d.startMouseY;
@@ -2194,10 +2196,10 @@ function onPointerMove(e) {
     const speed = d.s0.speed || 1;
     // 素材头对应时间轴位置：src_start=0 处（再往左没有素材可补，对齐后端 _trim_core clamp）
     const minLeft = d.s0.start - (d.s0.src_start || 0) / speed;
-    let left = Math.max(minLeft, Math.min(right - 0.2e6, d.s0.start + dUs));
+    let left = Math.max(minLeft, Math.min(right - MIN_DUR_US, d.s0.start + dUs));
     if (Store.state.snapOn && !SnapEngine.isShiftDisabled(e)) {
       const r = SnapEngine.resolve(left, { excludeSegKey: d.key });
-      left = Math.max(minLeft, Math.min(right - 0.2e6, r.snapped));
+      left = Math.max(minLeft, Math.min(right - MIN_DUR_US, r.snapped));
       r.point ? showSnapGuide(r.point.time) : hideSnapGuide();
     } else hideSnapGuide();
     d.curLeftUs = left;
@@ -2216,10 +2218,10 @@ function onPointerMove(e) {
     const maxRight = (isMedia && full)
       ? d.s0.start + (full - ss) / speed
       : Infinity;
-    let r2 = Math.max(d.s0.start + 0.2e6, Math.min(maxRight, right + dUs));
+    let r2 = Math.max(d.s0.start + MIN_DUR_US, Math.min(maxRight, right + dUs));
     if (Store.state.snapOn && !SnapEngine.isShiftDisabled(e)) {
       const r = SnapEngine.resolve(r2, { excludeSegKey: d.key });
-      r2 = Math.max(d.s0.start + 0.2e6, Math.min(maxRight, r.snapped));
+      r2 = Math.max(d.s0.start + MIN_DUR_US, Math.min(maxRight, r.snapped));
       r.point ? showSnapGuide(r.point.time) : hideSnapGuide();
     } else hideSnapGuide();
     d.curRightUs = r2;
@@ -3687,8 +3689,8 @@ function bindEvents() {
   $("playBtn").addEventListener("click", togglePlay);
   $("muteBtn").addEventListener("click", toggleMute);
   $("zoomRange").addEventListener("input", e => setZoom(+e.target.value));
-  $("zoomIn").addEventListener("click", () => setZoom(pps() * 1.25));    // L0-05：缩放按钮乘性更顺手
-  $("zoomOut").addEventListener("click", () => setZoom(pps() / 1.25));
+  $("zoomIn").addEventListener("click", () => setZoom(pps() * 1.7));    // L0-05：缩放按钮乘性更顺手
+  $("zoomOut").addEventListener("click", () => setZoom(pps() / 1.7));
   $("splitBtn").addEventListener("click", doSplit);
   $("splitLeftBtn").addEventListener("click", doSplitLeft);
   $("splitRightBtn").addEventListener("click", doSplitRight);
