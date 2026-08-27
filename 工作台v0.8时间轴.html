@@ -1008,6 +1008,7 @@
 <script src="property/color-picker.js"></script>
 <script src="property/text-panel.js"></script>
 <script src="property/kf-panel.js"></script>
+<script src="property/graph-editor.js"></script>
 <script src="property/preview-drag.js"></script>
 <script src="property/viewport-input.js"></script>
 <script src="property/transform-handle.js"></script>
@@ -2152,6 +2153,23 @@ function setAspect(ratio) {
   if (stg && typeof ResizeObserver !== "undefined") new ResizeObserver(() => applyCanvasRatio()).observe(stg);
 })();
 // 段内局部时间 localUs 处的插值（线性/hold），与后端 _kf_interp 一致
+function bezierSolveX(x0, x1, cx0, cx1, xq) {
+  let lo = 0, hi = 1;
+  for (let i = 0; i < 32; i++) {
+    const mid = (lo + hi) / 2, om = 1 - mid;
+    const xv = om*om*om*x0 + 3*om*om*mid*cx0 + 3*om*mid*mid*cx1 + mid*mid*mid*x1;
+    if (xv < xq) lo = mid; else hi = mid;
+  }
+  return (lo + hi) / 2;
+}
+function bezierValue(a, b, localUs) {
+  const x0 = a.t, y0 = a.v, x3 = b.t, y3 = b.v;
+  const rh = a.rightHandle || { dt: 0, dv: 0 }, lh = b.leftHandle || { dt: 0, dv: 0 };
+  const cx0 = x0 + (rh.dt || 0), cy0 = y0 + (rh.dv || 0);
+  const cx1 = x3 + (lh.dt || 0), cy1 = y3 + (lh.dv || 0);
+  const u = bezierSolveX(x0, x3, cx0, cx1, localUs), om = 1 - u;
+  return om*om*om*y0 + 3*om*om*u*cy0 + 3*om*u*u*cy1 + u*u*u*y3;
+}
 function kfVal(anims, path, localUs) {
   if (!anims || !anims[path] || !anims[path].keys || !anims[path].keys.length) return null;
   const ks = anims[path].keys.slice().sort((a, b) => a.t - b.t);
@@ -2164,6 +2182,7 @@ function kfVal(anims, path, localUs) {
     const a = ks[i], b = ks[i + 1];
     if (a.t <= localUs && localUs <= b.t) {
       if (a.seg === "hold" || isDiscrete) return a.v;   // L2-02：discrete 恒取左帧值
+      if (a.segmentToNext === "bezier") return bezierValue(a, b, localUs);  // L2-05：贝塞尔求值
       const span = (b.t - a.t) || 1; const pr = (localUs - a.t) / span;
       return a.v + (b.v - a.v) * pr;
     }
@@ -2207,6 +2226,7 @@ function renderKfSel(s) {
     + '<div class="row"><span>时间</span><input data-f="t" value="' + Math.round(k.t) + '"> μs</div>'
     + '<div class="row"><span>值</span><input data-f="v" value="' + round2(k.v) + '"></div>'
     + '<div class="row"><span>插值</span><select data-f="seg"><option value="linear"' + (k.seg !== 'hold' ? ' selected' : '') + '>线性</option><option value="hold"' + (k.seg === 'hold' ? ' selected' : '') + '>台阶</option></select></div>'
+    + '<div class="row"><button class="curve" data-act="curve">编辑缓动曲线…</button></div>'
     + '<div class="row"><button class="del" data-act="delkf">删除关键帧</button></div>';
   selEl.querySelector('[data-f="t"]').addEventListener("change", e =>
     call("update_keyframe", ...kfSegArgs(), selectedKf.path, selectedKf.id, null, Math.round(+e.target.value), null, Store.state.selectedSegId).then(() => refresh()));
@@ -2217,6 +2237,13 @@ function renderKfSel(s) {
   selEl.querySelector('[data-act="delkf"]').addEventListener("click", () => {
     call("remove_keyframe", ...kfSegArgs(), selectedKf.path, selectedKf.id, Store.state.selectedSegId, Store.state.playheadUs).then(() => { selectedKf = { path: null, id: null }; refresh(); });
   });
+  const curveBtn = selEl.querySelector('[data-act="curve"]');
+  const canOpen = (typeof graphEditorCanOpen === "function") ? graphEditorCanOpen() : false;
+  curveBtn.disabled = !canOpen;
+  curveBtn.title = canOpen ? "打开贝塞尔缓动曲线编辑器" : "不可用：需选中单个元素的相邻关键帧（非 hold、非 discrete）";
+  curveBtn.style.opacity = canOpen ? "" : "0.5";
+  curveBtn.style.cursor = canOpen ? "pointer" : "not-allowed";
+  if (canOpen) curveBtn.addEventListener("click", () => { if (typeof openGraphEditor === "function") openGraphEditor(); });
 }
 
 function onKfDiamondDown(e, path, id, dur) {

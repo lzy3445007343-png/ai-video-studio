@@ -2336,6 +2336,33 @@ def _seg_clip_settings(seg, W, H):
 
 
 
+def _bezier_solve_x(x0, x1, cx0, cx1, xq):
+    """解三次贝塞尔 x(u)=xq 的 u（x 单调假设，二分 32 次足够精度）。"""
+    lo, hi = 0.0, 1.0
+    for _ in range(32):
+        mid = (lo + hi) / 2.0
+        om = 1.0 - mid
+        xv = om ** 3 * x0 + 3 * om * om * mid * cx0 + 3 * om * mid * mid * cx1 + mid ** 3 * x1
+        if xv < xq:
+            lo = mid
+        else:
+            hi = mid
+    return (lo + hi) / 2.0
+
+
+def _bezier_value(a, b, local_us):
+    """段 a→b 的贝塞尔求值：a.rightHandle（出）与 b.leftHandle（入）为 dt/dv 偏移控制点。"""
+    x0, y0 = a["t"], a["v"]
+    x3, y3 = b["t"], b["v"]
+    rh = a.get("rightHandle") or {"dt": 0, "dv": 0}
+    lh = b.get("leftHandle") or {"dt": 0, "dv": 0}
+    cx0 = x0 + float(rh.get("dt", 0)); cy0 = y0 + float(rh.get("dv", 0))
+    cx1 = x3 + float(lh.get("dt", 0)); cy1 = y3 + float(lh.get("dv", 0))
+    u = _bezier_solve_x(x0, x3, cx0, cx1, float(local_us))
+    om = 1.0 - u
+    return om ** 3 * y0 + 3 * om * om * u * cy0 + 3 * om * u * u * cy1 + u ** 3 * y3
+
+
 def _kf_interp(keys, local_us, ch_type=None):
     """对一条标量通道的 keys 做插值，返回 (value, found)。keys 元素 {t, v, seg, ...}。
 
@@ -2368,6 +2395,9 @@ def _kf_interp(keys, local_us, ch_type=None):
         if a["t"] <= local_us <= b["t"]:
             if a.get("seg") == "hold":
                 return a["v"], True
+            # L2-05：bezier 段（segmentToNext=="bezier" + 控制柄）走三次贝塞尔求值
+            if a.get("segmentToNext") == "bezier":
+                return _bezier_value(a, b, local_us), True
             span = (b["t"] - a["t"]) or 1
             p = (local_us - a["t"]) / span
             return a["v"] + (b["v"] - a["v"]) * p, True
