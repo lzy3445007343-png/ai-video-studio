@@ -44,6 +44,8 @@ let _kfBuildDirty = false;       // 标记整体重建
 let _kfSecCollapsed = { 0: false, 1: false };  // section 折叠状态（按组下标）
 // B1（GPT 定案）：KF 输入框聚焦时置 true → refresh() 暂停 draft 替换（防本地临时态被 500ms 轮询覆盖），blur 后恢复
 let _kfEditing = false;
+// L2-06：Scale 成组锁定开关（UI 偏好，不持久化，对齐 OpenCut isTransformScaleLocked）
+let _scaleLocked = false;
 
 function renderKfPanelPF() {
   const nameEl = $("kfSegName"), rowsEl = $("kfRows"), graphEl = $("kfGraph"),
@@ -79,7 +81,7 @@ function renderKfPanelPF() {
     for (const pair of g.pairs) for (const [path] of pair) stateBits.push(path + ":" + kfOnOff(anims, path));
     for (const [path] of g.singles) stateBits.push(path + ":" + kfOnOff(anims, path));
   }
-  const stateKey = stateBits.join(",");
+  const stateKey = stateBits.join(",") + "|scaleLock:" + (_scaleLocked ? "1" : "0");   // L2-06：锁状态变化触发重建
 
   if (_kfLastKey !== selId + "|" + stateKey) {
     buildKfSections(rowsEl, anims, local);
@@ -126,18 +128,27 @@ function buildKfSections(rowsEl, anims, local) {
     body.className = "kf-section-body";
     // 横向并排对（用 .kf-pair 包裹，左字段+右字段同行）
     for (const pair of g.pairs) {
+      const isScale = pair.length === 2 && pair[0][0] === "transform.scaleX" && pair[1][0] === "transform.scaleY";
       const pairEl = document.createElement("div");
       pairEl.className = "kf-pair";
-      for (let i = 0; i < pair.length; i++) {
-        const [path, lab, step, def] = pair[i];
-        const row = buildKfRow(path, lab, step, def, anims, local);
-        pairEl.appendChild(row);
-        if (i === 0 && pair.length === 2) {
-          // W↔H 中间的链接图标（OpenCut 截图位置）
-          const link = document.createElement("span");
-          link.className = "kf-pair-link";
-          link.textContent = "🔗";
-          pairEl.appendChild(link);
+      if (isScale && _scaleLocked) {
+        // L2-06：锁定态 → 单 Scale 字段 + 成组菱形（替换两独立字段）
+        pairEl.appendChild(buildScaleLockedRow(anims, local));
+      } else {
+        for (let i = 0; i < pair.length; i++) {
+          const [path, lab, step, def] = pair[i];
+          const row = buildKfRow(path, lab, step, def, anims, local);
+          pairEl.appendChild(row);
+          if (isScale && i === 0) {
+            // W↔H 中间的锁按钮（替换原静态 🔗），点击进入等比锁定
+            const lock = document.createElement("button");
+            lock.className = "kf-pair-lock";
+            lock.textContent = "🔓";
+            lock.title = "锁定等比缩放（Scale 成组关键帧，L2-06）";
+            lock.style.cursor = "pointer";
+            lock.addEventListener("click", () => { _scaleLocked = true; _kfLastKey = null; renderKfPanelPF(); });
+            pairEl.appendChild(lock);
+          }
         }
       }
       body.appendChild(pairEl);
@@ -148,6 +159,87 @@ function buildKfSections(rowsEl, anims, local) {
     }
     sec.appendChild(body);
     rowsEl.appendChild(sec);
+  }
+}
+
+/* —— L2-06：Scale 成组锁定（锁定态单 Scale 字段 + 成组菱形，走 toggleScaleKf 一次 upsert/remove 两条）—— */
+function buildScaleLockedRow(anims, local) {
+  const s = selectedSeg();
+  const inRange = TimelineMapper.isPlayheadWithinRange(s);
+  const hasX = KfChannel.isAnimated(s, "transform.scaleX");
+  const hasY = KfChannel.isAnimated(s, "transform.scaleY");
+  const hasScaleKf = hasX || hasY;
+  const curX = getEffectivePropertyValue(s, "transform.scaleX", local).value;
+  const shown = curX == null ? 1 : curX;
+  const row = document.createElement("div");
+  row.className = "kf-row kf-row-scale-locked";
+  row.innerHTML =
+    '<button class="kf-kf-toggle' + (hasScaleKf ? ' is-active' : '') + '" data-act="tog" title="成组打/删关键帧（scaleX+scaleY 同帧）">' +
+      kfDiamondSVG("dia", "currentColor") + '</button>' +
+    '<span class="lab">Scale</span>' +
+    '<input class="val" data-act="val" value="' + round2(shown) + '" step="0.1">' +
+    '<button class="kf-pair-lock" data-act="unlock" title="解锁等比（恢复 W/H 两字段）">🔒</button>';
+  const togBtn = row.querySelector('[data-act="tog"]');
+  if (!inRange) { togBtn.disabled = true; togBtn.style.opacity = "0.5"; togBtn.style.pointerEvents = "none"; togBtn.title = "播放头不在元素范围内，无法打/删关键帧"; }
+  togBtn.addEventListener("click", () => toggleScaleKf());
+  row.querySelector('[data-act="unlock"]').addEventListener("click", () => { _scaleLocked = false; _kfLastKey = null; renderKfPanelPF(); });
+  const inp = row.querySelector('[data-act="val"]');
+  inp.addEventListener("mousedown", e => { e.preventDefault(); inp.focus(); inp.select(); });
+  let _editCtx = null;
+  inp.addEventListener("focus", () => {
+    _kfEditing = true;
+    const seg = selectedSeg();
+    if (seg && typeof createEditContext === "function" && Store.state.selectedKey) _editCtx = createEditContext(Store.state.selectedKey);
+  });
+  inp.addEventListener("input", () => {
+    const v = (typeof ExprParse !== "undefined") ? ExprParse.parseNumeric(inp.value) : parseFloat(inp.value);
+    if (isNaN(v)) return;
+    const seg = selectedSeg(); if (!seg) return;
+    if (typeof PreviewState !== "undefined") { PreviewState.set(seg.id, "transform.scaleX", v); PreviewState.set(seg.id, "transform.scaleY", v); PreviewState.notifyPreviewConsumers(seg.id); }
+    renderPreview();
+  });
+  inp.addEventListener("blur", () => {
+    _kfEditing = false;
+    const sv = parseFloat(inp.value); if (isNaN(sv)) return;
+    const seg = selectedSeg(); if (!seg) return;
+    const k = Store.state.selectedKey ? Store.state.selectedKey.split(":") : null; if (!k || k.length < 3) return;
+    const hasKf = KfChannel.isAnimated(seg, "transform.scaleX") && TimelineMapper.isPlayheadWithinRange(seg);
+    _editCtx = null;
+    if (typeof PreviewState !== "undefined") PreviewState.discardPreview(seg.id);
+    const tx = { scaleX: sv, scaleY: sv, rotation: (typeof getProperty === "function") ? getProperty(seg, "transform.rotate") : 0 };
+    CommandService.withTx("scale-locked-edit", () =>
+      CommandService.run("update_segment_transform", { track_type: k[0], track_index: +k[1], index: +k[2], segid: seg.id, transform: tx }, { actor: "ui", paths: ["transform.scaleX", "transform.scaleY"] }));
+  });
+  inp.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === "Escape") { e.preventDefault(); inp.blur(); } });
+  return row;
+}
+
+/* —— L2-06：成组菱形点击 → 一次 upsert/remove 两条（scaleX+scaleY 同 t 同值，后端帧吸附保证严格同帧）—— */
+function toggleScaleKf() {
+  const s = selectedSeg(); if (!s) return;
+  if (!TimelineMapper.isPlayheadWithinRange(s)) return;   // L2-10 门控：范围外不响应
+  const local = TimelineMapper.playheadLocal(s);
+  const k = Store.state.selectedKey ? Store.state.selectedKey.split(":") : null;
+  if (!k || k.length < 3) return;
+  const args = kfSegArgs();
+  const segId = Store.state.selectedSegId;
+  const hitX = KfChannel.hitAtPlayhead(s, "transform.scaleX", local);
+  const hitY = KfChannel.hitAtPlayhead(s, "transform.scaleY", local);
+  if (hitX || hitY) {
+    const anims = s.animations || {};
+    const rm = (path) => {
+      const keys = (anims[path] && anims[path].keys) ? anims[path].keys : [];
+      const hk = keys.find(kk => Math.abs((kk.t || 0) - local) <= KfChannel.KF_HIT_TOLERANCE_US);
+      if (hk) call("remove_keyframe", ...args, path, hk.id, segId, Store.state.playheadUs);
+    };
+    rm("transform.scaleX"); rm("transform.scaleY");
+    setTimeout(() => refresh(), 60);
+  } else {
+    const vx = getEffectivePropertyValue(s, "transform.scaleX", local).value;
+    const vy = getEffectivePropertyValue(s, "transform.scaleY", local).value;
+    const v = ((vx == null ? 1 : vx) + (vy == null ? 1 : vy)) / 2;   // 成组值取两轴平均
+    call("add_keyframe", ...args, "transform.scaleX", local, v, "linear", segId).then(() =>
+      call("add_keyframe", ...args, "transform.scaleY", local, v, "linear", segId).then(() => refresh()));
   }
 }
 
@@ -270,28 +362,23 @@ function updateKfRowValues(rowsEl, anims, local) {
   const inRange = TimelineMapper.isPlayheadWithinRange(s);   // L2-10：播放头实时门控（拖播放头进出范围时刷新 ◆/＋ 禁用态）
   rowsEl.querySelectorAll(".kf-row").forEach(row => {
     const path = row.dataset.path;
+    const tog = row.querySelector('[data-act="tog"]');
+    const add = row.querySelector('[data-act="add"]');
+    // L2-10/L2-06：范围门控每帧刷新（即便无 dataset.path 的锁定行也生效）
+    if (tog) { tog.disabled = !inRange; tog.style.opacity = inRange ? "" : "0.5"; tog.style.pointerEvents = inRange ? "" : "none"; }
+    if (add) { add.disabled = !inRange; add.style.opacity = inRange ? "" : "0.5"; add.style.pointerEvents = inRange ? "" : "none"; }
+    if (!path) return;   // L2-06 锁定行无 path，gate 已处理，跳过值更新
     // B2.1：显示值收口到 EffectivePropertyResolver；source 驱动 ◆ 外观
     const { value: cur, source } = getEffectivePropertyValue(s, path, local);
     if (cur == null) return;
     const inp = row.querySelector('[data-act="val"]');
     if (inp && document.activeElement !== inp) inp.value = round2(cur);
     // B2.1（GPT 定案）：◆ 外观 = 播放头是否踩中 KF（source==="keyframe"）——拖播放头实时亮灭
-    const tog = row.querySelector('[data-act="tog"]');
-    const add = row.querySelector('[data-act="add"]');
     if (tog) {
       const hit = source === "keyframe";
       tog.classList.toggle("is-active", hit && inRange);
-      // L2-10：范围外 → 灰禁（与 buildKfRow 一致），点击不触发（toggleKf 另有函数级门控兜底）
-      tog.disabled = !inRange;
-      tog.style.opacity = inRange ? "" : "0.5";
-      tog.style.pointerEvents = inRange ? "" : "none";
       tog.title = !inRange ? "播放头不在该元素时间范围内，无法打/删关键帧"
                            : (hit ? "删除当前位置关键帧" : "在播放头处打关键帧");
-    }
-    if (add) {
-      add.disabled = !inRange;
-      add.style.opacity = inRange ? "" : "0.5";
-      add.style.pointerEvents = inRange ? "" : "none";
     }
   });
 }
