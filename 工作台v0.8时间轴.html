@@ -710,6 +710,10 @@
           <svg viewBox="0 0 20 20" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><rect x="3.5" y="3.5" width="13" height="13" rx="2"/><path d="M6.5 6.5h7v7h-7z"/></svg>
           <span>图形</span>
         </button>
+        <button class="rail-btn" data-tab="blend" title="融合">
+          <svg viewBox="0 0 20 20" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><circle cx="10" cy="10" r="7"/><path d="M10 3a7 7 0 0 1 0 14z" fill="currentColor" opacity=".35"/></svg>
+          <span>融合</span>
+        </button>
       </div>
       <div class="tools-content" id="toolsContent">
     <!-- OpenCut 风格三态 view（独立 div 切 display，绝不清空 root——保护 kfPanel/maskPanel/audioPanel 等子元素） -->
@@ -750,6 +754,10 @@
     <div class="subpanel" id="graphicPanel">
       <div class="head">图形样式 <span class="property-seg-name" id="graphicSegName"></span></div>
       <div class="body" id="graphicBody"></div>
+    </div>
+    <div class="subpanel" id="blendPanel">
+      <div class="head">融合 <span class="property-seg-name" id="blendSegName"></span></div>
+      <div class="body" id="blendBody"></div>
     </div>
     <div class="subpanel" id="subPanel">
       <div class="head">字幕生成 <span class="property-seg-name" id="subSegName"></span><button class="head-close" id="subClose" title="取消选择（Esc）">✕</button></div>
@@ -1017,6 +1025,7 @@
 <script src="property/color-picker.js"></script>
 <script src="property/text-panel.js"></script>
 <script src="property/graphic-panel.js"></script>
+<script src="property/blend-panel.js"></script>
 <script src="property/kf-panel.js"></script>
 <script src="property/graph-editor.js"></script>
 <script src="property/preview-drag.js"></script>
@@ -1760,8 +1769,8 @@ let activeToolTab = "kf";
 const PROPERTY_TABS_BY_TYPE = {
   // 2026-08-19 23:55 根因B 解耦：sub/sticker 是所有类型的常驻入口（创建型面板不该锁在"先选中对应段"）。
   // 字幕=ASR 生成入口、贴纸=添加入口，getAsrSource/hasStickerTrack 本就不依赖选中段；白名单只决定"选中时 rail 高亮"。
-  video:   ["kf", "audio", "speed", "mask", "effects", "sub", "sticker"],
-  image:   ["kf", "mask", "effects", "sub", "sticker"],
+  video:   ["kf", "audio", "speed", "mask", "effects", "sub", "sticker", "blend"],   // L2-01
+  image:   ["kf", "mask", "effects", "sub", "sticker", "blend"],   // L2-01
   audio:   ["audio", "speed", "kf", "sub", "sticker"],
   text:    ["text", "sub", "sticker"],   // L2-02：文本样式 tab 置首位（默认进入）
   sticker: ["sticker", "kf", "effects", "sub"],
@@ -1773,7 +1782,7 @@ const PROPERTY_DEFAULT_TAB_BY_TYPE = {
 };
 const TAB_TO_PANEL = {
   kf: "kfPanel", mask: "maskPanel", sub: "subPanel", sticker: "stickerPanel",
-  audio: "audioPanel", speed: "speedPanel", effects: "effectPanel", text: "textPanel", graphic: "graphicPanel",  // L2-02 / L2-04
+  audio: "audioPanel", speed: "speedPanel", effects: "effectPanel", text: "textPanel", graphic: "graphicPanel", blend: "blendPanel",  // L2-02 / L2-04 / L2-01
 };
 const PLACEHOLDER_TITLES = { effects: "特效面板" };
 
@@ -1793,7 +1802,7 @@ function showToolTab(tab) {
 const PROP_ACTIVE_TAB = {};
 
 function hideAllPropertyPanels() {
-  ["kfPanel", "maskPanel", "subPanel", "stickerPanel", "effectPanel", "audioPanel", "speedPanel", "textPanel", "graphicPanel"].forEach(id => {
+  ["kfPanel", "maskPanel", "subPanel", "stickerPanel", "effectPanel", "audioPanel", "speedPanel", "textPanel", "graphicPanel", "blendPanel"].forEach(id => {
     const el = document.getElementById(id); if (el) el.classList.remove("panel-active");
   });
 }
@@ -1841,7 +1850,7 @@ function renderPropertyPanel() {
   const activePanel = TAB_TO_PANEL[activeTab] || "kfPanel";
 
   // 切换 panel-active
-  ["kfPanel", "maskPanel", "subPanel", "stickerPanel", "effectPanel", "audioPanel", "speedPanel", "textPanel", "graphicPanel"].forEach(id => {
+  ["kfPanel", "maskPanel", "subPanel", "stickerPanel", "effectPanel", "audioPanel", "speedPanel", "textPanel", "graphicPanel", "blendPanel"].forEach(id => {
     const el = document.getElementById(id);
     if (!el) return;
     if (id === activePanel) el.classList.add("panel-active");
@@ -1865,6 +1874,7 @@ function renderPropertyPanel() {
   else if (activePanel === "speedPanel") renderSpeedTabPF();   // Phase 2：Property Framework 版（property/speed-panel.js）
   else if (activePanel === "textPanel") renderTextPanelPF();   // L2-02：文本可编辑样式 tab
   else if (activePanel === "graphicPanel") renderGraphicPanelPF();   // L2-04：图形样式 tab
+  else if (activePanel === "blendPanel") renderBlendPanelPF();   // L2-01：融合模式 tab
 }
 
 // range "0~20" / "0~1" → [min,max]
@@ -3250,9 +3260,22 @@ function onTimelineDrop(e) {
     return;
   }
   if (!data || !data.path) return;
-  // L1-23：媒体拖到可接收元素上松手 → 替换素材占位（真实替换归 L2-18 + Q20；本卡只占位，草稿数据零变化）
+  // L2-18（分支 B，🔴L0-07 加性 Api replace_segment_source）：库素材拖到同类型 video/image 段上
+  // → 就地换源（段 id 稳定，撤销栈/选中/动画/特效绑定不断裂）；duration 重置为新源全长（分支①）。
+  // 仅 video/image 段接受视频/图片替换；text/sticker 目标段不替换，继续走普通添加逻辑。
   const bc = window.__libDropCache;
-  if (bc && bc.bindSeg) { UiFeedback.showToast({ description: "替换素材 coming soon（即将在 L2-18 支持）", variant: "warn" }); return; }
+  if (bc && bc.bindSeg && (bc.bindSeg.segType === "video" || bc.bindSeg.segType === "image")
+      && (data.type === "video" || data.type === "image")) {
+    const b = bc.bindSeg;
+    const seg = findSeg(b.type, b.ti, b.si);
+    const segId = seg && seg.id;
+    call("replace_segment_source", [{ track_type: b.type, track_index: b.ti, index: b.si, segid: segId, path: data.path }])
+      .then(r => {
+        if (r && r.ok) { refresh(); if (typeof UiFeedback !== "undefined") UiFeedback.showToast({ description: "已替换素材源（段 id 不变）", variant: "success" }); }
+        else if (typeof UiFeedback !== "undefined") UiFeedback.showToast({ description: "替换素材失败：" + ((r && r.error) || "未知"), variant: "error" });
+      });
+    return;
+  }
   const wantType = data.type === "audio" ? "audio" : (data.type === "text" ? "text" : "video");
   const rect = $("tlScroll").getBoundingClientRect();
   // L0-04：落点时间吸附到帧网格（TimelineMapper.snapFrame，与后端 snap_frame 同口径，fps 默认 30）

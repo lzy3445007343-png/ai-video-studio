@@ -3940,6 +3940,11 @@ class Api:
             else:
                 base[k] = v
 
+    # L2-01 Blend（分支 A：段内字段，对齐 speed 先例）：融合模式白名单（对齐 OpenCut blend modes）。
+    BLEND_MODES = ("normal", "multiply", "screen", "overlay", "darken", "lighten",
+                   "color_dodge", "color_burn", "soft_light", "hard_light",
+                   "difference", "exclusion", "hue", "saturation", "color", "luminosity")
+
     def set_segments_props(self, updates):
         """批量设置多个段属性（OpenCut updateElements 语义，一次 undo）。
 
@@ -4014,9 +4019,71 @@ class Api:
                 if "params" in props and isinstance(props["params"], dict):
                     seg.setdefault("params", {})
                     _deep_merge_params(seg["params"], props["params"])
+                # L2-01 Blend（分支 A：段内字段，对齐 speed 先例；白名单防越权写）。
+                # 融合模式仅 video/image 段有意义；非此类段跳过并记 skipped。
+                if "blend_mode" in props and isinstance(props["blend_mode"], str):
+                    if seg.get("type") not in ("video", "image"):
+                        skipped.append("只有视频/图片段可设融合模式")
+                    elif props["blend_mode"] not in self.BLEND_MODES:
+                        skipped.append("不支持的融合模式: %s" % props["blend_mode"])
+                    else:
+                        seg["blend_mode"] = props["blend_mode"]
                 ok_count += 1
             except Exception as e:
                 skipped.append(f"{seg.get('name', '?')}: {e}")
+        save_state(self.state)
+        return {"ok": True, "count": ok_count, "skipped": skipped}
+
+    # ---- L2-18 替换素材（分支 B，🔴L0-07 加性扩展）----
+    def replace_segment_source(self, updates):
+        """就地替换段源（路径/素材），段 id 稳定——撤销栈/选中/动画绑定/特效 bindTo 不断裂。
+
+        分支①：duration 重置为新源全长（对齐剪映「换源后时长变新源」语义）。
+        updates: [{ "track_type", "track_index", "index", "segid"?, "path", "material_id"?, "duration_us"? }]
+        - 段定位：segid 优先（稳定 id）；缺省回退 (track_type, track_index, index)。
+        - 新源文件必须存在，否则明确报错（避免脏数据进导出）。
+        - material_id 缺省时按新 path 在 materials 中精确匹配（对齐 add_to_timeline 的 _matched_material 逻辑）。
+        返回 {"ok": True, "count": 成功数, "skipped": 失败原因列表}。
+        """
+        self._reload()
+        self._push_undo()
+        if not isinstance(updates, list) or not updates:
+            return {"ok": False, "error": "updates 必须是非空列表"}
+        ok_count = 0
+        skipped = []
+        for u in updates:
+            if not isinstance(u, dict):
+                skipped.append("非法项"); continue
+            seg = None
+            if u.get("segid"):
+                seg = _seg_by_id(self.draft, u["segid"])
+                if seg is None:
+                    skipped.append("未找到段 id=%s" % u["segid"]); continue
+            else:
+                segs = _track_segs(self.draft, u.get("track_type"), u.get("track_index"))
+                if segs is None or not isinstance(u.get("index"), int) or u["index"] < 0 or u["index"] >= len(segs):
+                    skipped.append("段定位失败"); continue
+                seg = segs[u["index"]]
+            new_path = u.get("path")
+            if not new_path or not isinstance(new_path, str) or not os.path.isfile(new_path):
+                skipped.append("新素材文件不存在: %s" % new_path); continue
+            # 解析 material_id（对齐 add_to_timeline）
+            new_mid = u.get("material_id")
+            if not new_mid:
+                for _m in self.state.get("materials", []) or []:
+                    if isinstance(_m, dict) and _m.get("uid") and _m.get("path") == new_path:
+                        new_mid = _m.get("uid"); break
+            dur = u.get("duration_us")
+            if dur is None:
+                dur = duration_for(new_path, seg.get("type", "video"))
+            seg["path"] = new_path
+            if new_mid:
+                seg["material_id"] = new_mid
+            seg["duration"] = int(dur)
+            seg["src_start"] = 0
+            seg["src_end"] = int(dur)
+            seg["src_full"] = int(dur)
+            ok_count += 1
         save_state(self.state)
         return {"ok": True, "count": ok_count, "skipped": skipped}
 
