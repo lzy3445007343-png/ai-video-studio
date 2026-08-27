@@ -1418,6 +1418,9 @@ FAILED_SAVE = False
 # 2e：乐观锁冲突透传——save_state 检测到跨进程 version 冲突时存入此处，
 # 由 _wrap_save_failure 在 Api 方法返回后注入 conflict 错误，使桌面/MCP 两路径都能看到冲突码。
 SAVE_LAST_CONFLICT = None
+# D 组（B-01 回弹 / B-03 清空）：add_to_timeline 乐观锁冲突重试上限。
+# 冲突即重跑整段（_add_to_timeline_impl 内 _reload 拿最新盘再 append），避免段被静默吞掉。
+ADD_CONFLICT_RETRIES = 5
 
 
 # 3c（M3，2026-08-23）：撤销快照深拷贝降内存——结构递归克隆但「共享 peaks 引用」。
@@ -1633,7 +1636,12 @@ def save_state(state, record=True):
                 print("[SAVE-CONFLICT] 乐观锁冲突：期望磁盘version=%s，实际=%s（record=%s）" % (expected_version, ondisk_version, record))
                 if record:
                     SAVE_LAST_CONFLICT = {"expected": expected_version, "actual": ondisk_version}
-                return {"ok": False, "conflict": True, "expected": expected_version, "actual": ondisk_version}
+                # 2e-fix（D 组 B-01 回弹 / B-03 清空）：冲突改返回 False（而非真值字典）。
+                # 原返回 {"ok":False,"conflict":True} 字典 → `if not save_state(...)` 把冲突当「成功」
+                # （非空 dict 为真值）→ 段没落盘却返回 ok:True → 前端静默、下一次 _reload 读旧盘段丢失
+                # = 拖入回弹/清空。返回 False 后所有 `if not save_state(...)` 调用点正确判失败、走错误分支。
+                # 冲突细节仍保留在 SAVE_LAST_CONFLICT 全局 + 控制台，_wrap_save_failure 照常注入。
+                return False
             # 通过：写回（seek 0 覆盖，不再先清空再上锁）
             # 3d：序列化一次，复用字符串做「字节长度抽样」（避免写后再全树序列化）
             f.seek(0); f.truncate()
@@ -3627,7 +3635,20 @@ class Api:
         # 2026-08-19：整体 try/except——静默失败（pywebview 桥 promise 永不返回）是"素材放不进"体感根因，
         # 任何异常都必须变成可见的 {ok:false, error}，让前端 alert/日志能定位。
         try:
-            return self._add_to_timeline_impl(name, path, mtype, track_index, at_time_us, insert_index, track_tid)
+            # D 组（B-01/B-03）：乐观锁冲突重试。save_state 冲突 → _add_to_timeline_impl 返回
+            # {ok:False, conflict:True}；此处重跑整段（_reload 拿最新盘 → 重新 append → 再 save），
+            # 最多 ADD_CONFLICT_RETRIES 次。每次重跑前清空 SAVE_LAST_CONFLICT，避免上一轮冲突码泄漏。
+            # 非冲突失败（文件不存在/类型不支持/写盘异常）直接返回，不重试。
+            last = None
+            for _attempt in range(ADD_CONFLICT_RETRIES):
+                last = self._add_to_timeline_impl(name, path, mtype, track_index, at_time_us, insert_index, track_tid)
+                if last.get("ok"):
+                    return last
+                if not last.get("conflict"):
+                    return last
+                global SAVE_LAST_CONFLICT
+                SAVE_LAST_CONFLICT = None
+            return last or {"ok": False, "error": "add_to_timeline 重试 %d 次仍冲突，段可能未保存" % ADD_CONFLICT_RETRIES}
         except Exception as e:
             import traceback
             traceback.print_exc()
@@ -3737,8 +3758,16 @@ class Api:
         total = (len(self.draft.setdefault("main", {"segs": []}).get("segs", []))
                  + sum(len(t.get("segs", [])) for t in self.draft.get("overlay", []))
                  + sum(len(a.get("segs", [])) for a in self.draft.get("audio", [])))
-        if not save_state(self.state):
-            return {"ok": False, "error": "保存草稿失败（写盘异常，看后端控制台 [SAVE-FAIL]）"}
+        _sr = save_state(self.state)
+        if not _sr:
+            # D 组（B-01/B-03）：save_state 冲突时返回 False 且 SAVE_LAST_CONFLICT 已置位；
+            # 标记 conflict 让外层 add_to_timeline 重试（重跑会重新 _reload 拿最新盘再 append）。
+            # 写盘异常（FAILED_SAVE）则 SAVE_LAST_CONFLICT 为 None → 不重试，直接报错。
+            _conflict = (SAVE_LAST_CONFLICT is not None)
+            return {"ok": False,
+                    "conflict": _conflict,
+                    "error": ("保存草稿冲突（磁盘被其他操作改写，正在重试）" if _conflict
+                              else "保存草稿失败（写盘异常，看后端控制台 [SAVE-FAIL]）")}
         fallback = (mtype in ("video", "audio") and not has_ffmpeg())
         return {
             "ok": True,

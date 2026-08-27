@@ -3294,10 +3294,17 @@ function onTimelineDrop(e) {
     else UiFeedback.showToast({ description: "添加素材失败：" + ((r && r.error) ? r.error : "未知错误"), variant: "error" });
   };
   const failHandler = (err) => { console.error("[add-call-fail]", err); UiFeedback.showToast({ description: "添加素材调用失败：" + (err || "未知错误（看控制台 [add-call-fail]）"), variant: "error" }); };
-  if (drop.kind === "existing") call("add_to_timeline", data.name, data.path, data.type, drop.dataTi, atTimeUs).then(okHandler, failHandler);
+  // D 组（B-01/B-03）：串行化拖入 add_to_timeline——快速连续拖入排队，避免两次调用并发打到后端
+  // （后端已带乐观锁冲突重试，这里进一步降低冲突频率、避免视觉抖动）。每批落完在 okHandler 内 refresh。
+  if (typeof window.__addChain === "undefined") window.__addChain = Promise.resolve();
+  const _enqueueAdd = (...args) => {
+    window.__addChain = window.__addChain.then(() => call("add_to_timeline", ...args).then(okHandler, failHandler));
+    return window.__addChain;
+  };
+  if (drop.kind === "existing") _enqueueAdd(data.name, data.path, data.type, drop.dataTi, atTimeUs);
   // new 路径：track_index 必须传 null（不是 -1）——后端 track_index 非 None 时优先于 insert_index，
   // 传 -1 会走 append 到组末尾，insert_index（预览的中间显示位）被忽略 → 新轨落错位置（2026-08-18 修）
-  else call("add_to_timeline", data.name, data.path, data.type, null, atTimeUs, drop.dataInsertIndex).then(okHandler, failHandler);
+  else _enqueueAdd(data.name, data.path, data.type, null, atTimeUs, drop.dataInsertIndex);
 }
 /* 落位后自动滚动到指定时间位（库拖入用，轴内移动不滚） */
 function scrollToSegmentUs(us) {
