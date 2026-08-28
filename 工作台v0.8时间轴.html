@@ -2242,7 +2242,9 @@ function renderKfSel(s) {
   const ch = anims[selectedKf.path];
   const k = ch && ch.keys ? ch.keys.find(x => x.id === selectedKf.id) : null;
   if (!k) { selEl.style.display = "none"; return; }
-  const lab = KF_PATHS.find(p => p[0] === selectedKf.path)[1];
+  const _paths = KF_PATHS_BY_TYPE[s.type] || KF_PATHS;
+  const _labEntry = _paths.find(p => p[0] === selectedKf.path);
+  const lab = _labEntry ? _labEntry[1] : selectedKf.path;
   selEl.style.display = "";
   selEl.innerHTML = '<div class="hd">' + lab + ' 关键帧</div>'
     + '<div class="row"><span>时间</span><input data-f="t" value="' + Math.round(k.t) + '"> μs</div>'
@@ -2325,7 +2327,9 @@ function addKfAtPlayhead(path, valStr) {
   const s = selectedSeg(); if (!s) return;
   if (!TimelineMapper.isPlayheadWithinRange(s)) return;   // L2-10：播放头范围门控（段外不响应，对齐 OpenCut）
   const local = TimelineMapper.playheadLocal(s);
-  let v = parseFloat(valStr); if (isNaN(v)) v = KF_PATHS.find(p => p[0] === path)[3];
+  const _paths = KF_PATHS_BY_TYPE[s.type] || KF_PATHS;
+  const _defEntry = _paths.find(p => p[0] === path);
+  let v = parseFloat(valStr); if (isNaN(v) && _defEntry) v = _defEntry[3];
   call("add_keyframe", ...kfSegArgs(), path, local, v, "linear", Store.state.selectedSegId).then(() => refresh());
 }
 

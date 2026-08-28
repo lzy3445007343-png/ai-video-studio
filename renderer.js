@@ -682,14 +682,18 @@ function onMaskHandleUp() {
 
 /* 关键帧动画（Step 2b 收尾：从 HTML 迁入，纯搬移）——updateKfLiveValues/applyKfTransform/applyKfLiveAll */
 function updateKfLiveValues() {
-  const s = selectedSeg(); if (!s || !["video", "image", "sticker"].includes(s.type)) return;
+  const s = selectedSeg(); if (!s) return;
+  const paths = KF_PATHS_BY_TYPE[s.type];
+  if (!paths || !paths.length) return;
   const anims = s.animations || {};
   const rowsEl = $("kfRows"); if (!rowsEl || rowsEl.style.display === "none") return;
   const local = Math.max(0, Math.min(Store.state.playheadUs - s.start, s.duration));
   rowsEl.querySelectorAll(".kf-row").forEach(row => {
     const path = row.dataset.path;
     const cur = kfVal(anims, path, local);
-    const def = KF_PATHS.find(p => p[0] === path)[3];
+    const entry = paths.find(p => p[0] === path);
+    if (!entry) return; // 路径不在当前 type 注册表，跳过（防御非法/残留 row）
+    const def = entry[3];
     const inp = row.querySelector('[data-act="val"]');
     if (inp && document.activeElement !== inp) inp.value = round2(cur == null ? def : cur);
   });

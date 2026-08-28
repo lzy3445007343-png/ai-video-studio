@@ -116,6 +116,7 @@ function buildKfSections(rowsEl, anims, local) {
   for (let gi = 0; gi < KF_GROUPS.length; gi++) {
     const g = KF_GROUPS[gi];
     if (s && s.type === "text" && g.title !== "文字") continue;  // L2-07：文本段只渲染"文字"组（颜色），不显示变换/融合
+    if (s && s.type !== "text" && g.title === "文字") continue;  // L2-07 fix：video/image/sticker 段不渲染文字组，避免 path 不在 KF_PATHS_BY_TYPE[video] 里
     const collapsed = !!_kfSecCollapsed[gi];
     const sec = document.createElement("div");
     sec.className = "kf-section" + (collapsed ? " is-collapsed" : "");
