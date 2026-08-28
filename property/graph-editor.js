@@ -23,6 +23,21 @@
     "Linear":   { rh: [0.0, 0.0], lh: [0.0, 0.0] },
   };
 
+  // L2-05：已保存自定义缓动预设（localStorage，对标 OpenCut custom-presets-store）。
+  // 存储用归一化分数 [dt/spanT, dv/span]（分辨率无关），应用时再乘回当前段跨度。
+  const LS_KEY = "avs.graph-presets";
+  function getSavedPresets() {
+    try { const raw = localStorage.getItem(LS_KEY); return raw ? JSON.parse(raw) : []; } catch (e) { return []; }
+  }
+  function addSavedPreset(p) {
+    const list = getSavedPresets(); list.push(p);
+    try { localStorage.setItem(LS_KEY, JSON.stringify(list)); } catch (e) {}
+  }
+  function removeSavedPreset(i) {
+    const list = getSavedPresets(); if (i >= 0 && i < list.length) list.splice(i, 1);
+    try { localStorage.setItem(LS_KEY, JSON.stringify(list)); } catch (e) {}
+  }
+
   // 选中态 → 段信息；返回 {ok, reason, seg, ch, keys, i, a, b, vmin, vmax, spanT}
   function resolveSegment() {
     const s = selectedSeg();
@@ -36,6 +51,8 @@
     if (i >= keys.length - 1) return { ok: false, reason: "选中关键帧之后需有相邻关键帧才能编辑缓动" };
     const a = keys[i], b = keys[i + 1];
     if (a.seg === "hold") return { ok: false, reason: "台阶(hold) 段无缓动效果" };
+    // L2-05：零跨度（flat）—— 段两端值相同，曲线再怎么弯输出仍是常数，缓动无意义
+    if (a.v === b.v) return { ok: false, reason: "选中段两端值相同（flat），缓动曲线无视觉效果" };
     const spanT = Math.max(1, b.t - a.t);
     let vmin = Math.min(a.v, b.v), vmax = Math.max(a.v, b.v);
     const m = Math.max(0.5, (vmax - vmin) * 0.15);
@@ -163,6 +180,66 @@
       });
       presets.appendChild(btn);
     });
+    // ---- 已保存预设（localStorage，对标 OpenCut custom-presets-store）----
+    const savedWrap = document.createElement("div");
+    savedWrap.style.cssText = "margin-top:10px;";
+    const savedTitle = document.createElement("div");
+    savedTitle.textContent = "已保存预设";
+    savedTitle.style.cssText = "font-size:12px;opacity:.8;margin-bottom:6px;";
+    savedWrap.appendChild(savedTitle);
+    const savedGrid = document.createElement("div");
+    savedGrid.style.cssText = "display:flex;gap:6px;flex-wrap:wrap;";
+    savedWrap.appendChild(savedGrid);
+
+    function miniCurve(rh, lh, size) {
+      const p = 4, W = size - 2 * p;
+      const X0 = p, Y0 = p, X3 = size - p, Y3 = size - p;
+      const c0x = X0 + (rh[0] || 0) * W, c0y = Y0 - (rh[1] || 0) * W;
+      const c1x = X3 + (lh[0] || 0) * W, c1y = Y3 - (lh[1] || 0) * W;
+      const s = document.createElementNS(svgNS, "svg");
+      s.setAttribute("viewBox", `0 0 ${size} ${size}`);
+      s.setAttribute("width", size); s.setAttribute("height", size);
+      s.style.background = "#161616"; s.style.borderRadius = "4px"; s.style.display = "block";
+      const pathEl = document.createElementNS(svgNS, "path");
+      pathEl.setAttribute("fill", "none"); pathEl.setAttribute("stroke", "#4aa3ff"); pathEl.setAttribute("stroke-width", "2");
+      pathEl.setAttribute("d", `M ${X0} ${Y0} C ${c0x} ${c0y} ${c1x} ${c1y} ${X3} ${Y3}`);
+      s.appendChild(pathEl);
+      return s;
+    }
+
+    function renderSaved() {
+      savedGrid.innerHTML = "";
+      getSavedPresets().forEach((pr, idx) => {
+        const item = document.createElement("div");
+        item.style.cssText = "position:relative;cursor:pointer;";
+        item.title = "点击应用 · 悬停右上角 × 删除";
+        item.appendChild(miniCurve(pr.rh, pr.lh, 46));
+        const del = document.createElement("div");
+        del.textContent = "×";
+        del.style.cssText = "position:absolute;top:-4px;right:-4px;width:16px;height:16px;line-height:14px;text-align:center;border-radius:50%;background:#ff4d4f;color:#fff;font-size:12px;cursor:pointer;display:none;";
+        item.addEventListener("mouseenter", () => del.style.display = "block");
+        item.addEventListener("mouseleave", () => del.style.display = "none");
+        del.addEventListener("click", ev => { ev.stopPropagation(); removeSavedPreset(idx); renderSaved(); });
+        item.addEventListener("click", () => {
+          a.rightHandle = { dt: pr.rh[0] * spanT, dv: pr.rh[1] * (vmax - vmin) };
+          b.leftHandle = { dt: pr.lh[0] * spanT, dv: pr.lh[1] * (vmax - vmin) };
+          drawCurve(); commit();
+        });
+        item.appendChild(del);
+        savedGrid.appendChild(item);
+      });
+      const add = document.createElement("button");
+      add.textContent = "+ 保存当前";
+      add.style.cssText = "width:46px;height:46px;border:1px dashed #666;border-radius:4px;background:transparent;color:#aaa;font-size:10px;cursor:pointer;";
+      add.addEventListener("click", () => {
+        const _rh = a.rightHandle || { dt: 0, dv: 0 }, _lh = b.leftHandle || { dt: 0, dv: 0 };
+        addSavedPreset({ rh: [ _rh.dt / spanT, _rh.dv / (vmax - vmin) ], lh: [ _lh.dt / spanT, _lh.dv / (vmax - vmin) ] });
+        renderSaved();
+      });
+      savedGrid.appendChild(add);
+    }
+    renderSaved();
+
     const close = document.createElement("button");
     close.textContent = "关闭"; close.style.cssText = "margin-top:8px;width:100%;padding:5px;background:#333;color:#eee;border:1px solid #555;border-radius:4px;cursor:pointer;";
     close.addEventListener("click", () => pop.remove());
@@ -170,7 +247,7 @@
     const title = document.createElement("div");
     title.textContent = "缓动曲线 · " + selectedKf.path;
     title.style.cssText = "font-size:13px;margin-bottom:8px;opacity:.9;";
-    pop.appendChild(title); pop.appendChild(svg); pop.appendChild(presets); pop.appendChild(close);
+    pop.appendChild(title); pop.appendChild(svg); pop.appendChild(presets); pop.appendChild(savedWrap); pop.appendChild(close);
     document.body.appendChild(pop);
   }
 

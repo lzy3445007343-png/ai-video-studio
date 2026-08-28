@@ -52,6 +52,7 @@ const Store = {
     pxPerSec: 120,         // 缩放
     playheadUs: 0,
     bookmarks: [],       // 书签列表 [{us, name}]，纯 UI 标注（对齐 OpenCut scene.bookmarks）
+    loopOn: false,         // L2-13：循环播放开关（UI 偏好，落 localStorage，不随草稿）
     snapOn: true,
     rippleOn: false,    // 波纹编辑开关（对齐 OpenCut rippleEditingEnabled）
     filter: "media",
@@ -135,6 +136,9 @@ const Store = {
   // 直接通知（用于原地修改 state.drag 的逐帧拖拽，避免每帧重建对象）
   _emit() { for (const fn of this._subs) fn(this.state); },
 };
+
+// L2-13：循环播放偏好持久化（UI 偏好，不随草稿；落 localStorage，重载后恢复）
+try { if (localStorage.getItem("avs.loopOn") === "1") Store.state.loopOn = true; } catch (e) {}
 
 /* ---------- 工具 ---------- */
 const THRESHOLD = 5; // L1-03 Q14=A：统一 5px（对齐 OpenCut TIMELINE_DRAG_THRESHOLD_PX；框选/拖动判定同源）

@@ -17,6 +17,8 @@ let playStartWall = 0;        // 开始播放时的 performance.now()
 let playStartUs = 0;          // 开始播放时的 playheadUs
 let lastHitSig = "";          // 播放时命中段签名；跨段才重建预览，平时只动红线
 let previewMuted = false;     // 全局预览静音：false=有声，true=静音
+let previewVolume = 1;        // L2-13：全局预览音量（0..1），音量滑块绑定
+let lastVolume = 1;           // L2-13：取消静音时恢复的上一音量
 let mediaClockReady = true;   // 视频/音频已 seek 到播放位置：true 时播放头跟随媒体时钟，false 时信任墙钟（避免读到脏 currentTime 跳回段起点）
 let _mcrWaitAt = 0;           // mediaClockReady 看门狗计时起点（performance.now()），用于 D 超时回退
 let _lastPlayAll = 0;          // playAllMedia 防抖计时（performance.now()），避免同一媒体被反复 play 引发 AbortError
@@ -616,6 +618,18 @@ function playTick() {
     }
   } else { _mcrWaitAt = 0; }
   if (us >= maxUs) {
+    // L2-13：loop 开启 → 回卷到 0 继续播（只加回卷分支，不改播放器内核结构）
+    if (Store.state.loopOn) {
+      Store.state.playheadUs = 0;
+      playStartUs = 0;
+      playStartWall = performance.now();
+      mediaClockReady = false;
+      try { seekActiveMediaToPlayhead(0, true); } catch (e) {}
+      try { PlayerManager.handleCrossSegment(0); } catch (e) {}
+      positionPlayhead(); renderTimecode();
+      playRAF = requestAnimationFrame(playTick);
+      return;
+    }
     // DIAG-2026-08-16：播放头≥maxUs 提前收尾时打印前端真实 draft 状态（排查"前端拿旧数据"）
     try {
       const _d = Store.state.draft || {};

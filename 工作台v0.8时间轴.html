@@ -200,6 +200,16 @@
   .preview .controls .play:hover,
   .preview .controls .mute:hover { background: #34343c; }
   .preview .controls .mute.muted { background: #ff4d4f22; border-color: #ff4d4f55; }
+  /* L2-13：音量按钮 + 音量滑块 + 循环开关 */
+  .preview .controls .vol { width: 30px; height: 30px; border-radius: 50%; background: var(--panel-2);
+    border: 1px solid var(--border); font-size: 13px; line-height: 1; cursor: pointer; }
+  .preview .controls .vol:hover { background: #34343c; }
+  .preview .controls .vol.muted { background: #ff4d4f22; border-color: #ff4d4f55; }
+  .preview .controls .vol-slider { width: 64px; height: 14px; accent-color: var(--primary); }
+  .preview .controls .loop { width: 30px; height: 30px; border-radius: 50%; background: var(--panel-2);
+    border: 1px solid var(--border); font-size: 13px; line-height: 1; cursor: pointer; }
+  .preview .controls .loop:hover { background: #34343c; }
+  .preview .controls .loop.active { background: var(--primary); color: #fff; border-color: var(--primary); }
   .preview .controls .aspect-group { display: flex; align-items: center; gap: 3px; margin-left: auto; }
   .preview .controls .asp-btn { padding: 3px 8px; font-size: 11px; line-height: 1; border-radius: 4px;
     background: var(--panel-2); border: 1px solid var(--border); color: var(--muted); cursor: pointer; }
@@ -651,6 +661,9 @@
       <div class="controls">
         <button class="play" id="playBtn">▶</button>
         <button class="mute" id="muteBtn" title="静音/取消静音">🔊</button>
+        <button class="vol" id="volumeBtn" title="音量">🔊</button>
+        <input type="range" id="volumeSlider" class="vol-slider" min="0" max="1" step="0.05" value="1" title="音量">
+        <button class="loop" id="loopBtn" title="循环播放（关）">🔁</button>
         <span class="tc" id="timecode">00:00.000 / 00:00.000</span>
         <span class="aspect-group" id="aspectGroup" title="画幅（手动选择后锁定，拖素材不再自动改比例）">
           <button class="asp-btn" data-ratio="16:9">16:9</button>
@@ -1731,12 +1744,12 @@ function syncPreviewVolume() {
     if (!(v && v.tagName === "VIDEO")) continue;
     const ti = +layerKey.split(":")[1];
     const seg = hitsByVideoTi.get(ti);
-    v.volume = seg ? ((seg.volume == null ? 1 : seg.volume)) : 0;
+    v.volume = (seg ? ((seg.volume == null ? 1 : seg.volume)) : 0) * (typeof previewVolume !== "undefined" ? previewVolume : 1);
   }
   for (const [layerKey, rec] of previewState.audioEls) {
     const ti = +layerKey.split(":")[1];
     const seg = hitsByAudioTi.get(ti);
-    rec.el.volume = seg ? ((seg.volume == null ? 1 : seg.volume)) : 0;
+    rec.el.volume = (seg ? ((seg.volume == null ? 1 : seg.volume)) : 0) * (typeof previewVolume !== "undefined" ? previewVolume : 1);
   }
 }
 function renderAll(s) {
@@ -4220,6 +4233,25 @@ function bindEvents() {
   $("timeline").addEventListener("drop", e => { tlDragEnterCount = 0; clearDropIndicators(); onTimelineDrop(e); window.__libDropCache = null; });
   $("playBtn").addEventListener("click", togglePlay);
   $("muteBtn").addEventListener("click", toggleMute);
+  // L2-13：音量滑块 + 音量图标（点击=静音切换，与 muteBtn 同语义）+ 循环开关
+  $("volumeBtn").addEventListener("click", toggleMute);
+  $("volumeSlider").addEventListener("input", e => {
+    const v = +e.target.value;
+    if (typeof PlayerManager !== "undefined" && PlayerManager.setGlobalVolume) PlayerManager.setGlobalVolume(v);
+  });
+  $("loopBtn").addEventListener("click", () => {
+    const on = !Store.state.loopOn;
+    Store.state.loopOn = on;
+    try { localStorage.setItem("avs.loopOn", on ? "1" : "0"); } catch (e) {}
+    const b = $("loopBtn");
+    if (b) { b.classList.toggle("active", on); b.title = on ? "循环播放（开）" : "循环播放（关）"; }
+  });
+  // 初始化音量/循环按钮状态（UI 偏好恢复）
+  try { updateVolumeBtn(); } catch (e) {}
+  try {
+    const lb = $("loopBtn");
+    if (lb && Store.state.loopOn) { lb.classList.add("active"); lb.title = "循环播放（开）"; }
+  } catch (e) {}
   $("zoomRange").addEventListener("input", e => setZoom(+e.target.value));
   $("zoomIn").addEventListener("click", () => setZoom(pps() * 1.7));    // L0-05：缩放按钮乘性更顺手
   $("zoomOut").addEventListener("click", () => setZoom(pps() / 1.7));

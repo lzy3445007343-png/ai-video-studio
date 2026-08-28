@@ -457,6 +457,22 @@ const PlayerManager = {
     try { AudioEngine.setGlobalMuted(previewMuted); } catch (e) {}
     updateMuteBtn();
   },
+  // L2-13：全局预览音量（滑块接线）。与 setGlobalMute 互斥叠加：
+  // video 元素 .volume = 段音量(seg.volume，存于 wrap.dataset.vol) * previewVolume；
+  // audio 轨交给 AudioEngine，走 globalVolume 增益层。
+  setGlobalVolume(v) {
+    previewVolume = Math.max(0, Math.min(1, v));
+    for (const rec of previewState.visualEls.values()) {
+      const el = rec.el.firstElementChild;
+      if (el && el.tagName === "VIDEO") {
+        // 读取该段既有段级音量作为基底（渲染时写入 wrap.dataset.vol），乘上预览音量
+        const base = parseFloat((rec.el.dataset && rec.el.dataset.vol) || "1") || 1;
+        el.volume = Math.min(1, Math.max(0, base * previewVolume));
+      }
+    }
+    try { AudioEngine.setGlobalVolume(previewVolume); } catch (e) {}
+    updateVolumeBtn();
+  },
   // 兼容壳阶段代理名（无外部调用，仅保底）
   setMute() { return this.setGlobalMute(); },
 

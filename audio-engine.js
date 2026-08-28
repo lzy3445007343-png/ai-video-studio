@@ -21,6 +21,7 @@ function createAudioEngine(ctx) {
     playheadUs: 0,             // 播放头实时位置（微秒，playTick 每帧喂入；调度用实时锚定消除时钟偏差）
     anchorOffset: 0,           // ctx 秒 ↔ 时间轴秒 偏移换算锚点（旧一次性锚定，保留兼容；调度已改实时锚定）
     globalMuted: false,        // 全局预览静音（previewMuted 的引擎内副本；v1.3：只在播放端叠加）
+    globalVolume: 1,           // L2-13：全局预览音量（previewVolume 的引擎内副本；只在播放端叠加，乘到 clip gain 上）
     _tickTimer: null,
     _decodeInflight: new Map(), // path -> Promise（并发解码去重）
     _epoch: 0,                  // 取消代际：stopAll/setClips 自增，in-flight schedule 完成后校验，防止"解码完仍 start"竞态
@@ -42,7 +43,17 @@ function createAudioEngine(ctx) {
     engine.globalMuted = !!muted;
     // 已调度的源即时静音/恢复：重新设置所有已连接 gain
     for (const src of engine.scheduled) {
-      if (src._gain) src._gain.gain.value = engine.globalMuted ? 0 : (src._clipGain || 0);
+      if (src._gain) src._gain.gain.value = engine.globalMuted ? 0 : (src._clipGain || 0) * engine.globalVolume;
+    }
+  };
+
+  // L2-13：全局预览音量（播放端专用）：音量滑块接线时调用。
+  // 与 globalMuted 同层叠加：最终输出 = 静音?0 : clipGain * globalVolume。
+  engine.setGlobalVolume = function (v) {
+    engine.globalVolume = Math.max(0, Math.min(1, v));
+    // 已调度的源即时改增益（静音优先）
+    for (const src of engine.scheduled) {
+      if (src._gain) src._gain.gain.value = engine.globalMuted ? 0 : (src._clipGain || 0) * engine.globalVolume;
     }
   };
 
@@ -82,7 +93,7 @@ function createAudioEngine(ctx) {
     for (const src of engine.scheduled) {
       if (!src._clip || !src._gain) continue;
       const g = engine.clipVolumeAt(src._clip, us != null ? us : engine.playheadUs);
-      src._gain.gain.value = engine.globalMuted ? 0 : g;
+      src._gain.gain.value = engine.globalMuted ? 0 : g * engine.globalVolume;
     }
   };
 
@@ -141,7 +152,7 @@ function createAudioEngine(ctx) {
     src._clip = c; // 关键帧实时增益用：按播放头插值音量通道
     const effGain = engine.clipVolumeAt(c, engine.playheadUs);
     src._clipGain = effGain;
-    g.gain.value = engine.globalMuted ? 0 : effGain; // v1.3：previewMuted 播放端叠加
+    g.gain.value = engine.globalMuted ? 0 : effGain * engine.globalVolume; // v1.3：previewMuted 播放端叠加；L2-13：再乘 previewVolume
     src.connect(g).connect(engine.ctx.destination);
     let offset = (resumeOffsetSec != null) ? resumeOffsetSec : c.srcStartUs / 1e6;
     let dur = (resumeDurSec != null) ? resumeDurSec : (c.srcEndUs - c.srcStartUs) / 1e6 / (c.speed || 1);

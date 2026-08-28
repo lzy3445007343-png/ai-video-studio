@@ -76,7 +76,7 @@ function _setVisualContent(wrap, mtype, path, muted, volume) {
     // 段级音量（2026-08-16）。⚠️ 2026-08-20 修复：HTMLMediaElement.volume 只接受 [0,1]，
     // 音量 >1（面板可拉到 +6dB）直接设会抛 IndexSizeError → renderAll 崩溃 → 后续渲染全断（"全空"来源之一）。
     // 钳制到 [0,1]；>1 的增益由 AudioEngine（Web Audio gain，支持 >1）承载。
-    v.volume = Math.min(1, Math.max(0, (volume == null ? 1 : volume)));
+    v.volume = Math.min(1, Math.max(0, (volume == null ? 1 : volume))) * (typeof previewVolume !== "undefined" ? previewVolume : 1);
     v.playsInline = true;
     // R1：视频元数据就绪后校正 wrap 尺寸（videoWidth/Height 可用 → contain 尺寸）
     v.addEventListener("loadeddata", () => _applyVisualSize(wrap, null));
@@ -412,6 +412,16 @@ function updateMuteBtn() {
   btn.textContent = previewMuted ? "🔇" : "🔊";
   btn.title = previewMuted ? "已静音，点击恢复声音" : "静音";
   btn.classList.toggle("muted", previewMuted);
+}
+
+// L2-13：音量按钮状态同步（图标随预览音量变化；0 显示静音态，但不等同于 mute 开关）
+function updateVolumeBtn() {
+  const btn = $("volumeBtn");
+  if (!btn) return;
+  const v = (typeof previewVolume !== "undefined") ? previewVolume : 1;
+  btn.textContent = (v <= 0) ? "🔇" : (v < 0.5 ? "🔉" : "🔊");
+  btn.title = (v <= 0) ? "音量 0%" : ("音量 " + Math.round(v * 100) + "%（点击可静音切换）");
+  btn.classList.toggle("muted", v <= 0);
 }
 
 /* ---------- 渲染：Skill 区（只读 Store） ---------- */
