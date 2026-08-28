@@ -274,6 +274,7 @@ function buildKfRow(path, lab, step, def, anims, local) {
       kfDiamondSVG("dia", "currentColor") +
     '</button>' +
     '<span class="lab">' + lab + '</span>' +
+    '<span class="kf-num-icon scrub-handle" title="按住拖动调节（左右拖动改值）" style="cursor:ew-resize;color:var(--muted);user-select:none;margin-right:4px">⇔</span>' +
     '<input class="val" data-act="val" value="' + round2(shown) + '" step="' + step + '">' +
     '<button class="add" data-act="add" title="在播放头处打关键帧">＋</button>';
   // L0-06：播放头在元素范围外 → ◆ 与 ＋ 禁用（对齐 OpenCut：范围外只能改 base、不能打/删帧）
@@ -303,9 +304,8 @@ function buildKfRow(path, lab, step, def, anims, local) {
     }
   });
   inp.addEventListener("mousedown", e => { e.preventDefault(); inp.focus(); inp.select(); });  // L1-18 点击全选
-  inp.addEventListener("input", () => {
-    // L1-19：表达式求值（1920/2→960），否则 parseFloat
-    const v = (typeof ExprParse !== "undefined") ? ExprParse.parseNumeric(inp.value) : parseFloat(inp.value);
+  // L1-17：预览/提交逻辑抽成 applyInput(v) / commitInput()，供 input 监听与 scrub 手势共用
+  function applyInput(v) {
     if (isNaN(v)) return;
     const s = selectedSeg();   // 每次取最新段引用（Store 刷新替换 draft 后旧引用失效）
     if (!s) return;
@@ -324,9 +324,8 @@ function buildKfRow(path, lab, step, def, anims, local) {
     if (typeof PreviewState !== "undefined") PreviewState.notifyPreviewConsumers(s.id);  // L1-10 三方联动
     renderPreview();   // 预览跟手
     if (typeof refreshSegKfMarkers === "function") refreshSegKfMarkers(s);   // L1-21 方向②：时间轴 marker 实时跟随
-  });
-  inp.addEventListener("blur", () => {
-    _kfEditing = false;
+  }
+  function commitInput() {
     if (!_draft) return;
     const { v, hasKf, local } = _draft;
     _draft = null;
@@ -356,13 +355,30 @@ function buildKfRow(path, lab, step, def, anims, local) {
           { actor: "ui", paths: [path] })
       );
     }
+  }
+  inp.addEventListener("input", () => {
+    // L1-19：表达式求值（1920/2→960），否则 parseFloat
+    const v = (typeof ExprParse !== "undefined") ? ExprParse.parseNumeric(inp.value) : parseFloat(inp.value);
+    applyInput(v);
   });
+  inp.addEventListener("blur", () => { _kfEditing = false; commitInput(); });
   inp.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === "Escape") { e.preventDefault(); inp.blur(); } });  // L1-18 分支 A：Escape=提交
   row.querySelector('[data-act="add"]').addEventListener("click", () => {
     // L1-19：＋ 打点前先求值表达式（否则后端收字符串）
     const ev = (typeof ExprParse !== "undefined") ? ExprParse.parseNumeric(inp.value) : inp.value;
     addKfAtPlayhead(path, ev);
   });
+  // L1-17：KF 行左侧 icon drag-to-scrub（复用共享 ScrubSession；走 applyInput/commitInput，语义对齐输入框）
+  const scrubIcon = row.querySelector(".kf-num-icon");
+  if (scrubIcon) {
+    attachScrub(scrubIcon, {
+      getStart: () => parseFloat(inp.value) || def,
+      sensitivity: step || 1,                                                  // 每 px 改一个 step（位移粗/透明度细，对齐各自单位）
+      onScrub: (v) => { inp.value = round2(v); applyInput(v); },              // 实时预览（有通道→打点 overlay，无→base overlay）
+      onScrubEnd: (v) => { inp.value = round2(v); applyInput(v); commitInput(); },   // 一条 undo
+      onCancel: (sv) => { inp.value = round2(sv); applyInput(sv); },          // 回退起始值
+    });
+  }
   return row;
 }
 

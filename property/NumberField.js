@@ -47,6 +47,9 @@ class NumberField extends PropertyField {
     this.onReset = opts.onReset || null;
     this._default = (opts.default !== undefined) ? opts.default : this.min;   // L2-29：reset 回退到 default（非 min）
     this._isDefault = opts.isDefault || null;                                 // L2-29：条件显示 reset 的判定函数 (v)=>bool
+    this._digits = opts.digits;                                              // L1-17：scrub 回显用
+    this._scrubSensitivity = opts.scrubSensitivity;                           // L1-17：flat 灵敏度（默认 0.5）
+    this._scrubRanges = opts.scrubRanges || null;                            // L1-17：分段灵敏度（覆盖 flat）
     this._draft = new PropertyDraft({
       parse: raw => this._parse(raw),
       getValue: () => this.value,
@@ -103,6 +106,33 @@ class NumberField extends PropertyField {
       if (this.onReset) this.onReset();
       else { inp.value = NumberField._fmt(this._default, this._digits, this.step); this._draft.onInput(inp.value); this._draft.onCommit(); }
     });
+    // L1-17：左侧 icon drag-to-scrub（复用 ScrubSession + InteractionManager 互斥 + refresh 锁）
+    const ic = this.el.querySelector(".pf-num-icon");
+    if (ic && (this.onPreview || this.onCommit)) {
+      const self = this;
+      attachScrub(ic, {
+        getStart: () => self.value,
+        sensitivity: self._scrubSensitivity != null ? self._scrubSensitivity : 0.5,
+        ranges: self._scrubRanges || null,
+        onScrub: (v) => {
+          const i = self.el.querySelector(".pf-num-input");
+          if (i) i.value = NumberField._fmt(v, self._digits, self.step);
+          self._draft.onInput(String(v));        // → self.onPreview(v) 实时预览（不落库）
+        },
+        onScrubEnd: (v) => {
+          const i = self.el.querySelector(".pf-num-input");
+          if (i) i.value = NumberField._fmt(v, self._digits, self.step);
+          self._draft.onInput(String(v));
+          self._draft.onCommit();                // 松手一条 undo
+        },
+        onCancel: (startVal) => {
+          const i = self.el.querySelector(".pf-num-input");
+          if (i) i.value = NumberField._fmt(startVal, self._digits, self.step);
+          self._draft.reset();                    // 清未提交草稿
+          if (self.onPreview) self.onPreview(startVal);   // 内存态回退到起始值
+        },
+      });
+    }
   }
 
   static _build(opts) {
@@ -121,6 +151,18 @@ class NumberField extends PropertyField {
     inp.inputMode = "decimal";
     inp.className = "pf-num-input";
     inp.value = NumberField._fmt(opts.value, opts.digits, opts.step);
+    // L1-17：左侧 scrub 手柄（有 onPreview/onCommit 的活字段才显把手，对齐 OpenCut number-field.tsx）
+    if (opts.scrub !== false && (opts.onPreview || opts.onCommit)) {
+      const ic = document.createElement("span");
+      ic.className = "pf-num-icon";
+      ic.textContent = "⇔";
+      ic.title = "按住拖动调节（左右拖动改值）";
+      ic.style.cursor = "ew-resize";
+      ic.style.color = "var(--muted)";
+      ic.style.userSelect = "none";
+      ic.style.marginRight = "4px";
+      num.appendChild(ic);
+    }
     num.appendChild(inp);
     if (opts.unit) {
       const u = document.createElement("span");

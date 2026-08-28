@@ -78,7 +78,7 @@ function buildAudioFields(c) {
             '<div class="insp-field-label">音量' +
               (isBatch ? '' : '<button class="tog' + (hasVolKf ? " on" : "") + '" id="audVolKf" title="开/关音量关键帧（在播放头处打点）">' + kfDiamondSVG("aud-dia", "currentColor") + '</button>') +
             '</div>' +
-            '<div class="insp-num"><span class="ic">🔊</span>' +
+            '<div class="insp-num"><span class="ic scrub-handle" style="cursor:ew-resize" aria-label="拖动调节音量" title="按住拖动调节音量（左右拖动改值）">🔊</span>' +
               '<input type="text" inputmode="decimal" id="audVol" value="' + db.toFixed(1) + '">' +
               '<span class="unit">分贝</span>' +
               '<button class="reset" id="audVolReset" title="恢复默认 0.0 分贝">↺</button>' +
@@ -119,6 +119,17 @@ function buildAudioFields(c) {
       fld.on(inp, "keydown", e => { if (e.key === "Enter" || e.key === "Escape") { e.preventDefault(); inp.blur(); } });
       if (rst) fld.on(rst, "click", () => { inp.value = "0.0"; fld._draft.onInput("0.0"); fld._draft.onCommit(); });
       if (kfBtn) fld.on(kfBtn, "click", () => { const r = buildSegRefs(); if (r.length) toggleVolKf(r); });
+      // L1-17：🔊 图标 drag-to-scrub（复用共享 ScrubSession；音量场显示分贝，scrub 改分贝→previewAudioVolume 转线性）
+      const volIc = fld.el.querySelector(".ic.scrub-handle");
+      if (volIc) {
+        attachScrub(volIc, {
+          getStart: () => parseFloat(inp.value) || 0,
+          sensitivity: 0.1,                                  // 每 px 0.1 dB，细调手感
+          onScrub: (v) => { inp.value = v.toFixed(1); fld._draft.onInput(String(v)); },            // 实时预览 + 实时增益
+          onScrubEnd: (v) => { inp.value = v.toFixed(1); fld._draft.onInput(String(v)); fld._draft.onCommit(); },  // 一条 undo
+          onCancel: (sv) => { inp.value = sv.toFixed(1); fld._draft.onInput(String(sv)); },        // 回退起始值
+        });
+      }
     },
   });
 
