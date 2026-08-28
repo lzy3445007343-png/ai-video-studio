@@ -1026,6 +1026,7 @@
 <script src="property/text-panel.js"></script>
 <script src="property/graphic-panel.js"></script>
 <script src="property/blend-panel.js"></script>
+<script src="property/text-edit-overlay.js"></script>
 <script src="property/kf-panel.js"></script>
 <script src="property/graph-editor.js"></script>
 <script src="property/preview-drag.js"></script>
@@ -4328,6 +4329,10 @@ function refresh() {
   if (_kfDragActive) {
     return Promise.resolve();
   }
+  // L1-14：双击文字编辑期间暂停轮询刷新（防后端 draft 覆盖编辑中预览态）
+  if (window.__textEditing) {
+    return Promise.resolve();
+  }
   // 2f version 门控：仅当已持有 version 且未变时向后端要轻量响应（他人改动才全量拉取）
   const sv = (ENABLE_VERSION_GATING && _lastPolledVersion != null) ? _lastPolledVersion : null;
   return call("get_state", sv).then(st => {
@@ -4562,6 +4567,7 @@ function previewActive() {
   if (Store.state.drag) return true;
   if (Store.state.pendingBox) return true;   // L1-03：框选中禁 2s 轮询 refresh（防实时 .sel 被重建清掉）
   if (typeof isLibraryDragging !== "undefined" && isLibraryDragging) return true;
+  if (window.__textEditing) return true;   // L1-14：双击文字编辑期间禁止 2s 轮询 refresh
   // Inspector 拖参标志带 15s 超时兜底：若解锁事件（change/pointerup/blur）异常未触发，
   // 标志卡死会让轮询永久停摆 → 看不到 Agent/他人改动（隐蔽故障）。任何 input 都会刷新时间戳，
   // 所以正常连续操作不会误判过期；只有“改完停手不失焦”超 15s 才自动解锁。
