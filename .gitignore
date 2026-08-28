@@ -25,7 +25,9 @@ draft_state.json
 mcp_state.json
 
 # ===== 第三方开源对照仓库（OpenCut 源码，含其自身 .git，仅本地研究 UX 用，非运行依赖，体积大） =====
+# 注意：reference/ 内可保留 opencut-app-src/ 等本地研究副本，但绝不会 push 到远程
 reference/
+opencut-app-src/
 opencut-classic-src/
 opencut-bridge/
 
@@ -61,3 +63,25 @@ koubo_edit/
 
 # 轮次开发确认笔记（内部记录，非运行）
 Step1_*.md
+
+# ===== npm 依赖（本项目纯 PyWebView+原生JS，无需 node_modules） =====
+node_modules/
+package-lock.json
+package.json
+
+# ===== 运行时生成物 / 日志 / 调试产物 =====
+logs/
+exports/
+audit_log.jsonl
+undo_stack.json.gz
+debug-layout.js
+test_import_probe.png
+
+# ===== 历史原型 / 备份文件（非当前运行版本） =====
+legacy/
+*.bak-*
+*.xlsx.bak*
+docs/*.bak*
+
+# ===== smoke / 一次性调试脚本（tests/ 内保留正式回归测试） =====
+tests/_smoke_*.js
