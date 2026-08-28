@@ -6164,12 +6164,14 @@ class Api:
             dst = copy_to_assets(src)
             if not dst:
                 continue
+            mtype = classify(dst)
             item = {
                 "name": os.path.basename(dst),
                 "path": dst,
-                "type": classify(dst),
+                "type": mtype,
                 "size": os.path.getsize(dst),
                 "uid": uuid.uuid4().hex,
+                "duration": duration_for(dst, mtype),   # L2-17：素材时长（微秒），additive 字段，前端时长徽标用；图片=0 前端不显示
             }
             # 视频抽中段帧缩略图（时间轴片段帧平铺用）；图片无需抽，直接用原图当缩略图
             if item["type"] == "video":
@@ -6419,6 +6421,146 @@ class Api:
         # 否则心跳每 3s 更新 updated_at 会让 version 常变，前端每 3s 强重渲染整条时间轴（卡顿/打断）。
         # MCP 灰/绿点由前端每次轮询单独调 renderMcpStatus 更新，不靠 version 变化触发。
         return self.state
+
+    # ---- 细粒度只读读取工具（MCP 跳切读取铁律：绝不直接把整份草稿丢给 agent，按需抽小数据）----
+    def _reload_readonly(self):
+        """读工具统一从磁盘取最新态（多进程安全，与 get_state 同口径）。纯读，不写盘。"""
+        self.state = load_state()
+        self.draft = self.state["draft"]
+        return self.state
+
+    def _material_by_id(self, mid):
+        for m in (self.state.get("materials") or []):
+            if isinstance(m, dict) and m.get("uid") == mid:
+                return m
+        return None
+
+    def list_tracks(self):
+        """轨道排布主视图：每种类型下每条轨道的片段清单（位置/时长/素材/字幕）。"""
+        self._reload_readonly()
+        draft = self.draft
+        out = []
+
+        def _views(track_type):
+            res = []
+            if track_type == "video":
+                main = draft.get("main") or {}
+                res.append(("video", 0, main.get("segs", [])))
+                cnt = 1
+                for tr in draft.get("overlay", []):
+                    if (tr.get("type") or "video") == "video":
+                        res.append(("video", cnt, tr.get("segs", [])))
+                        cnt += 1
+            elif track_type == "audio":
+                for i, a in enumerate(draft.get("audio", [])):
+                    res.append(("audio", i, (a or {}).get("segs", [])))
+            else:
+                cnt = 0
+                for tr in draft.get("overlay", []):
+                    if (tr.get("type") or "") == track_type:
+                        res.append((track_type, cnt, tr.get("segs", [])))
+                        cnt += 1
+            return res
+
+        for track_type in ("video", "audio", "text", "sticker", "effect"):
+            for tt, ti, segs in _views(track_type):
+                seg_views = []
+                for idx, s in enumerate(segs or []):
+                    seg_views.append({
+                        "idx": idx, "id": s.get("id"),
+                        "start_us": s.get("start"), "dur_us": s.get("duration"),
+                        "material_id": s.get("material_id"),
+                        "text": s.get("text") if track_type == "text" else None,
+                        "effect_type": s.get("effect_type") if track_type == "effect" else None,
+                    })
+                out.append({"track_type": tt, "ti": ti, "segs": seg_views})
+        return out
+
+    def get_track_text(self, track_index):
+        """读取某条文本轨的全部字幕：[{idx, start_us, dur_us, text}]。"""
+        self._reload_readonly()
+        cnt = 0
+        for tr in self.draft.get("overlay", []):
+            if (tr.get("type") or "") == "text":
+                if cnt == track_index:
+                    return [{"idx": i, "start_us": s.get("start"),
+                             "dur_us": s.get("duration"), "text": s.get("text")}
+                            for i, s in enumerate(tr.get("segs", []) or [])]
+                cnt += 1
+        return []
+
+    def get_segment_detail(self, track_type, track_index, index):
+        """单段聚焦详情：位置/入出点/素材元数据/特效。"""
+        self._reload_readonly()
+        segs = _track_segs(self.draft, track_type, track_index)
+        if not segs or index < 0 or index >= len(segs):
+            return None
+        s = segs[index]
+        mid = s.get("material_id")
+        mat = self._material_by_id(mid) if mid else None
+        return {
+            "id": s.get("id"), "type": s.get("type"),
+            "start": s.get("start"), "duration": s.get("duration"),
+            "src_start": s.get("src_start"), "src_end": s.get("src_end"),
+            "material_id": mid, "material": mat,
+            "animations": s.get("animations"),
+            "effect_type": s.get("effect_type"), "target": s.get("target"),
+        }
+
+    def get_effects(self):
+        """列出当前所有已放置的特效（紧凑）。"""
+        self._reload_readonly()
+        out = []
+        for i, tr in enumerate(self.draft.get("overlay", [])):
+            if (tr.get("type") or "") == "effect":
+                for j, s in enumerate(tr.get("segs", []) or []):
+                    out.append({
+                        "track_index": i, "index": j, "id": s.get("id"),
+                        "effect_type": s.get("effect_type"), "target": s.get("target"),
+                        "start_us": s.get("start"), "dur_us": s.get("duration"),
+                        "params": s.get("params"),
+                    })
+        return out
+
+    def get_material_peaks(self, path, max_points=240):
+        """素材级波形包络（整段）。无音频返回 has_audio=false。"""
+        peaks = _extract_audio_peaks(path)
+        if not peaks:
+            return {"peaks": [], "has_audio": False, "points": 0}
+        if max_points and len(peaks) > max_points:
+            step = len(peaks) / float(max_points)
+            peaks = [peaks[int(k * step)] for k in range(max_points)]
+        return {"peaks": [round(p, 3) for p in peaks], "has_audio": True, "points": len(peaks)}
+
+    def get_segment_peaks(self, track_type, track_index, index, max_points=240):
+        """片段级波形包络：抽该段 src_start~src_end 区间（近似，密度 60/秒）。"""
+        self._reload_readonly()
+        segs = _track_segs(self.draft, track_type, track_index)
+        if not segs or index < 0 or index >= len(segs):
+            return {"peaks": [], "has_audio": False, "points": 0}
+        s = segs[index]
+        mid = s.get("material_id")
+        mat = self._material_by_id(mid) if mid else None
+        path = (mat or {}).get("path") or s.get("path")
+        if not path:
+            return {"peaks": [], "has_audio": False, "points": 0}
+        peaks = _extract_audio_peaks(path)
+        if not peaks:
+            return {"peaks": [], "has_audio": False, "points": 0}
+        density = 60.0
+        src_start = s.get("src_start") or 0
+        src_end = s.get("src_end")
+        if src_end is None and s.get("duration") is not None:
+            src_end = src_start + s.get("duration")
+        if src_end is not None:
+            a = max(0, int(src_start / 1e6 * density))
+            b = min(len(peaks), int(src_end / 1e6 * density))
+            if b > a:
+                peaks = peaks[a:b]
+        if max_points and len(peaks) > max_points:
+            step = len(peaks) / float(max_points)
+            peaks = [peaks[int(k * step)] for k in range(max_points)]
+        return {"peaks": [round(p, 3) for p in peaks], "has_audio": True, "points": len(peaks)}
 
     def import_media(self):
         """弹系统文件选择框，把选中的文件复制进 assets/，返回素材信息列表。"""

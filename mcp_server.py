@@ -380,14 +380,14 @@ def list_tracks() -> str:
     """轨道排布主视图：每种类型（video/audio/text/image/sticker/effect）下每条轨道的片段清单
     （位置 start_us、时长 dur_us、素材引用 material_id、字幕文本）。紧凑返回（约几 KB），
     替代全量 get_state，让 agent 一眼看懂"时间轴现在排了什么"。"""
-    return json.dumps(sr.list_tracks(), ensure_ascii=False, indent=2)
+    return json.dumps(api.list_tracks(), ensure_ascii=False, indent=2)
 
 
 @mcp.tool()
 def get_track_text(track_index: int) -> str:
     """读取某条文本轨的全部字幕：[{idx, start_us, dur_us, text}]。
     字幕/花字/校字类 skill 直接吃这个，不用读全量草稿。track_index 为文本轨序号（0 起）。"""
-    return json.dumps(sr.get_track_text(track_index), ensure_ascii=False, indent=2)
+    return json.dumps(api.get_track_text(track_index), ensure_ascii=False, indent=2)
 
 
 @mcp.tool()
@@ -395,13 +395,13 @@ def get_segment_detail(track_type: str, track_index: int, index: int) -> str:
     """单段聚焦详情：该片段的时间轴位置、源素材入出点(src_start/end)、关联素材元数据、
     以及挂在它身上的特效。对应"特效怎么放"的查询。
     track_type: video/audio/text；track_index: 该类型内轨道序号；index: 段序号。"""
-    return json.dumps(sr.get_segment_detail(track_type, track_index, index), ensure_ascii=False, indent=2)
+    return json.dumps(api.get_segment_detail(track_type, track_index, index), ensure_ascii=False, indent=2)
 
 
 @mcp.tool()
 def get_effects() -> str:
     """列出当前所有已放置的特效（紧凑）。agent 查"现在挂了哪些特效"用这个。"""
-    return json.dumps(sr.get_effects(), ensure_ascii=False, indent=2)
+    return json.dumps(api.get_effects(), ensure_ascii=False, indent=2)
 
 
 @mcp.tool()
@@ -418,7 +418,7 @@ def get_material_peaks(path: str, max_points: int = 240) -> str:
     """素材级波形包络（整段），跳切/静音检测 skill 判断"哪里该剪"的输入。
     path 可为视频（取音轨）或音频文件。返回 {peaks:归一化RMS列表, has_audio:是否有音轨, points:点数}。
     无音频（如静音 B-roll）时 peaks=[] 且 has_audio=false，便于 agent 区分。"""
-    return json.dumps(sr.get_material_peaks(path, max_points), ensure_ascii=False)
+    return json.dumps(api.get_material_peaks(path, max_points), ensure_ascii=False)
 
 
 @mcp.tool()
@@ -427,7 +427,7 @@ def get_segment_peaks(track_type: str, track_index: int, index: int, max_points:
     对应 8-12 铁律的 get_segment_peaks(track_type,ti,idx)。
     返回 {peaks, has_audio, points}，语义同 get_material_peaks。
     track_type: video/audio/text；track_index: 轨道序号；index: 段序号。"""
-    return json.dumps(sr.get_segment_peaks(track_type, track_index, index, max_points), ensure_ascii=False)
+    return json.dumps(api.get_segment_peaks(track_type, track_index, index, max_points), ensure_ascii=False)
 
 
 @mcp.tool()

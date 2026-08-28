@@ -1171,7 +1171,9 @@ function findSeg(type, ti, idx) {
   const segs = draftSegs(type, ti);
   return segs && segs[idx] ? segs[idx] : null;
 }
-// 统一轨道高度（像素），与 CSS --track-h 保持一致。个别轨道不再单独拉高——
+// 统一轨道高度默认值（像素）。实际逐类型高度由 timeline.js 的 trackHeightOf() 计算
+// （video=65/audio=50/text=25/sticker=25/effect=25，对齐 OpenCut layout.ts），CSS 亦按 data-type 设高。
+// 本常量仅作未识别类型的回退默认，不用于布局计算（L2-26）。
 // 上下区域的整体高度分配改由「上半区 / 下半区」之间的分隔条控制（见 initSplit）。
 const TRACK_H = 48;
 
@@ -4312,6 +4314,8 @@ function bindEvents() {
 }
 
 /* ---------- 从后端拉取最新状态填入 Store ---------- */
+let _refreshSeq = 0;   // L2-23 A-2：refresh 乱序串行化——只接受最新响应的回填，旧响应到达即丢弃
+
 function refresh() {
   // Refresh Lock（C2 上移 InteractionManager）：任何交互会话期间禁止 refresh——
   // 否则 500ms 轮询替换 Store.state.draft 会覆盖交互预览/引发引用竞态。锁期间缓存请求，会话结束补刷。
@@ -4336,11 +4340,19 @@ function refresh() {
   }
   // 2f version 门控：仅当已持有 version 且未变时向后端要轻量响应（他人改动才全量拉取）
   const sv = (ENABLE_VERSION_GATING && _lastPolledVersion != null) ? _lastPolledVersion : null;
+  const mySeq = ++_refreshSeq;   // L2-23 A-2：标记本次 refresh 序号
   return call("get_state", sv).then(st => {
     if (!st) return;
+    if (mySeq !== _refreshSeq) return;   // 乱序：已有更新的 refresh 发起，丢弃本次过期响应，避免「旧覆新」
     // 2f：version 未变，后端返回 {unchanged:true}，跳过整树重渲染（轮询 2s 无感知的关键）
     if (st.unchanged) { _lastPolledVersion = st.version; return; }
     _lastPolledVersion = st.version;
+    // L2-23 A-1：空稿防御——get_state 偶发返回半写文件(无 draft)时，保留现有素材不覆盖，
+    // 避免 #516 素材面板全清空；合法空库(st.draft 结构完整)不受影响。
+    if (Store.state.materials.length > 0 && !st.draft) {
+      console.warn("[#516-guard] get_state 返回空稿(读盘竞态)，保留现有素材", st.version);
+      return;
+    }
     const m = {};
     const wm = {};
     (st.materials || []).forEach(x => { if (x.thumbnail) m[x.path] = x.thumbnail; else if (x.type === "image") m[x.path] = x.path; if (x.peaks) wm[x.path] = x.peaks; });
