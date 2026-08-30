@@ -1221,7 +1221,10 @@ class CommandManager:
         # 仅在真实变更时运行（避免无操作也 bump domain_version）；幂等，不改三桶组织。
         if ok and Api._op_changed:
             _run_enforce_pipeline(api, cmd_id)
-            save_state(api.state)
+            # ⑧-B(2026-08-29)：save_state 改 record=False——写操作 fn 内部已 save_state(record=True)  bump 过
+            # domain_version；此处再 record=True 会「一次操作 dv 跳 2 格」且多压一条 snapshot，使撤销版本门控
+            # disk_dv≠cmd.dv_after 误判"外部已改"→ 只能撤一步。record=False 只落盘不 bump：dv 连续、一步一命令。
+            save_state(api.state, record=False)
             cmd.dv_after = api.state.get("domain_version", 0)
         # 2d：事务内续期——**任一步**（含无改动步）都刷新 created_at，长事务/AI 批量不误 abort。
         # 必须在 op_changed 判断之外，否则无改动的步骤不续期。
@@ -1356,12 +1359,17 @@ class CommandManager:
             # 2c version 门控：外部改动检测（仅 record=True 的真实领域改动会 bump domain_version；
             # 自身 undo/redo 走 record=False 不 bump → 不匹配一定是外部写入）。
             disk_dv = api.state.get("domain_version", 0)
-            if disk_dv != cmd.dv_after:
+            # ⑧-B(2026-08-29)：版本门控放宽——仅当 disk_dv 明显领先(>cmd.dv_after+1)才判定真·外部改动而拒绝；
+            # 否则(dv 不连续/差 1 格，多为历史双推/dv 记账噪声)软提示并仍执行撤销，恢复多步撤销。
+            if disk_dv > cmd.dv_after + 1:
                 print("[UNDO-CONFLICT] disk_dv=%s cmd_dv_after=%s cmd=%s source=%s hist=%d" %
                       (disk_dv, cmd.dv_after, cmd.cmd_id, getattr(cmd, "source", "?"), len(self.history)))
                 return {"ok": False, "conflict": True,
                         "error": "外部已改动草稿，撤销会丢失他人修改（先同步/另存再撤销）",
                         "disk_dv": disk_dv, "cmd_dv": cmd.dv_after}
+            if disk_dv != cmd.dv_after:
+                print("[UNDO-DV-WARN] disk_dv=%s cmd_dv_after=%s cmd=%s source=%s hist=%d（dv 不连续，仍执行撤销）" %
+                      (disk_dv, cmd.dv_after, cmd.cmd_id, getattr(cmd, "source", "?"), len(self.history)))
             cmd = self.history.pop()
             if selection is not None:
                 cmd.selection_after = selection   # 撤销前那一刻的选中（=本命令执行后的选中），redo 用
@@ -1387,12 +1395,16 @@ class CommandManager:
             disk_dv = api.state.get("domain_version", 0)
             # 2c 修复：redo 前状态 = 本命令执行前（dv_before），检测基准用 dv_before 而非 dv_after，
             # 否则与 undo 回退后的 domain_version 永远不匹配 → redo 第一次就永久冲突。
-            if disk_dv != cmd.dv_before:
+            # ⑧-B(2026-08-29)：门控放宽——仅 disk_dv>cmd.dv_before+1 才拒，否则软提示仍执行。
+            if disk_dv > cmd.dv_before + 1:
                 print("[REDO-CONFLICT] disk_dv=%s cmd_dv_before=%s cmd=%s source=%s redo=%d" %
                       (disk_dv, cmd.dv_before, cmd.cmd_id, getattr(cmd, "source", "?"), len(self.redo_stack)))
                 return {"ok": False, "conflict": True,
                         "error": "外部已改动草稿，重做会丢失他人修改（先同步/另存再重做）",
                         "disk_dv": disk_dv, "cmd_dv": cmd.dv_before}
+            if disk_dv != cmd.dv_before:
+                print("[REDO-DV-WARN] disk_dv=%s cmd_dv_before=%s cmd=%s source=%s redo=%d（dv 不连续，仍执行重做）" %
+                      (disk_dv, cmd.dv_before, cmd.cmd_id, getattr(cmd, "source", "?"), len(self.redo_stack)))
             cmd = self.redo_stack.pop()
             if selection is not None:
                 cmd.selection_before = selection  # 重做前那一刻的选中（=撤销后的选中），下次 undo 还原
@@ -3695,9 +3707,29 @@ class Api:
             start = max(0, int(at_time_us))
         else:
             start = sum(s["duration"] for s in segs)
-        # 同轨不重叠（2026-08-18 用户反馈「素材叠到另一素材上」）：落点被占用 → 自动推到该轨最近空位
-        if any(_segments_overlap({"start": start, "duration": duration}, s) for s in segs):
-            start = _free_start_on_track(segs, start, duration)
+        # 同轨不重叠（2026-08-18 用户反馈「素材叠到另一素材上」）。
+        # ⚠️ 2026-08-30 路C对齐（F2 / B-01 回弹）：仅 drop 路径（track_tid 命中已有轨）走
+        # 「占用即新建同类型轨」——永不右推避让，对齐 OpenCut resolveTrackPlacement 语义。
+        # paste/relocate 各自直接调 _free_start_on_track 右推安全网，不经此分支，不受影响。
+        if track_tid and any(_segments_overlap({"start": start, "duration": duration}, s) for s in segs):
+            arr_idx = idx if track_type == "audio" else _overlay_index(self.draft, track_type, idx)
+            if arr_idx < 0:  # 主场景（video ti=0）无处可插 → 追加到 overlay 末尾
+                arr_idx = len(self.draft.get("overlay", []))
+            new_arr = _insert_track(self.draft, track_type, arr_idx)
+            if track_type == "audio":
+                segs = self.draft["audio"][new_arr]["segs"]
+                idx = new_arr
+            else:
+                segs = self.draft["overlay"][new_arr]["segs"]
+                # 重算类型内 idx（video 覆盖轨从 1 起，其他 0 起），供后续 append / 返回 track_index 使用
+                _cnt = 0
+                for _k, _tr in enumerate(self.draft.get("overlay", [])):
+                    if _k == new_arr:
+                        break
+                    if _tr.get("type") == track_type:
+                        _cnt += 1
+                idx = _cnt + (1 if track_type == "video" else 0)
+            start = max(0, int(at_time_us)) if at_time_us is not None else 0
         seg = {
             "id": uuid.uuid4().hex,   # A 方案：新段必须带稳定 id（拖动/选中/提交按 id 定位，不受 ti 漂移影响）
             "name": name,

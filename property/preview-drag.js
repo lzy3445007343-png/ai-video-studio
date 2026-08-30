@@ -119,6 +119,9 @@ class DragSession extends GestureSession {
     c.el.style.left = (pos.x - w / 2) + "px";
     c.el.style.top = (pos.y - h / 2) + "px";
     c.el.style.transform = "scale(" + t.sx + "," + t.sy + ") rotate(" + t.r + "deg)";
+    // 2026-08-29 修复：拖位置时白框/手柄实时跟随素材（此前 DragSession 未刷新 overlay，
+    // 且 renderTransformHandles 在 activeSession 期间直接 return，导致素材走了白框留原地）。
+    if (typeof renderTransformHandles === "function") renderTransformHandles();
     if (e.cancelable) e.preventDefault();
   }
   onPointerUp(e) {
@@ -142,9 +145,13 @@ class DragSession extends GestureSession {
     const k = c.key.split(":");
     const args = { track_type: k[0], track_index: +k[1], index: +k[2] };
     const paths = ["transform.positionX", "transform.positionY"];
-    // L1-09（分支 A，对齐 OpenCut）：Player 拖动只改 base transform，不自动打关键帧。
-    // 有动画通道的段：base 改变但通道插值优先（播放头处画面由 KF 决定），符合 OpenCut"拖-only-base"语义。
     const seg = c.seg;
+    // ★ #B-04/#1 修复（2026-08-29，audit_log 为证）：KF 段拖拽"弹回"根因=只写 base，
+    //   播放头处画面由 KF 插值决定→拖了看不见（用户 13:31 会话：拖 14 次每次只写 base、从不碰 KF）。
+    //   修复：positionX/Y 有动画通道时，拖拽同步更新「当前播放头 localUs」的关键帧（无则新建），
+    //   松手后播放头处显示=拖后值→不再弹回。base 仍同步写（非KF时刻/参数面板一致）。
+    const localUs = (c.editCtx && c.editCtx.editTime) ? c.editCtx.editTime.localUs : _previewLocalUs(seg);
+    const kfPaths = paths.filter(p => _previewHasAnim(seg, p));
     setProperties(seg, {
       "transform.positionX": nx,
       "transform.positionY": ny,
@@ -159,9 +166,19 @@ class DragSession extends GestureSession {
       opacity: (typeof getProperty === "function") ? getProperty(seg, "transform.opacity") : (tr.opacity != null ? tr.opacity : 1),
     };
     // 位置参数经 execute 包装：execute(cmd_id, args_dict) → fn(**args)——args 键名=Python 签名参数名
-    CommandService.withTx("drag-transform", () => CommandService.run("update_segment_transform", Object.assign({}, args, {
-      segid: c.target.id, transform: next,
-    }), { actor: "ui", paths }), { onError: e => console.error("[preview-drag] 写 transform 失败:", e) });
+    CommandService.withTx("drag-transform", () => {
+      CommandService.run("update_segment_transform", Object.assign({}, args, {
+        segid: c.target.id, transform: next,
+      }), { actor: "ui", paths });
+      // KF 通道：拖拽更新当前播放头关键帧（add_keyframe 严格同帧更新已有 KF，否则新建）
+      for (const p of kfPaths) {
+        const v = (p === "transform.positionX") ? nx : ny;
+        CommandService.run("add_keyframe", {
+          track_type: k[0], track_index: +k[1], index: +k[2],
+          path: p, time_us: localUs, value: v, seg_mode: "linear", seg_id: c.target.id,
+        }, { actor: "ui" });
+      }
+    }, { onError: e => console.error("[preview-drag] 写 transform/KF 失败:", e) });
   }
   cancel() { hidePreviewSnapGuides(); this._snapLines = null; if (this.ctx && this.ctx.target) PreviewState.discardPreview(this.ctx.target.id); }  // L1-06/L0-03：不落库，丢弃 overlay + 对齐线
   destroy() {

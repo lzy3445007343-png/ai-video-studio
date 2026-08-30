@@ -202,21 +202,30 @@
     const anims = s.animations || {};
     const hit = paths.some(p => KfChannel.hitAtPlayhead(s, p, local));
     if (hit) {
-      paths.forEach(p => {
-        const keys = (anims[p] && anims[p].keys) ? anims[p].keys : [];
-        const hk = keys.find(kk => Math.abs((kk.t || 0) - local) <= KfChannel.KF_HIT_TOLERANCE_US);
-        if (hk) call("remove_keyframe", ...args, p, hk.id, segId, Store.state.playheadUs);
+      // [2026-08-30 修复] 原裸 call 绕过 CommandService；改同事务原子删。
+      CommandService.withTx("graphic-color-toggle-rm", () => {
+        paths.forEach(p => {
+          const keys = (anims[p] && anims[p].keys) ? anims[p].keys : [];
+          const hk = keys.find(kk => Math.abs((kk.t || 0) - local) <= KfChannel.KF_HIT_TOLERANCE_US);
+          if (hk) CommandService.run("remove_keyframe",
+            { track_type: k[0], track_index: +k[1], index: +k[2], path: p, keyframe_id: hk.id, seg_id: segId, playhead_us: Store.state.playheadUs },
+            { actor: "ui", paths: [p] });
+        });
       });
       setTimeout(() => refresh(), 60);
     } else {
       const cur = resolveGraphicColorAtTime(s, pathBase, local);
       const { r, g, b, a } = hexToParamsColor(cur);
       const vals = [r, g, b, a];
-      const run = i => {
-        if (i >= 4) { setTimeout(() => refresh(), 60); return; }
-        call("add_keyframe", ...args, paths[i], local, vals[i], "linear", segId).then(() => run(i + 1));
-      };
-      CommandService.withTx("graphic-color-kf", () => run(0));
+      // [2026-08-30 修复] 原 call(...).then() 递归链非原子（withTx 在异步链前关闭）。改同步 for 循环四写，同事务原子提交。
+      CommandService.withTx("graphic-color-kf", () => {
+        for (let i = 0; i < 4; i++) {
+          CommandService.run("add_keyframe",
+            { track_type: k[0], track_index: +k[1], index: +k[2], path: paths[i], time_us: local, value: vals[i], seg_mode: "linear" },
+            { actor: "ui", paths: [paths[i]] });
+        }
+      });
+      setTimeout(() => refresh(), 60);
     }
   }
   function resolveGraphicColorAtTime(s, pathBase, local) {

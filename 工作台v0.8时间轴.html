@@ -3,24 +3,32 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="0">
 <title>AI剪辑工作台 v0.9 (v0819-2214)</title>
 <style>
+  /* P0 换肤（2026-08-28，照 OpenCut 复刻版）：中性色一律饱和度 0 的纯灰阶，
+     仅 --primary 保留彩度。带色偏的灰显脏，纯灰显干净——这是"高级感"的主要来源。 */
   :root {
-    --bg: #1a1a1e;
-    --panel: #232329;
-    --panel-2: #2b2b32;
-    --border: #383842;
-    --text: #e6e6ea;
-    --muted: #9a9aa6;
-    --primary: #3da9ff;
-    --primary-dim: #2b7fc4;
-    --seg-video: #3a5a40;
-    --seg-audio: #4a3a5a;
-    --seg-text: #4a4a2a;
-    --seg-effect: #2a5a5a;   /* 特效轨段：青绿，区分于视频(绿)/音频(紫)/文本(橄榄) */
+    --bg: #0d0d0d;          /* hsl(0,0%,5%)   */
+    --panel: #141414;       /* hsl(0,0%,8%)   */
+    --panel-2: #1a1a1a;     /* hsl(0,0%,10%)  */
+    --border: #262626;      /* hsl(0,0%,15%)  ← 原值偏亮且带蓝紫，满屏亮线把画面切碎 */
+    --text: #ededed;        /* hsl(0,0%,93%)  */
+    --muted: #8a8a8a;       /* hsl(0,0%,54%)  */
+    --primary: #16a9f3;     /* hsl(200,90%,52%) 原 #3da9ff，G 通道同为 a9，几乎无差 */
+    --primary-dim: #0f7fb8;
+    --seg-video: #2e2e2e;   /* OpenCut video 轨 transparent 靠缩略图；无缩略图时留淡底可见 */
+    --seg-audio: #8F5DBA;   /* 对齐 OpenCut theme.ts，原 #4a3a5a 太暗 */
+    --seg-text: #5DBAA0;    /* 对齐 OpenCut theme.ts，原 #4a4a2a 太暗 */
+    --seg-effect: #5d93ba;  /* 特效轨段：对齐 OpenCut theme.ts（原 #2a5a5a 青绿偏暗） */
+    --seg-sticker: #BA5D7A; /* P4 补：复刻 theme.ts 的 graphic 轨色，sticker 之前一直没定义 */
+    --panel-accent: #262626;/* hsl(0,0%,15%) 复刻 body.dark --panel-accent：选中行的中性微亮底 */
   --wave: #c9b6f5;        /* 音频波形条颜色（亮紫，衬深紫音频轨） */
     --track-h: 48px;
-    --label-w: 132px;
+    --label-w: 112px;       /* 对齐 OpenCut 轨道标签列（原 132px），多 20px 给轨道内容 */
+    --topbar-h: 54.4px;     /* 对齐 OpenCut editor-header h-[3.4rem]（原 48px） */
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   html, body { height: 100%; }
@@ -30,6 +38,9 @@
     overflow: hidden; user-select: none;
   }
   button { font-family: inherit; color: inherit; cursor: pointer; border: none; background: none; }
+  /* P2 图标规范：与 OpenCut-UI-复刻.html 完全一致。必须加在 .ic 上——<use> 引用的 symbol
+     不继承外层 <svg> 根的 stroke/fill/stroke-width；缺了这条，图标会黑成一团或只剩黑点。 */
+  .ic { width:16px; height:16px; stroke:currentColor; fill:none; stroke-width:1.5; stroke-linecap:round; stroke-linejoin:round; flex:none; }
 
   .app {
     display: flex; flex-direction: column;
@@ -41,13 +52,13 @@
     display: flex; flex-direction: row;
     overflow: hidden;
   }
-  .topbar { position: relative; flex: none; height: 48px; display: flex; align-items: center; gap: 10px; padding: 0 12px;
+  .topbar { position: relative; flex: none; height: var(--topbar-h, 54.4px); display: flex; align-items: center; gap: 10px; padding: 0 12px;
     background: var(--panel); border-bottom: 1px solid var(--border); }
   .topbar .title { font-weight: 600; font-size: 13px; }
   .topbar .spacer { flex: 1; }
   .topbar .logo-btn { width: 28px; height: 28px; flex: none; border-radius: 6px; border: 1px solid var(--border);
     background: var(--panel-2); color: var(--muted); font-size: 15px; line-height: 1; cursor: pointer; }
-  .topbar .logo-btn:hover { background: #2a2e37; color: var(--text); }
+  .topbar .logo-btn:hover { background: #2a2a2a; color: var(--text); }
   .topbar .title-input { width: 180px; font-weight: 600; font-size: 13px; color: var(--text);
     border: 1px solid transparent; border-radius: 4px; padding: 2px 6px; background: transparent; cursor: pointer; }
   .topbar .title-input:hover { border-color: var(--border); }
@@ -66,13 +77,17 @@
   .degraded-banner button:hover { background: var(--panel); color: var(--text); }
   .topbar .btn { background: var(--panel-2); border: 1px solid var(--border); padding: 5px 12px;
     border-radius: 6px; font-size: 12px; }
-  .topbar .btn:hover { background: #34343c; }
-  .topbar .btn.primary { background: var(--primary-dim); border-color: var(--primary); }
+  .topbar .btn:hover { background: #2a2a2a; }
+  .topbar .btn.primary { background: var(--primary-dim); border-color: var(--primary); display: flex; align-items: center; gap: 5px; }
+  /* P2（2026-08-28）顶栏次要按钮图标化，主操作（导出）保留文字——OpenCut 顶栏也是这个比例 */
+  .topbar .btn.ibtn { width: 30px; height: 30px; padding: 0; display: flex; align-items: center; justify-content: center; }
+  .topbar .btn.ibtn .btn-lbl { display: none; }
   .mcp-pill { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
   .mcp-dot { width: 8px; height: 8px; border-radius: 50%; background: #888; }
   .mcp-dot.on { background: #4ade80; }
 
-  .assets { width: var(--assets-w, 250px); flex: none; background: var(--panel); border-right: 1px solid var(--border);
+  /* P1（2026-08-28）px → 百分比：换窗口/显示器后比例不再失调。min-width 兜底防小屏挤压 */
+  .assets { width: var(--assets-w, 19%); min-width: 200px; flex: none; background: var(--panel); border-right: 1px solid var(--border);
     position: relative;
     display: flex; flex-direction: column; overflow: hidden; min-height: 0; }
   .assets .head { display: flex; align-items: center; gap: 8px; padding: 10px; border-bottom: 1px solid var(--border); }
@@ -91,7 +106,9 @@
   .media-list-wrapper::-webkit-scrollbar-track { background: transparent; }
   .media-list-wrapper::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
   .media-list-wrapper::-webkit-scrollbar-thumb:hover { background: var(--muted); }
-  .media-list { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; padding: 8px 10px; align-content: start; }
+  /* P3（2026-08-28）对齐 OpenCut：repeat(auto-fill, 7rem)=112px 自适应填充。
+     原来写死 1fr 1fr 两列——面板拉宽时浪费横向空间，拉窄时又挤成一条。 */
+  .media-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(112px, 1fr)); gap: 8px; padding: 8px 10px; align-content: start; }
   /* L2-15 空状态引导（复用于 L2-19 占位 tab） */
   .media-empty { grid-column: 1 / -1; display: flex; flex-direction: column; align-items: center; justify-content: center;
     gap: 8px; padding: 40px 16px; text-align: center; color: var(--muted); }
@@ -142,10 +159,10 @@
   /* L2-16 素材工具栏（视图切换 / 排序） */
   .assets .head .head-spacer { flex: 1; }
   .asset-tools { display: flex; align-items: center; gap: 4px; }
-  .asset-tools .tool-btn { width: 26px; height: 26px; display: flex; align-items: center; justify-content: center;
+  .asset-tools .tool-btn { width: 26px; height: 26px; display: flex; align-items: center; justify-content: center; color: #fff;
     border-radius: 6px; border: 1px solid var(--border); background: var(--panel-2); color: var(--muted); cursor: pointer; }
   .asset-tools .tool-btn svg { width: 15px; height: 15px; pointer-events: none; }
-  .asset-tools .tool-btn:hover { background: #34343c; color: var(--text); }
+  .asset-tools .tool-btn:hover { background: #2a2a2a; color: var(--text); }
   .asset-tools .tool-btn.active { color: var(--primary); border-color: var(--primary); }
   /* L2-16 多选态 / 列表视图 / 行内类型标签 */
   .media-card.multi-sel { outline: 2px solid var(--primary); outline-offset: -2px; }
@@ -181,7 +198,7 @@
   .preview-snap-guides { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 5; overflow: visible; }
   .track.drop-disabled { box-shadow: inset 0 0 0 2px #ff4d4f; background: #ff4d4f18; }
 
-  .preview { flex: 1; min-height: 0; min-width: 0; background: #0e0e10; display: flex; flex-direction: column; overflow: hidden; }
+  .preview { flex: 1; min-height: 0; min-width: 0; background: #0a0a0a; display: flex; flex-direction: column; overflow: hidden; }
   .preview .stage { flex: 1; display: flex; align-items: center; justify-content: center; position: relative; overflow: hidden; }
   .preview .preview-stack { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
     display: flex; align-items: center; justify-content: center; }
@@ -193,22 +210,39 @@
   .preview .placeholder { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:10px; text-align:center; color: var(--muted); font-size: 13px; }
   .preview .placeholder .placeholder-icon { opacity:0.5; }
   .preview .controls { display: flex; align-items: center; gap: 12px; padding: 8px 14px;
-    border-top: 1px solid var(--border); background: var(--panel); }
+    border-top: 1px solid var(--border); background: var(--panel); position: relative; }
+  /* P2（2026-08-28）控制条瘦身：画幅 6 连按钮 + 缩放 4 连控件塞不进 OpenCut 那种 4 项控制条，
+     按用户拍板收成两个弹出菜单。原 DOM/id 保留，这里只新增触发按钮与浮层样式。 */
+  .preview .controls .ctl-btn { display: flex; align-items: center; gap: 5px; height: 26px; padding: 0 8px;
+    border-radius: 5px; background: transparent; border: 1px solid transparent; color: #fff;
+    font-size: 11px; cursor: pointer; white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .preview .controls .ctl-btn:hover { background: #2a2a2a; color: var(--text); }
+  .preview .controls .ctl-btn.on { background: #2a2a2a; color: var(--text); }
+  .preview .controls .ctl-btn svg { width: 14px; height: 14px; flex: none; }
+  .preview .controls .ctl-btn .caret { width: 11px; height: 11px; opacity: .65; }
+  .preview .controls .ctl-pop { position: absolute; bottom: 100%; margin-bottom: 8px; z-index: 1200;
+    background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 10px;
+    box-shadow: 0 10px 28px rgba(0,0,0,.55); }
+  #aspectMenu { right: 78px; }
+  #zoomMenu { right: 10px; }
+  .preview .controls .ctl-pop .aspect-group,
+  .preview .controls .ctl-pop .zoom-group { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; max-width: 230px; margin-left: 0; }
+  .preview .controls .ctl-pop .zoom-slider { width: 130px; }
   .preview .controls .play,
   .preview .controls .mute { width: 30px; height: 30px; border-radius: 50%; background: var(--panel-2);
     border: 1px solid var(--border); font-size: 13px; line-height: 1; }
   .preview .controls .play:hover,
-  .preview .controls .mute:hover { background: #34343c; }
+  .preview .controls .mute:hover { background: #2a2a2a; }
   .preview .controls .mute.muted { background: #ff4d4f22; border-color: #ff4d4f55; }
   /* L2-13：音量按钮 + 音量滑块 + 循环开关 */
   .preview .controls .vol { width: 30px; height: 30px; border-radius: 50%; background: var(--panel-2);
     border: 1px solid var(--border); font-size: 13px; line-height: 1; cursor: pointer; }
-  .preview .controls .vol:hover { background: #34343c; }
+  .preview .controls .vol:hover { background: #2a2a2a; }
   .preview .controls .vol.muted { background: #ff4d4f22; border-color: #ff4d4f55; }
   .preview .controls .vol-slider { width: 64px; height: 14px; accent-color: var(--primary); }
   .preview .controls .loop { width: 30px; height: 30px; border-radius: 50%; background: var(--panel-2);
     border: 1px solid var(--border); font-size: 13px; line-height: 1; cursor: pointer; }
-  .preview .controls .loop:hover { background: #34343c; }
+  .preview .controls .loop:hover { background: #2a2a2a; }
   .preview .controls .loop.active { background: var(--primary); color: #fff; border-color: var(--primary); }
   .preview .controls .aspect-group { display: flex; align-items: center; gap: 3px; margin-left: auto; }
   .preview .controls .asp-btn { padding: 3px 8px; font-size: 11px; line-height: 1; border-radius: 4px;
@@ -223,7 +257,7 @@
   .preview .controls .zoom-pct { color: var(--muted); font-size: 11px; min-width: 38px; text-align: center; font-variant-numeric: tabular-nums; }
   .preview .controls .zoom-sep { width:1px; height:16px; background:#ffffff22; margin:0 4px; }
   /* L2-12：预览面板伪全屏——CSS 方案确定性最高，不依赖 pywebview 原生桥 */
-  .preview.fs-active { position: fixed; inset: 0; z-index: 1000; background: #0e0e10; }
+  .preview.fs-active { position: fixed; inset: 0; z-index: 1000; background: #0a0a0a; }
   .preview.fs-active .controls { z-index: 1001; position: relative; }
   #canvasFrame { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
     border: 1px solid #ffffff2e; pointer-events: none; z-index: 5;
@@ -236,7 +270,7 @@
   .preview .tc .tc-cur { color: var(--text); cursor: text; }
   .preview .tc .tc-sep { color: var(--muted); margin: 0 4px; }
   .preview .tc .tc-total { color: var(--muted); font-size: 11px; }
-  .preview .tc .tc-edit { width: 120px; background: #1a1a1e; color: var(--text); border: 1px solid var(--primary); border-radius: 4px; font: inherit; font-size: 12px; text-align: center; padding: 1px 4px; outline: none; }
+  .preview .tc .tc-edit { width: 120px; background: #141414; color: var(--text); border: 1px solid var(--primary); border-radius: 4px; font: inherit; font-size: 12px; text-align: center; padding: 1px 4px; outline: none; }
 
   .skill { width: 220px; flex: none; background: var(--panel); border-left: 1px solid var(--border);
     display: flex; flex-direction: column; overflow: hidden; min-height: 0; }
@@ -348,9 +382,12 @@
   .kf-section-head:hover { border-color: var(--primary); }
   .kf-section.is-collapsed .kf-section-body { display: none; }
   .kf-section-body { padding: 4px 0 0 0; }
-  .kf-pair { display: flex; align-items: center; gap: 4px; margin-bottom: 6px; }
-  .kf-pair .kf-row { flex: 1; min-width: 0; }
+  .kf-pair { display: block; margin-bottom: 2px; }
+  .kf-pair .kf-row { width: 100%; margin-bottom: 4px; }
+  .kf-pair .kf-row:last-child { margin-bottom: 0; }
   .kf-pair-link { color: var(--muted); font-size: 11px; padding: 0 2px; flex: none; cursor: default; user-select: none; }
+  .kf-pair-lock { flex: none; width: 22px; height: 22px; border-radius: 4px; border: 1px solid var(--border); background: var(--panel); color: var(--text); cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 12px; padding: 0; margin-left: 2px; }
+  .kf-pair-lock:hover { border-color: var(--primary); }
   .kf-section .kf-row {
     display: flex; align-items: center; gap: 4px;
     background: var(--panel-2);
@@ -424,16 +461,18 @@
   .kf-sel .del:hover { border-color: #ff6b6b; }
   .kf-hint { font-size: 10px; color: var(--muted); margin-top: 6px; line-height: 1.5; }
 
-  .timeline { flex: none; height: var(--bottom-h, 380px); min-height: 0; background: var(--panel); border-top: 1px solid var(--border);
+  .timeline { flex: none; height: var(--bottom-h, 45%); min-height: 160px; background: var(--panel); border-top: 1px solid var(--border);
     display: flex; flex-direction: column; overflow: hidden; }
   .tl-toolbar { display: flex; align-items: center; gap: 4px; padding: 4px 10px; border-bottom: 1px solid var(--border); overflow-x: auto; scrollbar-width: none; }
   .tl-toolbar::-webkit-scrollbar { display: none; }
-  .tl-toolbar .tool { min-width: 42px; height: 48px; padding: 4px 5px 3px; border-radius: 8px;
-    background: var(--panel-2); border: 1px solid var(--border); color: var(--muted); cursor: pointer; line-height: 1;
-    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; }
-  .tl-toolbar .tool .ic { width: 18px; height: 18px; flex: none; }
-  .tl-toolbar .tool .lbl { font-size: 9px; transform: scale(.95); white-space: nowrap; }
-  .tl-toolbar .tool:hover { background: #34343c; color: var(--text); }
+  /* P2（2026-08-28）工具栏纯图标化：12 个中文标签横排是"不简洁"的主因。
+     <span class="lbl"> 保留在 DOM（可访问性 / 将来可切回），仅 CSS 隐藏；中文提示走 title。 */
+  .tl-toolbar .tool { min-width: 32px; height: 32px; padding: 0; border-radius: 6px;
+    background: transparent; border: 1px solid transparent; color: #fff; cursor: pointer; line-height: 1;
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 0; }
+  .tl-toolbar .tool .ic { width: 17px; height: 17px; flex: none; }
+  .tl-toolbar .tool .lbl { display: none; }
+  .tl-toolbar .tool:hover { background: #2a2a2a; color: #fff; }
   .tl-toolbar .tool.active { color: var(--primary); border-color: var(--primary); background: var(--primary-dim); }
   .tl-toolbar .tool:disabled { opacity: .35; cursor: not-allowed; }
   .tl-toolbar .sep { width: 1px; height: 26px; background: var(--border); margin: 0 3px; flex: none; }
@@ -461,8 +500,11 @@
   .tl-labels::-webkit-scrollbar { display: none; }
   .tl-labels .ruler-spacer { height: 22px; border-bottom: 1px solid var(--border); flex: none; }
   .tl-labels .scrollbar-spacer { flex: none; background: transparent; }
-  .track-label { height: var(--track-h); display: flex; align-items: center; gap: 6px; padding: 0 8px;
-    border-bottom: 1px solid var(--border); }
+  /* P4（2026-08-28）对齐 OpenCut-UI-复刻.html §7 .tl-label：轨道头 = [彩色类型图标][名称][操作按钮组]。
+     分隔线改 transparent（复刻同款）——去掉横向亮线后靠彩色类型图标当每行的视觉锚点，
+     这也是 P0「边框太亮把画面切碎」在时间轴里的同一处病根。 */
+  .track-label { height: var(--track-h); display: flex; align-items: center; gap: 4px; padding: 0 6px;
+    border-bottom: 1px solid transparent; }
   /* L2-26 按类型分轨道标签高度（与 .track 对应类型高度一致，避免错位） */
   .track-label[data-type="video"]   { height: 65px; }
   .track-label[data-type="audio"]   { height: 50px; }
@@ -470,11 +512,18 @@
   .track-label[data-type="sticker"] { height: 25px; }
   .track-label[data-type="effect"]  { height: 25px; }
   .track-label + .track-label { margin-top: 6px; }
-  .track-label .name { flex: 1; font-size: 12px; color: var(--text); white-space: nowrap; overflow: hidden; }
-  .track-label .icon { width: 20px; height: 20px; border-radius: 4px; display: flex; align-items: center;
-    justify-content: center; color: var(--muted); font-size: 12px; cursor: pointer; }
-  .track-label .icon:hover { background: #34343c; color: var(--text); }
-  .track-label .icon.off { color: #ff4d4f; opacity: .75; }
+  /* 类型图标：18x18 容器 + 15px 图标，颜色由 JS 按 track_type 内联（video=中性灰，其余=轨道色） */
+  .track-label .ti { width: 18px; height: 18px; flex: none; display: flex; align-items: center; justify-content: center; }
+  .track-label .ti .ic { width: 15px; height: 15px; }
+  .track-label .name { flex: 1; min-width: 0; font-size: 11px; color: var(--muted); white-space: nowrap;
+    overflow: hidden; text-overflow: ellipsis; }
+  /* 操作按钮组：静音/隐藏/锁定。复刻只有 mute/hide，锁定是我们多的能力 → 保留，同规格 18x18 */
+  .track-label .acts { display: flex; gap: 0; opacity: .75; flex: none; }
+  .track-label .acts .icon { width: 18px; height: 18px; border-radius: 3px; display: flex; align-items: center;
+    justify-content: center; color: var(--text); cursor: pointer; font-size: 12px; }
+  .track-label .acts .icon:hover { background: var(--panel-accent); opacity: 1; }
+  .track-label .acts .icon .ic { width: 12px; height: 12px; }
+  .track-label .acts .icon.off { color: #ff4d4f; opacity: .8; }
 
   .tl-scroll { flex: 1; overflow: auto; position: relative; }
   .tl-content { position: relative; min-width: 100%; }
@@ -485,7 +534,9 @@
   .ruler .tick.minor { height: 8px; top: 20px; border-color: var(--border); opacity: .55; }
   .ruler .tick.major { bottom: 0; }
   .ruler .tick span { position: absolute; top: 6px; left: 4px; font-size: 10px; color: var(--muted); white-space: nowrap; }
-  .track { height: var(--track-h); border-bottom: 1px solid var(--border); position: relative; }
+  /* P4：边框改 transparent（复刻 .track-row{border-bottom:1px solid transparent}）。
+     轨道之间靠片段自身的高度和颜色就能分清，亮分隔线只会把时间轴切成一条条格子。 */
+  .track { height: var(--track-h); border-bottom: 1px solid transparent; position: relative; }
   /* L2-26 按类型分轨道高度（对齐 OpenCut layout.ts；纯前端布局，不改 track_type 枚举） */
   .track[data-type="video"]   { height: 65px; }
   .track[data-type="audio"]   { height: 50px; }
@@ -495,13 +546,19 @@
   .track + .track { margin-top: 6px; }
   .track.track-hidden { opacity: .45; }
   .track.track-muted.audio .seg { opacity: .55; }
-  /* L2-24 选中轨行高亮（柔和强调底，与 drop-target 蓝框视觉区分） */
-  .track.track-selected { background: rgba(46,168,255,.08); }
-  .track .empty-hint { position: absolute; inset: 0; border: 1px dashed var(--border); border-radius: 4px; margin: 4px; }
+  /* L2-24 选中轨行高亮。P4 改中性灰（复刻 .track-row.selected{background:var(--panel-accent)}）——
+     旧版是蓝色 rgba(46,168,255,.08)，在已经有一圈蓝色选中片段描边的轨道区里再铺一层蓝，
+     两处蓝互相抢注意力，反而看不出到底选中了哪一段。 */
+  .track.track-selected { background: var(--panel-accent); }
+  /* P4 对齐复刻 .track-line：空轨道给 2px 虚线 + 「空轨道」字样，否则去掉分隔线后空轨完全看不见 */
+  .track .empty-hint { position: absolute; inset: 0; border: 2px dashed var(--border); border-radius: 3px; margin: 4px;
+    display: flex; align-items: center; justify-content: center; font-size: 10px; color: var(--muted); opacity: .6; }
 
   .tl-content .seg { position: absolute; top: 4px; bottom: 4px; border-radius: 4px; overflow: hidden; z-index: 10;
     box-shadow: 0 0 0 1.5px transparent; cursor: grab; }
-  .seg.sel { box-shadow: 0 0 0 1.5px var(--primary); }
+  /* P4：补 z-index——选中片段的 1.5px 主色描边会被相邻片段盖掉半边（同为 z-index:10，DOM 靠后者居上），
+     表现为「右边的段压住左边选中段的右边框」，看着像描边断了一截。 */
+  .seg.sel { box-shadow: 0 0 0 1.5px var(--primary); z-index: 12; }
   .seg.dragging { opacity: .85; cursor: grabbing; pointer-events: none; }
   .seg.drop-target-seg { box-shadow: 0 0 0 2.5px var(--accent) !important; }
   .seg .fill { position: absolute; inset: 0; background-position: left center; pointer-events: none; }
@@ -509,9 +566,14 @@
   .seg .hdr { position: absolute; top: 0; left: 0; right: 0; height: 18px; display: flex; align-items: center;
     padding: 0 6px; font-size: 10px; color: rgba(255,255,255,.8); background: linear-gradient(to bottom, rgba(0,0,0,.35), transparent);
     pointer-events: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .seg .handle { position: absolute; top: 0; bottom: 0; width: 7px; cursor: ew-resize; background: rgba(61,169,255,.35); }
+  /* P4 对齐复刻 .clip .resize：默认完全透明、hover 半透、选中才明显。
+     旧版是常亮的 7px 蓝条（rgba(61,169,255,.35)）——每段左右各挂一条，一屏十几个片段就是几十条蓝条，
+     这是时间轴显脏、显乱的主因。注意 opacity:0 仍可命中（没有 pointer-events:none），符合 OpenCut 语义。 */
+  .seg .handle { position: absolute; top: 0; bottom: 0; width: 8px; cursor: ew-resize; z-index: 6;
+    background: var(--primary); opacity: 0; transition: opacity .12s ease; }
   .seg .handle.l { left: 0; } .seg .handle.r { right: 0; }
-  .seg .handle:hover { background: rgba(61,169,255,.65); }
+  .seg:hover .handle { opacity: .5; }
+  .seg.sel .handle { opacity: .9; }
   /* 关键帧 marker（2026-08-20，对齐 OpenCut timeline-element.tsx KeyframeIndicator：白色菱形 8x8） */
   /* L2-28（2026-08-27）：时间轴 marker 8→14px，内部 SVG 菱形（fill 跟随 .is-selected）。.seg 已用 overflow:hidden 裁切段外 */
   .seg .kf-marker { position: absolute; top: 50%; width: 14px; height: 14px; background: transparent;
@@ -542,8 +604,11 @@
     box-shadow: 0 0 8px 2px rgba(46,168,255,.55); }
   /* 吸附参考线：拖拽/拖播放头吸附命中时，在吸附点位置贯穿时间轴画一条蓝线（对齐 OpenCut SnapGuides vertical） */
   .snap-guide { position: absolute; top: 0; bottom: 0; width: 2px; background: #4096ff; z-index: 40; pointer-events: none; display: none; box-shadow: 0 0 6px rgba(64,150,255,.85); }
-  .ruler .bm-mark { position: absolute; top: 0; width: 0; height: 15px; border-left: 2px solid var(--bmc, #009dff); transform: translateX(-1px); cursor: pointer; pointer-events: auto; z-index: 12; }
-  .ruler .bm-mark::before { content: ""; position: absolute; top: 0; left: -4px; border: 5px solid transparent; border-top-color: var(--bmc, #009dff); }
+  /* 书签标记：对齐 OpenCut-UI-复刻.html —— 10x10 实心书签形状（clip-path 切出底部 V 形凹口）。
+     旧版是「2px 竖线 + 顶部三角」，长得跟播放头手柄几乎一样，缩略一看分不清哪个是书签。 */
+  .ruler .bm-mark { position: absolute; top: 2px; width: 10px; height: 10px; margin-left: -5px;
+    clip-path: polygon(0 0, 100% 0, 100% 100%, 50% 70%, 0 100%);
+    background: var(--bmc, #009dff); cursor: pointer; pointer-events: auto; z-index: 12; }
   .bm-editor { position: fixed; z-index: 9600; display: none; flex-direction: column; gap: 8px; padding: 10px; width: 200px;
     background: var(--panel); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 6px 20px rgba(0,0,0,.4); }
   .bm-editor-row { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text); }
@@ -552,7 +617,7 @@
   .bm-editor-row input[type=color] { width: 32px; height: 24px; flex: none; border: 1px solid var(--border); border-radius: 4px; background: none; padding: 1px; }
   .bm-editor-actions { display: flex; gap: 8px; justify-content: flex-end; }
   .bm-editor-actions button { padding: 4px 12px; border-radius: 6px; border: 1px solid var(--border); background: var(--panel-2); color: var(--text); font-size: 12px; cursor: pointer; }
-  .bm-editor-actions button:hover { background: #2a2e37; }
+  .bm-editor-actions button:hover { background: #2a2a2a; }
   /* 框选覆盖层 */
   .sel-box { position: absolute; border: 1px dashed #faad14; background: rgba(250,173,20,.12); z-index: 12; pointer-events: none; display: none; }
   /* 整组缩放包围盒：跨选中段时间轴跨度，含左右把手 */
@@ -591,6 +656,72 @@
 </style>
 </head>
 <body>
+<!-- P2 图标 sprite：与 OpenCut-UI-复刻.html 同一套（lucide 风格，24x24 stroke 线性图标）。
+     用 <svg class="ic"><use href="#i-xxx"/></svg> 引用；颜色和粗细由外层继承。 -->
+<svg id="aivs-icon-sprite" width="0" height="0" style="position:absolute" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+  <symbol id="i-logo" viewBox="0 0 24 24"><rect x="2" y="2" width="20" height="20" rx="6" fill="currentColor" stroke="none"/><path d="M9.5 8.5l6 3.5-6 3.5z" fill="var(--bg)" stroke="none"/></symbol>
+  <symbol id="i-feedback" viewBox="0 0 24 24"><path d="M21 12a8 8 0 01-8 8H8l-5 3 1.2-4.2A8 8 0 1121 12z"/></symbol>
+  <symbol id="i-export" viewBox="0 0 24 24"><path d="M12 20V8m0 0l-4 4m4-4l4 4M4 4h16"/></symbol>
+  <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2M4.9 4.9l1.4 1.4m11.4 11.4l1.4 1.4M19.1 4.9l-1.4 1.4M6.3 17.7l-1.4 1.4"/></symbol>
+  <symbol id="i-moon" viewBox="0 0 24 24"><path d="M21 13A9 9 0 1111 3a7 7 0 0010 10z"/></symbol>
+  <symbol id="i-media" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 16l4.5-4.5 3.5 3.5 4-4L21 16"/><circle cx="8.5" cy="8.5" r="1.2"/></symbol>
+  <symbol id="i-sounds" viewBox="0 0 24 24"><path d="M9 18V6l10-2v12"/><circle cx="6.5" cy="18" r="2.5"/><circle cx="16.5" cy="16" r="2.5"/></symbol>
+  <symbol id="i-text" viewBox="0 0 24 24"><path d="M5 6h14M12 6v13M9 19h6"/></symbol>
+  <symbol id="i-stickers" viewBox="0 0 24 24"><path d="M12 3l2.4 5.3 5.6.6-4.2 3.9 1.2 5.7L12 15.8 7 18.5l1.2-5.7L4 8.9l5.6-.6z"/></symbol>
+  <symbol id="i-effects" viewBox="0 0 24 24"><path d="M12 3v4m0 10v4M3 12h4m10 0h4M5.6 5.6l2.8 2.8m7.2 7.2l2.8 2.8M18.4 5.6l-2.8 2.8M8.4 15.6l-2.8 2.8"/><circle cx="12" cy="12" r="2.5"/></symbol>
+  <symbol id="i-transitions" viewBox="0 0 24 24"><path d="M4 8h12l-3-3m3 3l-3 3M20 16H8l3-3m-3 3l3 3"/></symbol>
+  <symbol id="i-captions" viewBox="0 0 24 24"><rect x="2" y="5" width="20" height="14" rx="2"/><path d="M10 10.5a2.5 2.5 0 100 3M17.5 10.5a2.5 2.5 0 100 3"/></symbol>
+  <symbol id="i-adjustment" viewBox="0 0 24 24"><path d="M4 8h10M18 8h2M4 16h4M12 16h8"/><circle cx="16" cy="8" r="2"/><circle cx="10" cy="16" r="2"/></symbol>
+  <symbol id="i-settings" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.6 1.6 0 00.3 1.8l.1.1a2 2 0 11-2.8 2.8l-.1-.1a1.6 1.6 0 00-1.8-.3 1.6 1.6 0 00-1 1.5V21a2 2 0 11-4 0v-.1a1.6 1.6 0 00-1-1.5 1.6 1.6 0 00-1.8.3l-.1.1a2 2 0 11-2.8-2.8l.1-.1a1.6 1.6 0 00.3-1.8 1.6 1.6 0 00-1.5-1H3a2 2 0 110-4h.1a1.6 1.6 0 001.5-1 1.6 1.6 0 00-.3-1.8l-.1-.1a2 2 0 112.8-2.8l.1.1a1.6 1.6 0 001.8.3H9a1.6 1.6 0 001-1.5V3a2 2 0 114 0v.1a1.6 1.6 0 001 1.5 1.6 1.6 0 001.8-.3l.1-.1a2 2 0 112.8 2.8l-.1.1a1.6 1.6 0 00-.3 1.8V9a1.6 1.6 0 001.5 1H21a2 2 0 110 4h-.1a1.6 1.6 0 00-1.5 1z"/></symbol>
+  <symbol id="i-grid" viewBox="0 0 24 24"><rect x="3" y="3" width="7.5" height="7.5" rx="1"/><rect x="13.5" y="3" width="7.5" height="7.5" rx="1"/><rect x="3" y="13.5" width="7.5" height="7.5" rx="1"/><rect x="13.5" y="13.5" width="7.5" height="7.5" rx="1"/></symbol>
+  <symbol id="i-list" viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16"/></symbol>
+  <symbol id="i-sort" viewBox="0 0 24 24"><path d="M4 7h10M4 12h7M4 17h4M17 6v12m0 0l3-3m-3 3l-3-3"/></symbol>
+  <symbol id="i-import" viewBox="0 0 24 24"><path d="M12 16V9m0 0l-3 3m3-3l3 3"/><path d="M6.5 19a4.5 4.5 0 01-.6-8.97A6 6 0 0117.7 9.5a3.75 3.75 0 01.3 9.5H7"/></symbol>
+  <symbol id="i-play" viewBox="0 0 24 24"><path d="M7 4.5l12 7.5-12 7.5z" fill="currentColor"/></symbol>
+  <symbol id="i-pause" viewBox="0 0 24 24"><rect x="6" y="4.5" width="4" height="15" rx="1" fill="currentColor"/><rect x="14" y="4.5" width="4" height="15" rx="1" fill="currentColor"/></symbol>
+  <symbol id="i-fullscreen" viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></symbol>
+  <symbol id="i-transform" viewBox="0 0 24 24"><path d="M12 3v18M3 12h18M12 3l-2.5 2.5M12 3l2.5 2.5M12 21l-2.5-2.5M12 21l2.5-2.5M3 12l2.5-2.5M3 12l2.5 2.5M21 12l-2.5-2.5M21 12l-2.5 2.5"/></symbol>
+  <symbol id="i-audio" viewBox="0 0 24 24"><path d="M11 5L6 9H3v6h3l5 4z"/><path d="M15.5 8.5a5 5 0 010 7M18.5 5.5a9 9 0 010 13"/></symbol>
+  <symbol id="i-speed" viewBox="0 0 24 24"><path d="M3 5l8 7-8 7zM13 5l8 7-8 7z"/></symbol>
+  <symbol id="i-blend" viewBox="0 0 24 24"><circle cx="9" cy="12" r="5.5"/><circle cx="15" cy="12" r="5.5"/></symbol>
+  <symbol id="i-mask" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="12" cy="12" r="4.5"/></symbol>
+  <symbol id="i-scissors" viewBox="0 0 24 24"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><path d="M8.2 7.6L20 18M20 6L8.2 16.4"/></symbol>
+  <symbol id="i-split-left" viewBox="0 0 24 24"><path d="M12 3v18M4 8l4 4-4 4"/><path d="M20 4v16" stroke-dasharray="2 2"/></symbol>
+  <symbol id="i-split-right" viewBox="0 0 24 24"><path d="M12 3v18M20 8l-4 4 4 4"/><path d="M4 4v16" stroke-dasharray="2 2"/></symbol>
+  <symbol id="i-link" viewBox="0 0 24 24"><path d="M9.5 14.5l5-5M8 12l-2 2a3.5 3.5 0 005 5l2-2M16 12l2-2a3.5 3.5 0 00-5-5l-2 2"/></symbol>
+  <symbol id="i-unlink" viewBox="0 0 24 24"><path d="M8 12l-2 2a3.5 3.5 0 005 5l2-2M16 12l2-2a3.5 3.5 0 00-5-5l-2 2M3 3l18 18"/></symbol>
+  <symbol id="i-duplicate" viewBox="0 0 24 24"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a1 1 0 01-1-1V4a1 1 0 011-1h10a1 1 0 011 1v1"/></symbol>
+  <symbol id="i-trash" viewBox="0 0 24 24"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14M10 10v7M14 10v7"/></symbol>
+  <symbol id="i-bookmark" viewBox="0 0 24 24"><path d="M6 3h12v18l-6-4.5L6 21z"/></symbol>
+  <symbol id="i-graph" viewBox="0 0 24 24"><path d="M3 20V4M3 20h18"/><path d="M3 18c6 0 6-12 12-12"/></symbol>
+  <symbol id="i-magnet" viewBox="0 0 24 24"><path d="M6 3v8a6 6 0 0012 0V3h-4v8a2 2 0 01-4 0V3z"/><path d="M6 7h4M14 7h4"/></symbol>
+  <symbol id="i-ripple" viewBox="0 0 24 24"><path d="M20 8v8M4 8v8M20 12h-6M10 12H4"/><path d="M17 5l3 3-3 3M7 5L4 8l3 3"/></symbol>
+  <symbol id="i-zoom-in" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4.5-4.5M8.5 11h5M11 8.5v5"/></symbol>
+  <symbol id="i-zoom-out" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4.5-4.5M8.5 11h5"/></symbol>
+  <symbol id="i-scene" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 9h18M7 9v10"/></symbol>
+  <symbol id="i-eye" viewBox="0 0 24 24"><path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z"/><circle cx="12" cy="12" r="3"/></symbol>
+  <symbol id="i-eye-off" viewBox="0 0 24 24"><path d="M3 3l18 18M10.6 6.1A9.6 9.6 0 0112 6c6 0 9.5 6 9.5 6a17 17 0 01-2.7 3.4M6.6 7.9A17 17 0 002.5 12S6 18 12 18c1.3 0 2.4-.3 3.5-.7"/></symbol>
+  <symbol id="i-vol" viewBox="0 0 24 24"><path d="M11 5L6 9H3v6h3l5 4z"/><path d="M15.5 8.5a5 5 0 010 7"/></symbol>
+  <symbol id="i-vol-off" viewBox="0 0 24 24"><path d="M11 5L6 9H3v6h3l5 4z"/><path d="M16 9.5l5 5M21 9.5l-5 5"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+  <symbol id="i-diamond" viewBox="0 0 24 24"><path d="M12 3l9 9-9 9-9-9z"/></symbol>
+  <symbol id="i-rotate" viewBox="0 0 24 24"><path d="M20 12a8 8 0 11-2.6-5.9M20 4v4h-4"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24"><path d="M12 4v16M4 12h16"/></symbol>
+  <symbol id="i-y" viewBox="0 0 24 24"><path d="M4 4l8 8 8-8M12 12v8"/></symbol>
+  <symbol id="i-w" viewBox="0 0 24 24"><path d="M3 6h18M3 18h18M6 6l3 12M18 6l-3 12"/></symbol>
+  <symbol id="i-h" viewBox="0 0 24 24"><path d="M6 3v18M18 3v18M6 12h12"/></symbol>
+  <symbol id="i-caret" viewBox="0 0 24 24"><path d="M7 10l5 5 5-5"/></symbol>
+  <symbol id="i-grip" viewBox="0 0 24 24"><circle cx="9" cy="6" r="1.3" fill="currentColor" stroke="none"/><circle cx="9" cy="12" r="1.3" fill="currentColor" stroke="none"/><circle cx="9" cy="18" r="1.3" fill="currentColor" stroke="none"/><circle cx="15" cy="6" r="1.3" fill="currentColor" stroke="none"/><circle cx="15" cy="12" r="1.3" fill="currentColor" stroke="none"/><circle cx="15" cy="18" r="1.3" fill="currentColor" stroke="none"/></symbol>
+  <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z"/></symbol>
+  <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.5 2"/></symbol>
+  <!-- 下面两个是复刻版没有、我们时间轴工具栏需要的（lucide undo-2 / redo-2） -->
+  <symbol id="i-undo" viewBox="0 0 24 24"><path d="M9 14L4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 010 11H11"/></symbol>
+  <symbol id="i-redo" viewBox="0 0 24 24"><path d="M15 14l5-5-5-5"/><path d="M20 9H9.5a5.5 5.5 0 000 11H13"/></symbol>
+  <!-- P4 补：轨道头锁定按钮。复刻没有 lock（OpenCut 只有 mute/hide），轨道锁定是我们多的能力，
+       所以图标不在复刻 sprite 里，按同一套 lucide 规格（24x24 线性描边）自己补。 -->
+  <symbol id="i-lock" viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></symbol>
+  <symbol id="i-lock-open" viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 019.9-1"/></symbol>
+</svg>
 <!-- 右键菜单（2026-08-16 对齐 OpenCut context-menu.tsx）：时间轴片段右键弹出 -->
 <div class="ctx-menu" id="ctxMenu" style="display:none">
   <button data-act="split">✂ 分割</button>
@@ -609,9 +740,9 @@
     <span id="buildTag" style="font-weight:400;font-size:11px;color:var(--muted)"></span>
     <span class="spacer"></span>
     <span class="mcp-pill"><span class="mcp-dot" id="mcpDot"></span><span id="mcpName">未连接</span></span>
-    <button class="btn" id="skillBtn">Skill</button>
-    <button class="btn" id="presetBtn">模板</button>
-    <button class="btn primary" id="exportBtn">导出剪映草稿</button>
+    <button class="btn ibtn" id="skillBtn" title="Skill 库（可复用的编辑流程）"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l2.1 4.5 4.9.7-3.5 3.4.8 4.9L12 14.2 7.7 16.5l.8-4.9L5 8.2l4.9-.7z"/></svg><span class="btn-lbl">Skill</span></button>
+    <button class="btn ibtn" id="presetBtn" title="模板库（一键套排版）"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></svg><span class="btn-lbl">模板</span></button>
+    <button class="btn primary" id="exportBtn" title="导出剪映草稿（在剪映里渲染出片）"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15V3"/><path d="M7 8l5-5 5 5"/><path d="M4 15v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4"/></svg>导出</button>
     <div class="proj-menu" id="projMenu">
       <div class="proj-menu-item" id="projMenuShortcuts">快捷键&hellip;</div>
       <div class="proj-menu-item" id="projMenuExit">退出</div>
@@ -665,26 +796,41 @@
         <input type="range" id="volumeSlider" class="vol-slider" min="0" max="1" step="0.05" value="1" title="音量">
         <button class="loop" id="loopBtn" title="循环播放（关）">🔁</button>
         <span class="tc" id="timecode">00:00.000 / 00:00.000</span>
-        <span class="aspect-group" id="aspectGroup" title="画幅（手动选择后锁定，拖素材不再自动改比例）">
-          <button class="asp-btn" data-ratio="16:9">16:9</button>
-          <button class="asp-btn" data-ratio="9:16">9:16</button>
-          <button class="asp-btn" data-ratio="4:3">4:3</button>
-          <button class="asp-btn" data-ratio="3:4">3:4</button>
-          <button class="asp-btn" data-ratio="1:1">1:1</button>
-          <button class="asp-btn" data-ratio="auto" title="解除锁定：由素材自动决定">自动</button>
-        </span>
-        <span class="zoom-group" id="zoomGroup" title="画布缩放（Ctrl+滚轮）">
-          <button class="zoom-btn" id="zoomOutBtn" title="缩小">−</button>
-          <button class="zoom-btn" id="zoomFitBtn" title="适应屏幕">适应</button>
-          <button class="zoom-btn" id="zoomActualBtn" title="实际大小">100%</button>
-          <button class="zoom-btn" id="zoomInBtn" title="放大">+</button>
-          <input type="range" class="zoom-slider" id="zoomSlider" min="25" max="200" step="25" value="100" title="缩放比例">
-          <span class="zoom-pct" id="zoomPct">100%</span>
-          <span class="zoom-sep"></span>
-          <button class="zoom-btn" id="previewFsBtn" title="全屏预览（Esc 退出）">
-            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg>
-          </button>
-        </span>
+        <!-- P2（2026-08-28，用户拍板）画幅/缩放收成弹出菜单：
+             原 #aspectGroup / .asp-btn / #zoomGroup / #zoomSlider / #zoomPct 全部原样保留
+             （事件委托绑在 #aspectGroup 上），只包一层定位容器，任何 JS 都不受影响。
+             #previewFsBtn 提到外面单做图标按钮——JS 只认 id，不认父级。 -->
+        <button class="ctl-btn" id="aspectMenuBtn" title="画幅比例（手动选择后锁定，拖素材不再自动改比例）">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 10h18M3 14h18"/></svg><span id="aspectLabel">自动</span>
+          <svg class="caret" viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+        </button>
+        <div class="ctl-pop" id="aspectMenu" style="display:none">
+          <span class="aspect-group" id="aspectGroup" title="画幅（手动选择后锁定，拖素材不再自动改比例）">
+            <button class="asp-btn" data-ratio="16:9">16:9</button>
+            <button class="asp-btn" data-ratio="9:16">9:16</button>
+            <button class="asp-btn" data-ratio="4:3">4:3</button>
+            <button class="asp-btn" data-ratio="3:4">3:4</button>
+            <button class="asp-btn" data-ratio="1:1">1:1</button>
+            <button class="asp-btn" data-ratio="auto" title="解除锁定：由素材自动决定">自动</button>
+          </span>
+        </div>
+        <button class="ctl-btn" id="zoomMenuBtn" title="画布缩放（Ctrl+滚轮）">
+          <span id="zoomPctBtn">100%</span>
+          <svg class="caret" viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+        </button>
+        <div class="ctl-pop" id="zoomMenu" style="display:none">
+          <span class="zoom-group" id="zoomGroup" title="画布缩放（Ctrl+滚轮）">
+            <button class="zoom-btn" id="zoomOutBtn" title="缩小">−</button>
+            <button class="zoom-btn" id="zoomFitBtn" title="适应屏幕">适应</button>
+            <button class="zoom-btn" id="zoomActualBtn" title="实际大小">100%</button>
+            <button class="zoom-btn" id="zoomInBtn" title="放大">+</button>
+            <input type="range" class="zoom-slider" id="zoomSlider" min="25" max="200" step="25" value="100" title="缩放比例">
+            <span class="zoom-pct" id="zoomPct">100%</span>
+          </span>
+        </div>
+        <button class="ctl-btn" id="previewFsBtn" title="全屏预览（Esc 退出）">
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg>
+        </button>
       </div>
         </div>
 
@@ -692,40 +838,31 @@
     <div class="tools" id="toolsPanel">
       <div class="tools-rail" id="toolsRail">
         <button class="rail-btn active" data-tab="kf" title="关键帧">
-          <svg viewBox="0 0 20 20" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><path d="M10 2l8 8-8 8-8-8z"/></svg>
-          <span>关键帧</span>
+          <svg class="ic"><use href="#i-diamond"/></svg>
         </button>
         <button class="rail-btn" data-tab="audio" title="音频">
-          <svg viewBox="0 0 20 20" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M3 8v4M7 4v12M11 7v6M15 5v10M19 9v2"/></svg>
-          <span>音频</span>
+          <svg class="ic"><use href="#i-audio"/></svg>
         </button>
         <button class="rail-btn" data-tab="speed" title="速度">
-          <svg viewBox="0 0 20 20" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><circle cx="10" cy="10" r="7"/><path d="M10 6v4l3 2"/></svg>
-          <span>速度</span>
+          <svg class="ic"><use href="#i-speed"/></svg>
         </button>
         <button class="rail-btn" data-tab="mask" title="遮罩">
-          <svg viewBox="0 0 20 20" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="4" y="4" width="12" height="12" rx="2"/><circle cx="10" cy="10" r="3"/></svg>
-          <span>遮罩</span>
+          <svg class="ic"><use href="#i-mask"/></svg>
         </button>
         <button class="rail-btn" data-tab="sub" title="字幕">
-          <svg viewBox="0 0 20 20" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><rect x="3" y="5" width="14" height="10" rx="2"/><path d="M6 9h8M6 12h5"/></svg>
-          <span>字幕</span>
+          <svg class="ic"><use href="#i-captions"/></svg>
         </button>
         <button class="rail-btn" data-tab="sticker" title="贴纸">
-          <svg viewBox="0 0 20 20" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><path d="M10 2l2.2 4.6 5 .7-3.6 3.5.9 5L10 13.8 5.5 16.3l.9-5-3.6-3.5 5-.7z"/></svg>
-          <span>贴纸</span>
+          <svg class="ic"><use href="#i-stickers"/></svg>
         </button>
         <button class="rail-btn" data-tab="effects" title="特效">
-          <svg viewBox="0 0 20 20" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><path d="M10 2l1.8 5.5L17 9l-5.2 1.5L10 16l-1.8-5.5L3 9l5.2-1.5z"/></svg>
-          <span>特效</span>
+          <svg class="ic"><use href="#i-effects"/></svg>
         </button>
         <button class="rail-btn" data-tab="graphic" title="图形">
-          <svg viewBox="0 0 20 20" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><rect x="3.5" y="3.5" width="13" height="13" rx="2"/><path d="M6.5 6.5h7v7h-7z"/></svg>
-          <span>图形</span>
+          <svg class="ic"><use href="#i-scene"/></svg>
         </button>
         <button class="rail-btn" data-tab="blend" title="融合">
-          <svg viewBox="0 0 20 20" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><circle cx="10" cy="10" r="7"/><path d="M10 3a7 7 0 0 1 0 14z" fill="currentColor" opacity=".35"/></svg>
-          <span>融合</span>
+          <svg class="ic"><use href="#i-blend"/></svg>
         </button>
       </div>
       <div class="tools-content" id="toolsContent">
@@ -818,7 +955,7 @@
           <div class="sub">添加贴纸</div>
           <div class="row">
             <label>图片</label>
-            <button id="stPick" class="gen" style="background:#2a2e37">选择图片…</button>
+            <button id="stPick" class="gen" style="background:#2a2a2a">选择图片…</button>
           </div>
           <div class="row"><label>已选</label><span id="stPickName" class="src" style="flex:1;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">未选择</span></div>
           <div class="row">
@@ -897,13 +1034,27 @@
     .mask-overlay .mhandle.scale { fill:#06d6a0; }
     .mask-overlay .mbox { fill:none; stroke:#fff; stroke-width:1.4; stroke-dasharray:5 4; pointer-events:none; }
     .mask-overlay .mrotline { stroke:#ffd166; stroke-width:1.2; pointer-events:none; }
-    /* C5.4 变换手柄（选中 video/image 段时显示：8 手柄 + 顶部旋转柄） */
+    /* C5.4 变换手柄（选中 video/image 段时显示：4 角 + 3 边 + 顶部旋转柄） */
     .transform-overlay { position:absolute; inset:0; width:100%; height:100%; z-index:39; pointer-events:none; overflow:visible; }
-    .transform-overlay .th-box { fill:none; stroke:#3da9ff; stroke-width:1.4; pointer-events:none; }
-    .transform-overlay .th-handle { fill:#fff; stroke:#3da9ff; stroke-width:1.4; cursor:inherit; pointer-events:none; }
+    /* P5-1（2026-08-28）对齐 OpenCut-UI-复刻.html §4 handle-primitives：
+         .bbox .box   → border:1.5px dashed rgba(255,255,255,.75)
+         .corner      → 10x10 纯白方块 border-radius:1px
+         .rot-handle  → 20px 白圆 + 12px 黑色旋转图标
+       旧版是「#3da9ff 实线框 + 8 个白圆蓝边手柄 + 黄色旋转柄」——实线蓝框在深色画布上过跳，
+       黄色旋转柄跟全局配色没有任何关系；且 8 个一样大的圆让人分不清哪个是角哪个是边。 */
+    .transform-overlay .th-box { fill:none; stroke:#fff; stroke-opacity:.75; stroke-width:1.5;
+      stroke-dasharray:4 4; pointer-events:none; }
+    .transform-overlay .th-corner { fill:#fff; stroke:none; pointer-events:none; }
+    /* 边中点手柄：OpenCut 没有（它只有 4 角），但我们有 edge-scale 单轴缩放能力 → 保留，
+       视觉上弱化成一个 8px 白点，避免和 10px 角块抢注意力。 */
+    .transform-overlay .th-handle { fill:#fff; stroke:none; cursor:inherit; pointer-events:none; }
     .transform-overlay .th-handle-hit { fill:transparent; stroke:none; pointer-events:auto; }
-    .transform-overlay .th-handle.rot { fill:#ffd166; stroke:#b8860b; }
-    .transform-overlay .th-rotline { stroke:#ffd166; stroke-width:1.2; pointer-events:none; }
+    .transform-overlay .th-handle.rot { fill:#fff; stroke:none; }
+    .transform-overlay .th-rot-icon { fill:none; stroke:#000; stroke-width:2; stroke-linecap:round;
+      stroke-linejoin:round; pointer-events:none; }
+    /* 复刻里旋转柄是「悬空」的没有连线；我们柄在顶边上方 26px，留一条极淡的虚线说明归属 */
+    .transform-overlay .th-rotline { stroke:#fff; stroke-opacity:.32; stroke-width:1;
+      stroke-dasharray:3 3; pointer-events:none; }
     .stickerpanel .empty { font-size: 12px; color: var(--muted); line-height: 1.5; }
     .stickerpanel .row { display: flex; align-items: center; gap: 8px; margin: 6px 0; font-size: 12px; }
     .stickerpanel .row label { width: 44px; color: var(--muted); flex: none; }
@@ -921,14 +1072,25 @@
     .sticker-layer { position:absolute; left:50%; top:50%; transform-origin:center center; pointer-events:none; z-index:520; will-change:transform, opacity; }
     .sticker-layer img { width:100%; height:100%; display:block; }
     /* 右侧工具栏：单栏 + 竖排图标页签（对齐 OpenCut PropertiesPanel） */
-    .tools { width: var(--tools-w, 280px); flex:none; display:flex; flex-direction:row; background:var(--panel); border-left:1px solid var(--border); overflow:hidden; min-height:0; }
-    .tools-rail { width:72px; flex:none; display:flex; flex-direction:column; gap:4px; padding:10px 6px; background:#181b21; border-right:1px solid var(--border); }
-    .tools-rail .rail-btn { width:100%; padding:6px 4px; border-radius:6px; border:1px solid transparent; background:none; color:var(--muted); font-size:11px; cursor:pointer; display:flex; flex-direction:column; align-items:center; gap:2px; line-height:1.2; }
-    .tools-rail .rail-btn:hover { background:#2a2e37; color:var(--text); }
+    .tools { width: var(--tools-w, 21%); min-width: 240px; flex:none; display:flex; flex-direction:row; background:var(--panel); border-left:1px solid var(--border); overflow:hidden; min-height:0; }
+    /* P2（2026-08-28）rail 改纯图标：9 个「图标+文字」按钮要 475px 高，小屏根本放不下。
+       文字 <span> 保留在 DOM（可访问性 / 将来可切回），仅 CSS 隐藏；中文提示走 title。 */
+    .tools-rail { width:52px; flex:none; display:flex; flex-direction:column; gap:4px; padding:8px 6px; background:#101010; border-right:1px solid var(--border); overflow-y:auto; overflow-x:hidden; scrollbar-width:thin; scrollbar-color:#333 transparent; }
+    .tools-rail::-webkit-scrollbar { width:6px; }
+    .tools-rail::-webkit-scrollbar-thumb { background:#333; border-radius:3px; }
+    .tools-rail::-webkit-scrollbar-track { background:transparent; }
+    .tools-rail .rail-btn { flex:none; width:100%; padding:7px 0; border-radius:6px; border:1px solid transparent; background:none; color:#fff; cursor:pointer; display:flex; flex-direction:column; align-items:center; justify-content:center; line-height:0; }
+    .tools-rail .rail-btn > span { display:none !important; }
+    .tools-rail .rail-btn svg { width:18px; height:18px; }
+    .tools-rail .rail-btn:hover { background:#2a2a2a; color:#fff; }
     .tools-rail .rail-btn.active { background:var(--primary-dim); border-color:var(--primary); color:var(--primary); }
     /* 统一 .tools-rail .rail-btn 已覆盖；此处旧 .rail-btn 规则删除（v0.9 P1，消除与 538 行的冲突） */
-    /* 2026-08-19 修 .tools-content 塌陷：.tools 高度撑满屏幕（100vh - 42px topbar），.tools-content 在 flex row 里自然 stretch */
-    .tools { height: calc(100vh - 48px); }
+    /* ★ 2026-08-28 修「参数面板底部图标被挤出、要放大窗口才看得见」——根因：
+       旧写法 height:calc(100vh - 48px) 只扣了顶栏，没扣下方时间轴。而 .tools 的父级 .main
+       是 overflow:hidden 的 flex row，真实高度 = 100vh - 顶栏 - 时间轴。多出来的约 384px
+       被直接裁掉 → rail 底部按钮（图形/融合）永远看不见，且滚动条底部也在可视区外，滚都滚不到。
+       改用 height:100% 跟随 .main 真实高度；空间仍不足时由上面的 overflow-y:auto 兜底。 */
+    .tools { height: 100%; }
     .tools-content { flex:1; min-width:0; overflow-y:auto; height:100%; }
     .tools-content .kfpanel, .tools-content .maskpanel, .tools-content .subpanel, .tools-content .stickerpanel, .tools-content .effectpanel,
     .tools-content .insp-panel { display:none; border-top:none; min-height: 200px; }
@@ -963,24 +1125,26 @@
 
   <div class="timeline" id="timeline">
     <div class="tl-toolbar">
-      <button class="tool" id="undoBtn" title="撤销 (Ctrl+Z)"><svg class="ic" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M8 6 3 11l5 5"/><path d="M3 11h9a4 4 0 0 1 4 4"/></svg><span class="lbl">撤销</span></button>
-      <button class="tool" id="redoBtn" title="重做 (Ctrl+Y)"><svg class="ic" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 6 17 11l-5 5"/><path d="M17 11h-9a4 4 0 0 0-4 4"/></svg><span class="lbl">重做</span></button>
+      <button class="tool" id="undoBtn" title="撤销 (Ctrl+Z)"><svg class="ic"><use href="#i-undo"/></svg><span class="lbl">撤销</span></button>
+      <button class="tool" id="redoBtn" title="重做 (Ctrl+Y)"><svg class="ic"><use href="#i-redo"/></svg><span class="lbl">重做</span></button>
       <span class="sep"></span>
-      <button class="tool" id="splitBtn" title="分割 (S / Ctrl+B)"><svg class="ic" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="5.5" cy="6" r="2"/><circle cx="5.5" cy="14" r="2"/><path d="M7.5 7.5 17 15"/><path d="M7.5 12.5 17 5"/></svg><span class="lbl">分割</span></button>
-      <button class="tool" id="splitLeftBtn" title="分割保留左侧 (Q)"><svg class="ic" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 3v14"/><path d="M11 10 17 4v12z"/></svg><span class="lbl">左切</span></button>
-      <button class="tool" id="splitRightBtn" title="分割保留右侧 (W)"><svg class="ic" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M16 3v14"/><path d="M9 10 3 4v12z"/></svg><span class="lbl">右切</span></button>
-      <button class="tool" id="srcAudioBtn" title="提取原声"><svg class="ic" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9v2M8 6v8M12 4v12M16 8v4"/></svg><span class="lbl">原声</span></button>
-      <button class="tool" id="speedBtn" title="变速"><svg class="ic" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="10" cy="10" r="6"/><path d="M10 6.5V10l3 2"/></svg><span class="lbl">变速</span></button>
-      <button class="tool" id="dupBtn" title="复制"><svg class="ic" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="7" y="7" width="9" height="9" rx="1.5"/><path d="M4 13V4h9"/></svg><span class="lbl">复制</span></button>
-      <button class="tool" id="delBtn" title="删除 (Del)"><svg class="ic" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h12"/><path d="M7 6V4h6v2"/><path d="M6 6l1 11h6l1-11"/></svg><span class="lbl">删除</span></button>
-      <button class="tool active" id="snapBtn" title="吸附"><svg class="ic" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4v9a5 5 0 0 0 10 0V4"/><path d="M5 4h3v9a2 2 0 0 0 4 0V4"/></svg><span class="lbl">吸附</span></button>
-      <button class="tool" id="rippleBtn" title="波纹编辑 (R)"><svg class="ic" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10c2-4 4-4 6 0s4 4 6 0"/></svg><span class="lbl">波纹</span></button>
-      <button class="tool" id="addGraphicBtn" title="添加图形（矩形，挂文本轨）"><svg class="ic" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><rect x="3.5" y="3.5" width="13" height="13" rx="2"/><path d="M6.5 6.5h7v7h-7z"/></svg><span class="lbl">图形</span></button>
+      <button class="tool" id="splitBtn" title="分割 (S / Ctrl+B)"><svg class="ic"><use href="#i-scissors"/></svg><span class="lbl">分割</span></button>
+      <button class="tool" id="splitLeftBtn" title="分割保留左侧 (Q)"><svg class="ic"><use href="#i-split-left"/></svg><span class="lbl">左切</span></button>
+      <button class="tool" id="splitRightBtn" title="分割保留右侧 (W)"><svg class="ic"><use href="#i-split-right"/></svg><span class="lbl">右切</span></button>
+      <button class="tool" id="srcAudioBtn" title="提取原声"><svg class="ic"><use href="#i-link"/></svg><span class="lbl">原声</span></button>
+      <button class="tool" id="speedBtn" title="变速"><svg class="ic"><use href="#i-speed"/></svg><span class="lbl">变速</span></button>
+      <button class="tool" id="dupBtn" title="复制"><svg class="ic"><use href="#i-duplicate"/></svg><span class="lbl">复制</span></button>
+      <button class="tool" id="delBtn" title="删除 (Del)"><svg class="ic"><use href="#i-trash"/></svg><span class="lbl">删除</span></button>
+      <button class="tool active" id="snapBtn" title="吸附"><svg class="ic"><use href="#i-magnet"/></svg><span class="lbl">吸附</span></button>
+      <button class="tool" id="rippleBtn" title="波纹编辑 (R)"><svg class="ic"><use href="#i-ripple"/></svg><span class="lbl">波纹</span></button>
+      <button class="tool" id="addGraphicBtn" title="添加图形（矩形，挂文本轨）"><svg class="ic"><use href="#i-scene"/></svg><span class="lbl">图形</span></button>
+      <span class="sep"></span>
+      <button class="tool" id="addBookmarkBtn" title="在播放头处添加/移除书签（B；双击标尺也能加，点书签跳转，右键删除）"><svg class="ic"><use href="#i-bookmark"/></svg><span class="lbl">书签</span></button>
       <span class="spacer"></span>
       <span class="zoom">
-        <button class="tool" id="zoomOut" title="缩小"><svg class="ic" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="8.5" cy="8.5" r="5"/><path d="M5.5 8.5h6"/><path d="M12.5 12.5 17 17"/></svg><span class="lbl">缩小</span></button>
+        <button class="tool" id="zoomOut" title="缩小"><svg class="ic"><use href="#i-zoom-out"/></svg><span class="lbl">缩小</span></button>
         <input type="range" id="zoomRange" min="20" max="600" value="120">
-        <button class="tool" id="zoomIn" title="放大"><svg class="ic" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="8.5" cy="8.5" r="5"/><path d="M5.5 8.5h6M8.5 5.5v6"/><path d="M12.5 12.5 17 17"/></svg><span class="lbl">放大</span></button>
+        <button class="tool" id="zoomIn" title="放大"><svg class="ic"><use href="#i-zoom-in"/></svg><span class="lbl">放大</span></button>
       </span>
     </div>
     <div class="tl-main" id="tlMain">
@@ -1192,31 +1356,40 @@ const TRACK_H = 48;
 
 // 上半区（素材/预览/Skill）↔ 下半区（时间轴）高度分配：拖分隔条整体调整，对齐 OpenCut 的横向 resizable handle。
 // 偏好存 localStorage，重开仍保留。
-const VSPLIT_KEY = "aivs.bottomH";
-function setBottomH(px) {
-  const minH = 140, maxH = window.innerHeight - 180;
-  const h = Math.max(minH, Math.min(maxH, Math.round(px)));
-  document.documentElement.style.setProperty("--bottom-h", h + "px");
-  try { localStorage.setItem(VSPLIT_KEY, String(h)); } catch (e) {}
+// P1（2026-08-28）：同 initHSplit——时间轴高度改百分比（15%~70%，对齐 OpenCut timeline 15-70）。
+const VSPLIT_KEY = "aivs.bottomPct";
+const VSPLIT_OLD = "aivs.bottomH";
+let curBottomPct = 45;    // 当前百分比的唯一真相源
+function setBottomPct(pct) {
+  curBottomPct = Math.max(15, Math.min(70, pct));
+  document.documentElement.style.setProperty("--bottom-h", curBottomPct.toFixed(3) + "%");
+  try { localStorage.setItem(VSPLIT_KEY, String(curBottomPct)); } catch (e) {}
 }
 function initSplit() {
-  let saved = 380;
-  try { saved = parseInt(localStorage.getItem(VSPLIT_KEY)) || 380; } catch (e) {}
-  setBottomH(saved);
+  let saved = 45;
+  try {
+    const p = parseFloat(localStorage.getItem(VSPLIT_KEY));
+    if (isFinite(p) && p > 0) saved = p;
+    else {
+      const oldPx = parseFloat(localStorage.getItem(VSPLIT_OLD));   // 旧版 px → 折算百分比
+      saved = (isFinite(oldPx) && oldPx > 0) ? oldPx / (window.innerHeight || 800) * 100 : 45;
+    }
+  } catch (e) { saved = 45; }
+  setBottomPct(saved);
   const bar = $("vsplit");
   if (!bar) return;
   let drag = null;
   bar.addEventListener("mousedown", e => {
     e.preventDefault(); e.stopPropagation();
-    const cs = getComputedStyle(document.documentElement).getPropertyValue("--bottom-h");
-    drag = { startY: e.clientY, startH: parseInt(cs) || 380 };
+    drag = { startY: e.clientY, startPct: curBottomPct };
     bar.classList.add("dragging");
     window.addEventListener("mousemove", onSplitMove);
     window.addEventListener("mouseup", onSplitEnd);
   });
   function onSplitMove(e) {
     if (!drag) return;
-    setBottomH(drag.startH + (drag.startY - e.clientY)); // 鼠标上移 → 时间轴变高
+    // 鼠标上移 → 时间轴变高
+    setBottomPct(drag.startPct + (drag.startY - e.clientY) / (window.innerHeight || 800) * 100);
   }
   function onSplitEnd() {
     drag = null;
@@ -1227,30 +1400,48 @@ function initSplit() {
 }
 
 // 水平分隔条（2026-08-15）：左侧素材区 ↔ 预览、预览 ↔ 右侧参数区，仿 OpenCut resizable
-const ASSETSW_KEY = "aivs.assetsW";
-const TOOLSW_KEY  = "aivs.toolsW";
+/* P1（2026-08-28）：面板尺寸由固定 px 改为百分比——写死 px 在换窗口/显示器后比例会失调，
+   百分比交给浏览器算，resize 自动适应。范围对齐 OpenCut（侧栏 15-40、timeline 15-70）。
+   旧版 localStorage 存的是 px，读不到新 key 时自动把旧 px 折算成百分比，不打断使用习惯。
+   ⚠️ 拖动时不能再从 CSS 变量 parseInt：自定义属性不参与计算，getPropertyValue 返回 "19%" → 解析成 19。 */
+const ASSETSW_KEY = "aivs.assetsPct";
+const TOOLSW_KEY  = "aivs.toolsPct";
+const ASSETSW_OLD = "aivs.assetsW";
+const TOOLSW_OLD  = "aivs.toolsW";
+const curPanelPct = { L: 19, R: 21 };   // 当前百分比的唯一真相源
+function mainWidth() {
+  const m = document.querySelector(".main");
+  return (m && m.clientWidth) || window.innerWidth || 1280;
+}
 function initHSplit(side) {
   const isL = side === "L";
   const KEY  = isL ? ASSETSW_KEY : TOOLSW_KEY;
+  const OLDKEY = isL ? ASSETSW_OLD : TOOLSW_OLD;
   const PROP = isL ? "--assets-w" : "--tools-w";
-  const defaultW = isL ? 250 : 280;
-  const minW = isL ? 180 : 220;
-  const maxW = isL ? 500 : 600;
-  function apply(w) {
-    const ww = Math.max(minW, Math.min(maxW, Math.round(w)));
-    document.documentElement.style.setProperty(PROP, ww + "px");
-    try { localStorage.setItem(KEY, String(ww)); } catch (e) {}
+  const slot = isL ? "L" : "R";
+  const defaultPct = isL ? 19 : 21;
+  const minPct = 14, maxPct = 38;
+  function apply(pct) {
+    curPanelPct[slot] = Math.max(minPct, Math.min(maxPct, pct));
+    document.documentElement.style.setProperty(PROP, curPanelPct[slot].toFixed(3) + "%");
+    try { localStorage.setItem(KEY, String(curPanelPct[slot])); } catch (e) {}
   }
-  let saved = defaultW;
-  try { saved = parseInt(localStorage.getItem(KEY)) || defaultW; } catch (e) {}
+  let saved = defaultPct;
+  try {
+    const p = parseFloat(localStorage.getItem(KEY));
+    if (isFinite(p) && p > 0) saved = p;
+    else {
+      const oldPx = parseFloat(localStorage.getItem(OLDKEY));   // 旧版 px → 折算百分比
+      saved = (isFinite(oldPx) && oldPx > 0) ? oldPx / mainWidth() * 100 : defaultPct;
+    }
+  } catch (e) { saved = defaultPct; }
   apply(saved);
   const bar = $(isL ? "hsplitL" : "hsplitR");
   if (!bar) return;
   let drag = null;
   bar.addEventListener("mousedown", e => {
     e.preventDefault(); e.stopPropagation();
-    const cur = getComputedStyle(document.documentElement).getPropertyValue(PROP);
-    drag = { startX: e.clientX, startW: parseInt(cur) || defaultW };
+    drag = { startX: e.clientX, startPct: curPanelPct[slot], mainW: mainWidth() };
     bar.classList.add("dragging");
     window.addEventListener("mousemove", onMove);
     window.addEventListener("mouseup", onEnd);
@@ -1259,7 +1450,7 @@ function initHSplit(side) {
     if (!drag) return;
     // 左分隔条：拖右 → 素材区加宽；右分隔条：拖左 → 参数区加宽（拖右 → 缩）
     const dx = e.clientX - drag.startX;
-    apply(drag.startW + (isL ? dx : -dx));
+    apply(drag.startPct + (isL ? dx : -dx) / drag.mainW * 100);
   }
   function onEnd() {
     drag = null;
@@ -1405,7 +1596,11 @@ function renderMedia(s) {
     card.addEventListener("dragstart", e => {
       isLibraryDragging = true;
       window.__dragStartY = e.clientY;   // 库拖入间隙方向判定用
-      const payload = JSON.stringify({ name: m.name, path: m.path, type: m.type });
+      // 放置预判需要完整时间区间。导入侧 duration 为微秒；兼容旧素材的秒级字段。
+      const durationUs = (typeof m.duration === "number" && m.duration > 0)
+        ? Math.round(m.duration >= 1000 ? m.duration : m.duration * 1e6)
+        : null;
+      const payload = JSON.stringify({ name: m.name, path: m.path, type: m.type, durationUs: durationUs });
       e.dataTransfer.setData("text/plain", payload);
       e.dataTransfer.effectAllowed = "copy";
       // 隐藏默认 ghost，用自定义 80px 缩略图跟随鼠标（OpenCut 同款）
@@ -1445,7 +1640,9 @@ function renderPlaceholderTab(kind) {
     + '<div class="me-title">' + p.title + '</div>'
     + '<div class="me-sub">' + p.sub + '</div>';
   if (kind === "settings") {
-    const ar = $("aspectGroup") ? $("aspectGroup").querySelector(".asp-btn.active") : null;
+    // 修：原来查 .asp-btn.active，但写入用的是 classList.toggle("on")（见 applyCanvasRatio），
+    //     类名对不上 → 这里永远读到 null，「画幅锁定」恒显示"自动"。
+    const ar = $("aspectGroup") ? $("aspectGroup").querySelector(".asp-btn.on") : null;
     inner += '<div class="ph-settings">'
       + phRow("吸附开关", Store.state.snapOn ? "开" : "关")
       + phRow("波纹动画", Store.state.rippleOn ? "开" : "关")
@@ -2170,6 +2367,7 @@ function applyCanvasRatio() {
     const r = b.dataset.ratio;
     b.classList.toggle("on", (r === "auto") ? !locked : (r === cur));
   });
+  const alb = $("aspectLabel"); if (alb) alb.textContent = locked ? String(cur) : "自动";  // P2：同步到控制条按钮
   syncGuideOverlay();   // L2-11：画幅切换后重算网格/安全框叠层
 }
 function setAspect(ratio) {
@@ -2608,7 +2806,7 @@ function onPointerMove(e) {
     // D2（2026-08-19）：轴内移动也做落点冲突检测（OpenCut canPlaceTimeSpansOnTrack）——落点被占→新建轨。
     // excludeSegId=被拖段自身（同轨移动时自身不算占用）。
     // 组移动（isGroup）：跳过重叠检测（组内成员互相不算占用；组移动走 move_group 回退原轨，不新建）。
-    const drop = computeDrop(e, d.type, d.verticalDragDirection, d.isGroup ? null : d.curLeftUs, false, d.segId);
+    const drop = computeDrop(e, d.type, d.verticalDragDirection, d.isGroup ? null : d.curLeftUs, false, d.segId, d.s0.duration);
     d.targetKind = drop.kind;
     d.targetType = drop.type;
     d.targetDisplayIndex = drop.displayIndex;
@@ -2677,13 +2875,30 @@ function renderDragOverlay(d) {
     el.style.width = ((d.curRightUs - d.s0.start) / 1e6 * p) + "px";
   }
   updateDropIndicators(d);
-  // L1-01：纵向落轨跟随——纯视觉 translate3d（不写数据、不改 DOM 归属）
-  if (d.mode === "move" && d.offsetY) {
-    el.style.transform = "translate3d(0," + d.offsetY + "px,0)";
-    el.style.willChange = "transform";
+  // 跨轨时视觉位置必须贴住已解析的目标轨，而不是按鼠标 Y 自由平移到两条轨之间。
+  // 新轨尚未存在时保留源段半透明，交由落点线表示插入位置，避免制造“半落轨”的假象。
+  if (d.mode === "move" && d.targetKind === "existing" && typeof d.targetDisplayIndex === "number") {
+    const target = buildTracks()[d.targetDisplayIndex];
+    const sourceTrack = el.closest(".track");
+    const targetTrack = target ? trackElOf(target) : null;
+    if (sourceTrack && targetTrack && sourceTrack !== targetTrack) {
+      const dy = targetTrack.getBoundingClientRect().top - sourceTrack.getBoundingClientRect().top;
+      el.style.transform = "translate3d(0," + dy + "px,0)";
+      el.style.willChange = "transform";
+      el.style.opacity = "";
+    } else {
+      el.style.transform = "";
+      el.style.willChange = "";
+      el.style.opacity = "";
+    }
+  } else if (d.mode === "move" && d.targetKind === "new") {
+    el.style.transform = "";
+    el.style.willChange = "";
+    el.style.opacity = "0.35";
   } else {
     el.style.transform = "";
     el.style.willChange = "";
+    el.style.opacity = "";
   }
 }
 
@@ -2695,9 +2910,11 @@ function updateDropIndicators(d) {
   content.querySelectorAll(".track").forEach(t => { t.classList.remove("drop-target"); t.classList.remove("drop-disabled"); });
   content.querySelectorAll(".seg").forEach(s => s.classList.remove("drop-target-seg"));
   const line = $("dropLine");
-  if (d.targetKind === "existing" && d.targetDataTi != null) {
-    const tracks = content.querySelectorAll(".track");
-    const tEl = tracks[d.targetDataTi];
+  if (d.targetKind === "existing" && typeof d.targetDisplayIndex === "number") {
+    // dataTi 是“同类型第几条轨”，不是 DOM 中第几行。必须使用 placement 的 displayIndex，
+    // 否则 text/sticker/主视频轨混排时目标高亮会落到另一条轨。
+    const target = buildTracks()[d.targetDisplayIndex];
+    const tEl = target ? trackElOf(target) : null;
     if (tEl) tEl.classList.add("drop-target");
     line.style.display = "none";
   } else if (d.targetKind === "new") {
@@ -3304,7 +3521,16 @@ function onTimelineDrop(e) {
   // 统一走 computeDrop：同类型已有轨→精确落点；空白/异类型→新建该类型轨接住（与预览/实际同源）
   // 优先复用 dragover 最后缓存落点（防松手瞬间跨边界错位）
   const cached = window.__libDropCache;
-  const drop = (cached && cached.wantType === wantType) ? cached.drop : computeDrop(e, wantType, null, atTimeUs, true);
+  // F1（B-01 回弹修复，2026-08-30）：drop 时现算 verticalDragDirection 并传入，避免 dragover 命中
+  // 可绑定段时 __libDropCache.drop=null → 回退 computeDrop(..., null) → 间隙恒归上方轨（与预览错位=回弹）。
+  // 仅当缓存有有效 drop 时才复用缓存；否则用现算 vDir 重算（与 dragover 同源，落点一致）。
+  let vDir = null;
+  if (typeof window.__dragStartY === "number") {
+    const dy = e.clientY - window.__dragStartY;
+    if (dy < -5) vDir = "up"; else if (dy > 5) vDir = "down";
+  }
+  const spanDurationUs = (typeof data.durationUs === "number" && data.durationUs > 0) ? data.durationUs : null;
+  const drop = (cached && cached.wantType === wantType && cached.drop) ? cached.drop : computeDrop(e, wantType, vDir, atTimeUs, true, null, spanDurationUs);
   console.log("[drop-media] type=" + wantType + " drop=", drop, "at", atTimeUs);
   // 库拖入落位后自动滚到素材实际落位（2026-08-18 修：避让后落到末尾，用 r.start 而非 atTimeUs）
   // 2026-08-18 修：r.ok=false 必须 alert 错误——否则失败静默，用户以为"没放进去"（MP4 放不进体感根因）
@@ -3322,7 +3548,7 @@ function onTimelineDrop(e) {
     window.__addChain = window.__addChain.then(() => call("add_to_timeline", ...args).then(okHandler, failHandler));
     return window.__addChain;
   };
-  if (drop.kind === "existing") _enqueueAdd(data.name, data.path, data.type, drop.dataTi, atTimeUs);
+  if (drop.kind === "existing") _enqueueAdd(data.name, data.path, data.type, drop.dataTi, atTimeUs, null, trackTidOf(drop.type, drop.dataTi));
   // new 路径：track_index 必须传 null（不是 -1）——后端 track_index 非 None 时优先于 insert_index，
   // 传 -1 会走 append 到组末尾，insert_index（预览的中间显示位）被忽略 → 新轨落错位置（2026-08-18 修）
   else _enqueueAdd(data.name, data.path, data.type, null, atTimeUs, drop.dataInsertIndex);
@@ -3432,12 +3658,16 @@ function showClipGhost(dragType, xUs, yPx) {
   $("clipGhostLabel").textContent = (labelBy[dragType] || "▣") + " 松开放置";
   const ppsV = pps();
   const contentRect = $("tlContent").getBoundingClientRect();
-  // 影子段默认宽度 = 4s（库拖入默认时长，无精确素材时长时用占位宽度；有素材时长则用真实）
+  // 影子段使用素材真实时长；未知时长才用 4s 占位。预览宽度必须和
+  // computeDrop 的完整区间碰撞判断一致，否则用户会看到“能放下”却在松手后换轨。
   let widthPx = 4 * ppsV;
   if (dragGhostData && dragGhostData.payload) {
     try {
       const p = JSON.parse(dragGhostData.payload);
-      // 媒体时长：后端 duration_for 在 drop 时才算；这里用 4s 占位（足够示意）
+      const durationUs = Number(p.durationUs);
+      if (Number.isFinite(durationUs) && durationUs > 0) {
+        widthPx = Math.max(8, durationUs / 1e6 * ppsV);
+      }
     } catch (_) {}
   }
   ghost.style.display = "";
@@ -3705,8 +3935,9 @@ function bindEvents() {
       if (tip) UiFeedback.showTooltip(tab, tip);
     });
   });
-  // 资产面板 grid/list 切换（2026-08-16 对齐 OpenCut assets.tsx mode 切换）
-  // 已移除 grid/list 视图切换（2026-08-17）
+  /* 2026-08-28 清理：这里原写着「已移除 grid/list 视图切换（2026-08-17）」，与代码不符——
+     L2-16 已把双视图做回来了（上面 bindAssetTools 里 #viewToggle 的绑定 + updateAssetTools 的
+     图标同步 + .media-list.view-list 的 CSS 都在）。旧注释把人往沟里带，删掉。 */
   $("tlContent").addEventListener("mousedown", onTimelineDown);
   // 右键菜单（2026-08-16 对齐 OpenCut context-menu.tsx）
   let ctxKey = null;
@@ -4051,6 +4282,32 @@ function bindEvents() {
     e.preventDefault();
     call("remove_bookmark", +bm.dataset.us).then(r => { if (r && r.ok) { window.setBookmarkMeta(+bm.dataset.us, null); Store.set({ bookmarks: r.bookmarks }); renderTimeline(); } });
   });
+  /* P2（2026-08-28）工具栏「书签」按钮：后端 toggle_bookmark 早就有了，B 键也能用，
+     但时间轴工具栏一直缺个入口（OpenCut 有）。这里只补入口，复用同一套 Api 与渲染。 */
+  (function bindBookmarkBtn() {
+    const btn = $("addBookmarkBtn");
+    if (!btn) return;
+    btn.addEventListener("click", () => {
+      const us = Math.round(Store.state.playheadUs);
+      call("toggle_bookmark", us).then(r => {
+        if (r && r.ok) { Store.set({ bookmarks: r.bookmarks }); renderTimeline(); }
+      });
+    });
+    // 播放头处已有书签 → 按钮高亮（点下去是"移除"而不是"添加"）。
+    // ⚠️ playheadUs 播放时每帧都变，这里必须做状态去重，否则每帧都在写 classList 和 title。
+    let _bmActive = null;
+    const syncBm = () => {
+      const us = Math.round(Store.state.playheadUs);
+      const has = (Store.state.bookmarks || []).some(b => Math.abs(b.us - us) < 16000);   // 半帧容差
+      if (has === _bmActive) return;
+      _bmActive = has;
+      btn.classList.toggle("active", has);
+      btn.title = has ? "移除播放头处的书签（B）" : "在播放头处添加书签（B；双击标尺也能加，点书签跳转，右键删除）";
+    };
+    Store.subscribeSlice("playheadUs", syncBm);
+    Store.subscribeSlice("bookmarks", syncBm);
+    syncBm();
+  })();
   $("playhead").addEventListener("mousedown", onPlayheadDown);   // 整条红线可拖（含透明命中区），对齐 OpenCut 整线命中
   // 右侧时间轴滚动时，左侧轨道头部标签必须实时跟随，否则垂直方向错开。
   // 同时标记用户手动滚动时间，ensurePlayheadVisible 据此暂停自动追播放头 3s，避免播放时拖不动水平滚动条。
@@ -4184,7 +4441,8 @@ function bindEvents() {
     // L0-04：落点时间吸附到帧网格（TimelineMapper.snapFrame，与后端 snap_frame 同口径，fps 默认 30）
     const atTimeUs = TimelineMapper.snapFrame(Math.max(0, Math.round((e.clientX - contentRect.left + $("tlScroll").scrollLeft) / pps() * 1e6)), 30);
     // 统一落点：preview/落点线/实际三位一体（computeDrop 单一真源，verticalDragDirection 决定间隙归属）
-    const drop = computeDrop(e, wantType, vDir, atTimeUs, true);
+    const spanDurationUs = (!isEffect && d && typeof d.durationUs === "number" && d.durationUs > 0) ? d.durationUs : null;
+    const drop = computeDrop(e, wantType, vDir, atTimeUs, true, null, spanDurationUs);
     window.__libDropCache = { wantType: wantType, drop: drop, bindSeg: null };
     if (drop.kind === "existing") {
       // 命中同类型已有轨（落点空闲）：① 目标轨高亮 ② DragLine 蓝细横线在目标轨顶部 ③ 影子段在 X+Y
@@ -4433,6 +4691,7 @@ function syncZoomUI() {
   const pct = (typeof PreviewCoordinate !== "undefined") ? PreviewCoordinate.zoomPercent : 100;
   const sl = $("zoomSlider"); if (sl) sl.value = String(Math.round(pct));
   const p = $("zoomPct"); if (p) p.textContent = Math.round(pct) + "%";
+  const pb = $("zoomPctBtn"); if (pb) pb.textContent = Math.round(pct) + "%";   // P2：同步到控制条按钮
 }
 function initZoomControls() {
   if (typeof PreviewCoordinate === "undefined") return;
@@ -4450,6 +4709,39 @@ function initZoomControls() {
   if (sl) sl.addEventListener("input", e => { PreviewCoordinate.setViewportPercent(+e.target.value); syncZoomUI(); });
   syncZoomUI();
 }
+
+/* P2（2026-08-28）控制条弹出菜单：画幅 / 缩放。
+   纯 UI 开关，不碰 Api / 数据模型。原按钮的事件委托都绑在 #aspectGroup / 各 id 上，照常工作，
+   这里只负责浮层的开合与「点击外部关闭」。 */
+(function bindControlMenus() {
+  var openPop = null;
+  function closeAll() {
+    ["aspectMenu", "zoomMenu"].forEach(function (id) {
+      var el = document.getElementById(id); if (el) el.style.display = "none";
+      var btn = document.getElementById(id === "aspectMenu" ? "aspectMenuBtn" : "zoomMenuBtn");
+      if (btn) btn.classList.remove("on");
+    });
+    openPop = null;
+  }
+  function toggle(popId, btnId) {
+    var pop = document.getElementById(popId), btn = document.getElementById(btnId);
+    if (!pop || !btn) return;
+    var willOpen = pop.style.display === "none";
+    closeAll();
+    if (willOpen) { pop.style.display = "block"; btn.classList.add("on"); openPop = popId; }
+  }
+  var ab = document.getElementById("aspectMenuBtn");
+  if (ab) ab.addEventListener("click", function (e) { e.stopPropagation(); toggle("aspectMenu", "aspectMenuBtn"); });
+  var zb = document.getElementById("zoomMenuBtn");
+  if (zb) zb.addEventListener("click", function (e) { e.stopPropagation(); toggle("zoomMenu", "zoomMenuBtn"); });
+  // 浮层内部点击（选画幅/拖缩放）不关闭，点外面才关
+  ["aspectMenu", "zoomMenu"].forEach(function (id) {
+    var el = document.getElementById(id);
+    if (el) el.addEventListener("click", function (e) { e.stopPropagation(); });
+  });
+  document.addEventListener("click", function () { if (openPop) closeAll(); });
+  window.addEventListener("keydown", function (e) { if (e.key === "Escape" && openPop) closeAll(); });
+})();
 
 /* L2-12：预览面板伪全屏（CSS 方案）——不碰 player / Api / Video DSL */
 function isPreviewFullscreen() { const p = $("previewPanel"); return !!p && p.classList.contains("fs-active"); }

@@ -148,17 +148,16 @@ function buildKfSections(rowsEl, anims, local) {
         for (let i = 0; i < pair.length; i++) {
           const [path, lab, step, def] = pair[i];
           const row = buildKfRow(path, lab, step, def, anims, local);
-          pairEl.appendChild(row);
           if (isScale && i === 0) {
-            // W↔H 中间的锁按钮（替换原静态 🔗），点击进入等比锁定
+            // W↔H 的锁按钮放在宽度行末尾，点击进入等比锁定
             const lock = document.createElement("button");
             lock.className = "kf-pair-lock";
             lock.textContent = "🔓";
-            lock.title = "锁定等比缩放（Scale 成组关键帧，L2-06）";
-            lock.style.cursor = "pointer";
+            lock.title = "锁定等比缩放（Scale 成组关键帧）";
             lock.addEventListener("click", () => { _scaleLocked = true; _kfLastKey = null; renderKfPanelPF(); });
-            pairEl.appendChild(lock);
+            row.appendChild(lock);
           }
+          pairEl.appendChild(row);
         }
       }
       body.appendChild(pairEl);
@@ -214,12 +213,32 @@ function buildScaleLockedRow(anims, local) {
     const sv = parseFloat(inp.value); if (isNaN(sv)) return;
     const seg = selectedSeg(); if (!seg) return;
     const k = Store.state.selectedKey ? Store.state.selectedKey.split(":") : null; if (!k || k.length < 3) return;
+    // P7-KF语义③（2026-08-29）：Scale 锁定行编辑 → 与拖拽/KF面板普通行对齐：
+    //   通道开（播放头在范围内）→ 同步更新当前播放头关键帧（scaleX+scaleY 同 t 同值）；关 → 写 base。
     const hasKf = KfChannel.isAnimated(seg, "transform.scaleX") && TimelineMapper.isPlayheadWithinRange(seg);
+    const local = (_editCtx && _editCtx.editTime) ? _editCtx.editTime.localUs : TimelineMapper.playheadLocal(seg);
+    const args = kfSegArgs();
+    const segId = Store.state.selectedSegId;
     _editCtx = null;
     if (typeof PreviewState !== "undefined") PreviewState.discardPreview(seg.id);
-    const tx = { scaleX: sv, scaleY: sv, rotation: (typeof getProperty === "function") ? getProperty(seg, "transform.rotate") : 0 };
-    CommandService.withTx("scale-locked-edit", () =>
-      CommandService.run("update_segment_transform", { track_type: k[0], track_index: +k[1], index: +k[2], segid: seg.id, transform: tx }, { actor: "ui", paths: ["transform.scaleX", "transform.scaleY"] }));
+    if (hasKf) {
+      // 与 toggleScaleKf 同命令：add_keyframe 严格同帧更新/新建（后端帧吸附保证 scaleX/scaleY 严格同帧）
+      // [2026-08-30 修复] 原 call(...).then() 链让 scaleX/scaleY 异步写在 withTx 关闭后才发生 → 非原子（事务断链，违反 ADR-001「所有写入经 Command」）。
+      // 改为同步 CommandService.run 双写，保证同一事务内原子提交，避免部分撤销留脏 KF（对齐 kf-panel.js:352 普通行写法）。
+      CommandService.withTx("scale-locked-kf", () => {
+        CommandService.run("add_keyframe",
+          { track_type: k[0], track_index: +k[1], index: +k[2], path: "transform.scaleX", time_us: local, value: sv, seg_mode: "linear" },
+          { actor: "ui", paths: ["transform.scaleX"] });
+        CommandService.run("add_keyframe",
+          { track_type: k[0], track_index: +k[1], index: +k[2], path: "transform.scaleY", time_us: local, value: sv, seg_mode: "linear" },
+          { actor: "ui", paths: ["transform.scaleY"] });
+      });
+      refresh();
+    } else {
+      const tx = { scaleX: sv, scaleY: sv, rotation: (typeof getProperty === "function") ? getProperty(seg, "transform.rotate") : 0 };
+      CommandService.withTx("scale-locked-edit", () =>
+        CommandService.run("update_segment_transform", { track_type: k[0], track_index: +k[1], index: +k[2], segid: seg.id, transform: tx }, { actor: "ui", paths: ["transform.scaleX", "transform.scaleY"] }));
+    }
   });
   inp.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === "Escape") { e.preventDefault(); inp.blur(); } });
   return row;
@@ -241,16 +260,27 @@ function toggleScaleKf() {
     const rm = (path) => {
       const keys = (anims[path] && anims[path].keys) ? anims[path].keys : [];
       const hk = keys.find(kk => Math.abs((kk.t || 0) - local) <= KfChannel.KF_HIT_TOLERANCE_US);
-      if (hk) call("remove_keyframe", ...args, path, hk.id, segId, Store.state.playheadUs);
+      if (hk) CommandService.run("remove_keyframe",
+        { track_type: k[0], track_index: +k[1], index: +k[2], path, keyframe_id: hk.id, seg_id: segId, playhead_us: Store.state.playheadUs },
+        { actor: "ui", paths: [path] });
     };
-    rm("transform.scaleX"); rm("transform.scaleY");
+    // [2026-08-30 修复] 原裸 call 绕过 CommandService；改同事务原子双删，避免部分撤销留脏 KF。
+    CommandService.withTx("scale-toggle-rm", () => { rm("transform.scaleX"); rm("transform.scaleY"); });
     setTimeout(() => refresh(), 60);
   } else {
     const vx = getEffectivePropertyValue(s, "transform.scaleX", local).value;
     const vy = getEffectivePropertyValue(s, "transform.scaleY", local).value;
     const v = ((vx == null ? 1 : vx) + (vy == null ? 1 : vy)) / 2;   // 成组值取两轴平均
-    call("add_keyframe", ...args, "transform.scaleX", local, v, "linear", segId).then(() =>
-      call("add_keyframe", ...args, "transform.scaleY", local, v, "linear", segId).then(() => refresh()));
+    // [2026-08-30 修复] 原 call(...).then() 链非原子（事务断链）。改为同步 CommandService.run 双写，同一事务原子提交。
+    CommandService.withTx("scale-toggle-add", () => {
+      CommandService.run("add_keyframe",
+        { track_type: k[0], track_index: +k[1], index: +k[2], path: "transform.scaleX", time_us: local, value: v, seg_mode: "linear" },
+        { actor: "ui", paths: ["transform.scaleX"] });
+      CommandService.run("add_keyframe",
+        { track_type: k[0], track_index: +k[1], index: +k[2], path: "transform.scaleY", time_us: local, value: v, seg_mode: "linear" },
+        { actor: "ui", paths: ["transform.scaleY"] });
+    });
+    refresh();
   }
 }
 
@@ -441,11 +471,15 @@ function commitColor(hex) {
     // 写四分量当前帧（一次事务 ×4 同 t）
     const paths = ["text.color.r", "text.color.g", "text.color.b", "text.color.a"];
     const vals = [r, g, b, a];
-    const run = i => {
-      if (i >= 4) { setTimeout(() => refresh(), 60); return; }
-      call("add_keyframe", ...args, paths[i], local, vals[i], "linear", segId).then(() => run(i + 1));
-    };
-    CommandService.withTx("color-kf-edit", () => run(0));
+    // [2026-08-30 修复] 原 call(...).then() 递归链非原子（withTx 在异步链前关闭）。改同步 for 循环四写，同事务原子提交。
+    CommandService.withTx("color-kf-edit", () => {
+      for (let i = 0; i < 4; i++) {
+        CommandService.run("add_keyframe",
+          { track_type: k[0], track_index: +k[1], index: +k[2], path: paths[i], time_us: local, value: vals[i], seg_mode: "linear" },
+          { actor: "ui", paths: [paths[i]] });
+      }
+    });
+    setTimeout(() => refresh(), 60);
   } else {
     // L2-02：无帧 → base 写回 sub_style.color（set_segments_props 已扩展 sub_style，不新增 Api）
     const k = Store.state.selectedKey ? Store.state.selectedKey.split(":") : null;
@@ -469,21 +503,30 @@ function toggleColorKf(pathBase) {
   const paths = ["text.color.r", "text.color.g", "text.color.b", "text.color.a"];
   const hit = paths.some(p => KfChannel.hitAtPlayhead(s, p, local));
   if (hit) {
-    paths.forEach(p => {
-      const keys = (anims[p] && anims[p].keys) ? anims[p].keys : [];
-      const hk = keys.find(kk => Math.abs((kk.t || 0) - local) <= KfChannel.KF_HIT_TOLERANCE_US);
-      if (hk) call("remove_keyframe", ...args, p, hk.id, segId, Store.state.playheadUs);
+    // [2026-08-30 修复] 原裸 call 绕过 CommandService；改同事务原子删四分量。
+    CommandService.withTx("color-toggle-rm", () => {
+      paths.forEach(p => {
+        const keys = (anims[p] && anims[p].keys) ? anims[p].keys : [];
+        const hk = keys.find(kk => Math.abs((kk.t || 0) - local) <= KfChannel.KF_HIT_TOLERANCE_US);
+        if (hk) CommandService.run("remove_keyframe",
+          { track_type: k[0], track_index: +k[1], index: +k[2], path: p, keyframe_id: hk.id, seg_id: segId, playhead_us: Store.state.playheadUs },
+          { actor: "ui", paths: [p] });
+      });
     });
     setTimeout(() => refresh(), 60);
   } else {
     const cur = resolveColorAtTime(s, local);
     const { r, g, b, a } = ColorPickerUtils.hexToRgba(cur);
     const vals = [r, g, b, a];
-    const run = i => {
-      if (i >= 4) { setTimeout(() => refresh(), 60); return; }
-      call("add_keyframe", ...args, paths[i], local, vals[i], "linear", segId).then(() => run(i + 1));
-    };
-    CommandService.withTx("color-kf", () => run(0));
+    // [2026-08-30 修复] 原 call(...).then() 递归链非原子（withTx 在异步链前关闭）。改同步 for 循环四写，同事务原子提交。
+    CommandService.withTx("color-kf", () => {
+      for (let i = 0; i < 4; i++) {
+        CommandService.run("add_keyframe",
+          { track_type: k[0], track_index: +k[1], index: +k[2], path: paths[i], time_us: local, value: vals[i], seg_mode: "linear" },
+          { actor: "ui", paths: [paths[i]] });
+      }
+    });
+    setTimeout(() => refresh(), 60);
   }
 }
 

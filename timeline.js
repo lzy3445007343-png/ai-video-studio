@@ -79,14 +79,50 @@ function renderRuler(p, totalSec, viewLeftSec, viewRightSec) {
 }
 // 轨道标签图标（L2-27 子项9：emoji→内联SVG，stroke=currentColor 自动继承 off 态红色，
 // pointer-events:none 防止 SVG 吞掉 .icon 的点击委托 closest(".icon[data-act]")）
+/* P4（2026-08-28）：改走 sprite（`<svg class="ic"><use href="#i-xxx"/></svg>`）。
+   旧版是内联的 20x20 SVG 字符串——尺寸写死在 HTML 属性里，CSS 改不动，
+   跟 OpenCut-UI-复刻.html 用的 lucide 图标也不是同一套（粗细/圆角都不一样）。 */
 const TRACK_ICONS = {
-  speaker: '<svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"><path d="M11 5 6 9H2v6h4l5 4V5z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M19 5a9 9 0 0 1 0 14"/></svg>',
-  speakerOff: '<svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"><path d="M11 5 6 9H2v6h4l5 4V5z"/><line x1="22" y1="9" x2="16" y2="15"/><line x1="16" y1="9" x2="22" y2="15"/></svg>',
-  eye: '<svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>',
-  eyeOff: '<svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19M1 1l22 22"/></svg>',
-  lock: '<svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>',
-  lockOpen: '<svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 9.9-1"/></svg>'
+  speaker: '<svg class="ic"><use href="#i-vol"/></svg>',
+  speakerOff: '<svg class="ic"><use href="#i-vol-off"/></svg>',
+  eye: '<svg class="ic"><use href="#i-eye"/></svg>',
+  eyeOff: '<svg class="ic"><use href="#i-eye-off"/></svg>',
+  lock: '<svg class="ic"><use href="#i-lock"/></svg>',
+  lockOpen: '<svg class="ic"><use href="#i-lock-open"/></svg>'
 };
+
+/* P4：轨道头类型图标 + 类型色（对齐复刻 timeline/theme.ts:3-18 与 TRACK_ICON 表）。
+   视频轨用中性灰而非彩色——它是「默认轨」，彩色留给文字/音频/贴纸/特效这些有语义的轨，
+   这样一眼扫过去就能按颜色分辨轨型。复刻在 dark 主题下给 video 的是 hsl(0,0%,20%)=#333，
+   在我们的 #1a1a1a 轨道头背景上几乎看不见，所以改用 --muted(#8a8a8a)，保留「中性」这个层级关系。 */
+const TRACK_TYPE_ICON = {
+  video: "i-media", audio: "i-sounds", text: "i-text", sticker: "i-stickers", effect: "i-effects"
+};
+const TRACK_TYPE_COLOR = {
+  video: "var(--muted)", audio: "var(--seg-audio)", text: "var(--seg-text)",
+  sticker: "var(--seg-sticker)", effect: "var(--seg-effect)"
+};
+/* 轨道头 HTML：[彩色类型图标][名称][操作按钮组]（对齐复刻 .tl-label 的三段结构）。
+   两个渲染路径（keyed-diff 快路径 / 全量重建）共用，避免改了一处漏了另一处。 */
+function trackLabelHTML(tr, m) {
+  const showMute = tr.type === "video" || tr.type === "audio";
+  const showHide = tr.type === "video" || tr.type === "text" || tr.type === "sticker" || tr.type === "effect";
+  let icons = "";
+  if (showMute) {
+    const on = !m.muted;
+    icons += '<span class="icon' + (on ? "" : " off") + '" data-act="mute" title="静音/取消静音">' + (on ? TRACK_ICONS.speaker : TRACK_ICONS.speakerOff) + '</span>';
+  }
+  if (showHide) {
+    const on = !m.hidden;
+    icons += '<span class="icon' + (on ? "" : " off") + '" data-act="hide" title="显示/隐藏">' + (on ? TRACK_ICONS.eye : TRACK_ICONS.eyeOff) + '</span>';
+  }
+  icons += '<span class="icon' + (m.locked ? " off" : "") + '" data-act="lock" title="锁定/解锁轨道（锁定后禁止编辑该轨）">' + (m.locked ? TRACK_ICONS.lock : TRACK_ICONS.lockOpen) + '</span>';
+  const tint = TRACK_TYPE_COLOR[tr.type] || "var(--muted)";
+  const sym = TRACK_TYPE_ICON[tr.type] || "i-media";
+  return '<span class="ti" style="color:' + tint + '"><svg class="ic"><use href="#' + sym + '"/></svg></span>'
+    + '<span class="name" title="' + esc(tr.label) + '">' + esc(truncateName(tr.label)) + '</span>'
+    + '<span class="acts">' + icons + '</span>';
+}
 function rulerLabel(us, p) {
   const s = us / 1e6, m = Math.floor(s / 60), sec = s - m * 60;
   // L2-27 子项8：高密度（p>=500，约每帧一刻度）改 MM:SSfFF 帧标签，替代原 秒.毫秒 三位小数
@@ -256,7 +292,7 @@ function resolveNewDrop(direction, preferredDisplay, tracks, dragType) {
    所有轨之上/之下：固定 above/below（与拖动方向无关）
    reorder 已撤（2026-08-18 用户拍板）：拖已有段命中不兼容已有轨 = 新建同类型轨预览（夹到
    两条轨中间），不再做 z 序重排——预览/落位/后端插入严格同源。 */
-function computeDrop(e, dragType, verticalDragDirection, atTimeUs, isLibrary, excludeSegId) {
+function computeDrop(e, dragType, verticalDragDirection, atTimeUs, isLibrary, excludeSegId, spanDurationUs) {
   verticalDragDirection = verticalDragDirection || null;
   isLibrary = !!isLibrary;
   const tracks = buildTracks();
@@ -285,7 +321,7 @@ function computeDrop(e, dragType, verticalDragDirection, atTimeUs, isLibrary, ex
       // D2（2026-08-19）：落点被占用 → 新建同类型轨（OpenCut canPlaceTimeSpansOnTrack 语义）。
       // 库拖入 & 已有段拖动都检测（之前只有库拖入检测；已有段直接 existing 导致重叠落位观感乱）。
       // excludeSegId = 被拖段自身（同轨移动时不算占用）。
-      if (atTimeUs != null && trackBusyAt(t, atTimeUs, excludeSegId)) {
+      if (atTimeUs != null && trackBusyAt(t, atTimeUs, excludeSegId, spanDurationUs)) {
         const el = trackElOf(t);
         const r = el.getBoundingClientRect();
         const topHalf = (y < r.top + r.height / 2);
@@ -369,11 +405,22 @@ function trackTidOf(type, ti) {
 }
 
 /* 落点冲突检测：该轨在 atTimeUs 处是否已有素材覆盖（库拖入不弹末尾，改新建轨） */
-function trackBusyAt(track, atTimeUs, excludeSegId) {
+function trackBusyAt(track, atTimeUs, excludeSegId, spanDurationUs) {
   const segs = track.segs || [];
+  // 放置判定必须比较完整时间区间。只检查鼠标落点会漏掉“从两段间的缝隙开始、
+  // 但素材尾部覆盖下一段”的情况，松手后后端只能右推，造成预览与实际落位不一致。
+  const candidate = {
+    start: atTimeUs,
+    duration: Math.max(0, Number(spanDurationUs) || 0),
+  };
   for (const s of segs) {
     if (excludeSegId && s.id === excludeSegId) continue;  // 被拖段自身不算占用（同轨移动）
-    if (atTimeUs >= s.start && atTimeUs < s.start + s.duration) return true;
+    if (candidate.duration > 0) {
+      if (!(candidate.start + candidate.duration <= s.start || candidate.start >= s.start + s.duration)) return true;
+    } else if (atTimeUs >= s.start && atTimeUs < s.start + s.duration) {
+      // 没有时长的旧调用保留点命中语义；媒体库和片段移动都会传真实时长。
+      return true;
+    }
   }
   return false;
 }
@@ -583,14 +630,7 @@ function _renderTimelineKeyed(content, labels, ruler) {
     const label = document.createElement("div");
     label.className = "track-label";
     label.dataset.type = tr.type; label.dataset.ti = tr.ti;
-    const m = trackMeta(tr.type, tr.ti);
-    const showMute = tr.type === "video" || tr.type === "audio";
-    const showHide = tr.type === "video" || tr.type === "text" || tr.type === "sticker" || tr.type === "effect";
-    let icons = "";
-    if (showMute) { const on = !m.muted; icons += '<span class="icon' + (on ? "" : " off") + '" data-act="mute" title="静音/取消静音">' + (on ? TRACK_ICONS.speaker : TRACK_ICONS.speakerOff) + '</span>'; }
-    if (showHide) { const on = !m.hidden; icons += '<span class="icon' + (on ? "" : " off") + '" data-act="hide" title="显示/隐藏">' + (on ? TRACK_ICONS.eye : TRACK_ICONS.eyeOff) + '</span>'; }
-    icons += '<span class="icon' + (m.locked ? " off" : "") + '" data-act="lock" title="锁定/解锁轨道（锁定后禁止编辑该轨）">' + (m.locked ? TRACK_ICONS.lock : TRACK_ICONS.lockOpen) + '</span>';
-    label.innerHTML = icons + '<span class="name" title="' + esc(tr.label) + '">' + esc(truncateName(tr.label)) + '</span>';
+    label.innerHTML = trackLabelHTML(tr, trackMeta(tr.type, tr.ti));
     labels.appendChild(label);
   }
   // 逐轨逐段 in-place 更新（几何 + 内容），仅签名变化者才写 DOM
@@ -689,20 +729,7 @@ function renderTimeline(s) {
     label.className = "track-label";
     label.dataset.type = tr.type; label.dataset.ti = tr.ti;
     const m = trackMeta(tr.type, tr.ti);
-    const showMute = tr.type === "video" || tr.type === "audio";
-    const showHide = tr.type === "video" || tr.type === "text" || tr.type === "sticker" || tr.type === "effect";
-    let icons = "";
-    if (showMute) {
-      const on = !m.muted;
-      icons += '<span class="icon' + (on ? "" : " off") + '" data-act="mute" title="静音/取消静音">' + (on ? TRACK_ICONS.speaker : TRACK_ICONS.speakerOff) + '</span>';
-    }
-    if (showHide) {
-      const on = !m.hidden;
-      icons += '<span class="icon' + (on ? "" : " off") + '" data-act="hide" title="显示/隐藏">' + (on ? TRACK_ICONS.eye : TRACK_ICONS.eyeOff) + '</span>';
-    }
-    // 轨道锁定（2026-08-16 对齐 OpenCut TrackLabelsPanel lock）：锁定的轨禁止编辑
-    icons += '<span class="icon' + (m.locked ? " off" : "") + '" data-act="lock" title="锁定/解锁轨道（锁定后禁止编辑该轨）">' + (m.locked ? TRACK_ICONS.lock : TRACK_ICONS.lockOpen) + '</span>';
-    label.innerHTML = icons + '<span class="name" title="' + esc(tr.label) + '">' + esc(truncateName(tr.label)) + '</span>';
+    label.innerHTML = trackLabelHTML(tr, m);
     labels.appendChild(label);
     const track = document.createElement("div");
     track.className = "track";
@@ -727,7 +754,7 @@ function renderTimeline(s) {
       track.appendChild(makeSeg(seg, tr.type, tr.ti, idx));
       childCount++;
     });
-    if (!childCount) { const hEl = document.createElement("div"); hEl.className = "empty-hint"; track.appendChild(hEl); }
+    if (!childCount) { const hEl = document.createElement("div"); hEl.className = "empty-hint"; hEl.textContent = "空轨道"; track.appendChild(hEl); }
     content.appendChild(track);
   });
   // 移动预览：蓝色落点竖线（X 时间位）+ new 时 DragLine 横线（新轨目标 Y 位置）；拖动结束清理残留
