@@ -33,7 +33,7 @@ const PreviewState = {
     let o = this._overlay[segId];
     if (!o) o = this._overlay[segId] = {};
     o["__kf__" + path] = channel;
-    this._notify(segId);
+    this._notify(segId, { keyframes: true });
   },
   get(segId, path) {
     const o = this._overlay[segId];
@@ -47,11 +47,16 @@ const PreviewState = {
   has(segId) { return !!(segId != null && this._overlay[segId]); },
   clear(segId) {
     if (segId != null && this._overlay[segId]) {
+      const keyframes = Object.keys(this._overlay[segId]).some(key => key.indexOf("__kf__") === 0);
       delete this._overlay[segId];
-      this._notify(segId);
+      this._notify(segId, { keyframes });
     }
   },
-  clearAll() { this._overlay = {}; },
+  clearAll() {
+    const ids = Object.keys(this._overlay);
+    this._overlay = {};
+    for (const segId of ids) this._notify(segId, { keyframes: true });
+  },
 
   /* —— 合并读取（等价 OpenCut getPreviewTracks 元素级实现）——
    * 返回 seg 与 overlay 合并的浅视图：overlay（普通路径 + KF 通道）优先于 seg。
@@ -69,8 +74,15 @@ const PreviewState = {
       if (key.indexOf("__kf__") === 0) {
         const path = key.slice(6);
         view.animations[path] = o[key];         // 预览通道覆盖（供 applyKfTransform 插值）
+      } else if (typeof PROPERTY_REGISTRY !== "undefined" && PROPERTY_REGISTRY[key]) {
+        // 规范属性实际保存在 params["transform.positionX"] 这类扁平键中。
+        // 不可按点号拆进 view.transform，否则消费者仍会读到旧 params。
+        view.params = Object.assign({}, view.params || {});
+        view.params[key] = o[key];
+      } else if (key.indexOf("params.") === 0) {
+        view.params = setNestedCopy(view.params || {}, key.slice("params.".length), o[key]);
       } else {
-        setNested(view, key, o[key]);           // 普通属性路径合并
+        setNestedCopy(view, key, o[key]);       // 普通非规范属性合并
       }
     }
     return view;
@@ -85,9 +97,9 @@ const PreviewState = {
     };
   },
   notifyPreviewConsumers(segId) { this._notify(segId); },
-  _notify(segId) {
+  _notify(segId, change) {
     for (const fn of this._subs) {
-      try { fn(segId); } catch (e) { /* 订阅者异常不影响交互 */ }
+      try { fn(segId, change); } catch (e) { /* 订阅者异常不影响交互 */ }
     }
   },
 
@@ -101,16 +113,21 @@ const PreviewState = {
   discardPreview(segId) { this.clear(segId); },
 };
 
-/* 路径写入工具："transform.scaleX" → view.transform.scaleX = v */
-function setNested(obj, path, value) {
+/* Copy-on-write 路径写入，预览态绝不反向污染正式段数据。 */
+function setNestedCopy(obj, path, value) {
+  const root = Array.isArray(obj) ? obj.slice() : Object.assign({}, obj || {});
   const parts = String(path).split(".");
-  let cur = obj;
+  let cur = root;
   for (let i = 0; i < parts.length - 1; i++) {
     const p = parts[i];
-    if (cur[p] == null || typeof cur[p] !== "object") cur[p] = {};
+    const existing = cur[p];
+    cur[p] = existing && typeof existing === "object"
+      ? (Array.isArray(existing) ? existing.slice() : Object.assign({}, existing))
+      : {};
     cur = cur[p];
   }
   cur[parts[parts.length - 1]] = value;
+  return root;
 }
 
 if (typeof window !== "undefined") window.PreviewState = PreviewState;

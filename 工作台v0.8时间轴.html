@@ -4820,6 +4820,37 @@ function initSubscriptionSlices() {
   Store.subscribeSlice("effects", (v, s) => { if (typeof renderSkill === "function") renderSkill(s); });
 }
 
+/* PreviewState 是画布拖拽、参数输入、关键帧编辑共用的临时真相。
+ * 将它在一个动画帧内扇出，避免任一视图只显示本地临时值而其余视图仍读取旧 draft。 */
+function initPreviewStateSync() {
+  if (typeof PreviewState === "undefined" || window.__previewStateSyncBound) return;
+  window.__previewStateSyncBound = true;
+  let scheduled = false;
+  let timelineDirty = false;
+  let pendingSegIds = new Set();
+
+  PreviewState.subscribe((segId, change) => {
+    if (segId != null) pendingSegIds.add(segId);
+    if (change && change.keyframes) timelineDirty = true;
+    if (scheduled) return;
+    scheduled = true;
+    requestAnimationFrame(() => {
+      scheduled = false;
+      const ids = pendingSegIds;
+      const refreshTimeline = timelineDirty;
+      pendingSegIds = new Set();
+      timelineDirty = false;
+      const selected = selectedSeg();
+
+      if (selected && ids.has(selected.id)) {
+        if (!isPlaying && typeof renderPreview === "function") renderPreview();
+        if (typeof updateKfPanelValues === "function") updateKfPanelValues();
+      }
+      if (refreshTimeline && !isPlaying && typeof renderTimeline === "function") renderTimeline();
+    });
+  });
+}
+
 /* ---------- 启动 ---------- */
 let booted = false;
 // 2026-08-20 诊断打点（GPT 评审）：全局错误捕获——"全空/黑屏"类问题不再需要猜，控制台直接看堆栈
@@ -4889,10 +4920,10 @@ function boot() {
   // 先拿本地 HTTP 服务器地址，素材才能走 http（WebView2 下 video/audio 不能读 file://）
   call("get_server_url").then(url => {
     if (url) window.MEDIA_BASE = url;
-    try { bindEvents(); initSplit(); initHSplit("L"); initHSplit("R"); initZoomControls(); initSubscriptionSlices(); refresh(); call("get_effect_registry").then(r => { if (r && r.ok) { Store.set({ effects: r.meta }); if (window.Effects) Effects.compile(r.meta); } }); }
+    try { bindEvents(); initSplit(); initHSplit("L"); initHSplit("R"); initZoomControls(); initSubscriptionSlices(); initPreviewStateSync(); refresh(); call("get_effect_registry").then(r => { if (r && r.ok) { Store.set({ effects: r.meta }); if (window.Effects) Effects.compile(r.meta); } }); }
     catch (e) { showFatal("init: " + (e && e.stack || e)); }
   }).catch(() => {
-    try { bindEvents(); initSplit(); initHSplit("L"); initHSplit("R"); initZoomControls(); initSubscriptionSlices(); refresh(); call("get_effect_registry").then(r => { if (r && r.ok) { Store.set({ effects: r.meta }); if (window.Effects) Effects.compile(r.meta); } }); }
+    try { bindEvents(); initSplit(); initHSplit("L"); initHSplit("R"); initZoomControls(); initSubscriptionSlices(); initPreviewStateSync(); refresh(); call("get_effect_registry").then(r => { if (r && r.ok) { Store.set({ effects: r.meta }); if (window.Effects) Effects.compile(r.meta); } }); }
     catch (e) { showFatal("init(fallback): " + (e && e.stack || e)); }
   });
 }
