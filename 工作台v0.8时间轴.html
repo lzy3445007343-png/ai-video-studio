@@ -2725,6 +2725,16 @@ function startPointer(e, seg, mode, side) {
   // 优先按段 id 定位源段（mousedown 时 DOM 是刚渲染的，id 一定准确；ti 可能因折叠漂移）
   const s0 = segId ? segById(segId) : null;
   if (!s0) return;
+  // 时间编辑与画布变换必须是两条独立状态线。若前一次画布拖动因失焦/取消
+  // 留下了 interaction overlay，后续时间轴刷新会把那份临时 transform 又应用到播放器，
+  // 表现为“拖时间轴，画面位置也变了”。开始时间操作前先结束旧会话并丢弃临时预览；
+  // 已提交的 transform / animations 完全不受影响。
+  if (typeof InteractionManager !== "undefined" && InteractionManager.activeSession) {
+    InteractionManager.cancel();
+  }
+  if (typeof PreviewState !== "undefined" && segId && PreviewState.has(segId)) {
+    PreviewState.discardPreview(segId);
+  }
   // 选中语义（对齐 OpenCut selectable-surface.tsx handleItemClick）：
   //   Ctrl/Cmd+点击 = 切换该段进/出多选集合；普通点击 = 单选替换。
   //   已在多选集合内（且集合>1）→ 直接整组拖动，锚点=本段，保持选区（对齐 OpenCut group move）。
