@@ -145,13 +145,25 @@ class DragSession extends GestureSession {
     const k = c.key.split(":");
     const args = { track_type: k[0], track_index: +k[1], index: +k[2] };
     const paths = ["transform.positionX", "transform.positionY"];
-    const seg = c.seg;
+    // pointerdown 时缓存的 rec.seg 可能已被轮询刷新替换；提交必须按稳定 id
+    // 重新取当前文档对象，否则 X/Y 通道会被旧引用误判成不对称。
+    const seg = (typeof segById === "function" && c.target && c.target.id)
+      ? (segById(c.target.id) || c.seg)
+      : c.seg;
+    const segView = (typeof PreviewState !== "undefined")
+      ? PreviewState.getPreviewSeg(seg)
+      : seg;
     // ★ #B-04/#1 修复（2026-08-29，audit_log 为证）：KF 段拖拽"弹回"根因=只写 base，
     //   播放头处画面由 KF 插值决定→拖了看不见（用户 13:31 会话：拖 14 次每次只写 base、从不碰 KF）。
     //   修复：positionX/Y 有动画通道时，拖拽同步更新「当前播放头 localUs」的关键帧（无则新建），
     //   松手后播放头处显示=拖后值→不再弹回。base 仍同步写（非KF时刻/参数面板一致）。
     const localUs = (c.editCtx && c.editCtx.editTime) ? c.editCtx.editTime.localUs : _previewLocalUs(seg);
-    const kfPaths = paths.filter(p => _previewHasAnim(seg, p));
+    const kfPaths = paths.filter(p => _previewHasAnim(segView, p));
+    console.log("[preview-drag] commit", JSON.stringify({
+      gestureId: c.gestureId, segId: c.target.id, localUs,
+      kfPaths, hasAnimX: _previewHasAnim(segView, paths[0]),
+      hasAnimY: _previewHasAnim(segView, paths[1]),
+    }));
     setProperties(seg, {
       "transform.positionX": nx,
       "transform.positionY": ny,
