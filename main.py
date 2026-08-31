@@ -4284,6 +4284,65 @@ class Api:
         save_state(self.state)
         return {"ok": True, "segid": seg.get("id"), "transform": seg["transform"]}
 
+    def update_transform_and_keyframes(self, track_type=None, track_index=None, index=None,
+                                       segid=None, transform=None, keyframes=None):
+        """原子提交画布变换及同一手势产生的关键帧。
+
+        画布拖拽不能依赖多个异步 add_keyframe 的先后顺序：其中一个失败或被旧状态覆盖，
+        就会表现为 X/Y 只更新一轴后弹回。这里在同一段、同一次 save_state 中完成全部写入。
+        """
+        self._reload()
+        self._push_undo()
+        seg = _seg_by_id(self.draft, segid) if segid else None
+        if seg is None and track_type is not None and track_index is not None and isinstance(index, int):
+            segs = _track_segs(self.draft, track_type, track_index)
+            if segs and 0 <= index < len(segs):
+                seg = segs[index]
+        if seg is None:
+            return {"ok": False, "error": "未定位到段"}
+        if not isinstance(transform, dict) or not transform:
+            return {"ok": False, "error": "transform 必须是非空 dict"}
+        cur = seg.get("transform") if isinstance(seg.get("transform"), dict) else {}
+        seg["transform"] = dict(cur)
+        for k in ("x", "y", "scaleX", "scaleY", "rotation", "opacity"):
+            if k in transform:
+                seg["transform"][k] = transform[k]
+                _write_param(seg, _FIELD_TO_PARAM[k], transform[k])
+        stored = []
+        for item in (keyframes if isinstance(keyframes, list) else []):
+            if not isinstance(item, dict):
+                return {"ok": False, "error": "关键帧参数格式错误"}
+            path = item.get("path")
+            if path not in KF_KEYFRAMEABLE:
+                return {"ok": False, "error": f"不支持关键帧的属性：{path}"}
+            value = item.get("value")
+            if not isinstance(value, (int, float, bool, str)):
+                return {"ok": False, "error": "关键帧 value 必须是数字/布尔/字符串"}
+            dur = int(seg.get("duration", 0))
+            t = max(0, min(_frame_snap_us(int(item.get("time_us", 0))), dur))
+            mode = item.get("seg_mode", "linear")
+            if mode not in ("linear", "hold"):
+                mode = "linear"
+            anims = _seg_anims(seg)
+            ch = anims.get(path) if isinstance(anims.get(path), dict) else {"keys": []}
+            keys = list(ch.get("keys", []))
+            existing = next((k for k in keys if k.get("t") == t), None)
+            if existing:
+                existing["v"] = float(value) if isinstance(value, (int, float, bool)) else value
+                existing["seg"] = mode
+                existing["segmentToNext"] = mode
+            else:
+                keys.append({"id": uuid.uuid4().hex, "t": t,
+                             "v": float(value) if isinstance(value, (int, float, bool)) else value,
+                             "seg": mode, "segmentToNext": mode,
+                             "leftHandle": {"dt": 0, "dv": 0},
+                             "rightHandle": {"dt": 0, "dv": 0}, "tangentMode": "auto"})
+            keys.sort(key=lambda k: k.get("t", 0))
+            anims[path] = dict(ch, type=ch.get("type", "scalar"), keys=keys)
+            stored.append({"path": path, "time_us": t, "value": value})
+        save_state(self.state)
+        return {"ok": True, "segid": seg.get("id"), "transform": seg["transform"], "keyframes": stored}
+
     # ---------- 关键帧 / 动画 CRUD（对齐 OpenCut upsertKeyframe / removeKeyframe / retimeKeyframe） ----------
     def _kf_resolve_seg(self, track_type, track_index, index, seg_id=None):
         """取关键帧编辑目标段，返回 (seg, None) 或 (None, error)。

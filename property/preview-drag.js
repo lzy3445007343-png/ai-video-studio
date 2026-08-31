@@ -177,20 +177,17 @@ class DragSession extends GestureSession {
       rotation: (typeof getProperty === "function") ? getProperty(seg, "transform.rotate") : (tr.rotation != null ? tr.rotation : 0),
       opacity: (typeof getProperty === "function") ? getProperty(seg, "transform.opacity") : (tr.opacity != null ? tr.opacity : 1),
     };
-    // 位置参数经 execute 包装：execute(cmd_id, args_dict) → fn(**args)——args 键名=Python 签名参数名
-    CommandService.withTx("drag-transform", () => {
-      CommandService.run("update_segment_transform", Object.assign({}, args, {
-        segid: c.target.id, transform: next,
-      }), { actor: "ui", paths });
-      // KF 通道：拖拽更新当前播放头关键帧（add_keyframe 严格同帧更新已有 KF，否则新建）
-      for (const p of kfPaths) {
-        const v = (p === "transform.positionX") ? nx : ny;
-        CommandService.run("add_keyframe", {
-          track_type: k[0], track_index: +k[1], index: +k[2],
-          path: p, time_us: localUs, value: v, seg_mode: "linear", seg_id: c.target.id,
-        }, { actor: "ui" });
-      }
-    }, { onError: e => console.error("[preview-drag] 写 transform/KF 失败:", e) });
+    // 位置与 X/Y 关键帧必须一次原子提交；多个异步命令会产生“只落一轴后回弹”。
+    const keyframes = kfPaths.map(p => ({
+      path: p, time_us: localUs,
+      value: p === "transform.positionX" ? nx : ny,
+      seg_mode: "linear",
+    }));
+    CommandService.withTx("drag-transform", () =>
+      CommandService.run("update_transform_and_keyframes", Object.assign({}, args, {
+        segid: c.target.id, transform: next, keyframes,
+      }), { actor: "ui", paths }),
+      { onError: e => console.error("[preview-drag] 写 transform/KF 失败:", e) });
   }
   cancel() { hidePreviewSnapGuides(); this._snapLines = null; if (this.ctx && this.ctx.target) PreviewState.discardPreview(this.ctx.target.id); }  // L1-06/L0-03：不落库，丢弃 overlay + 对齐线
   destroy() {
