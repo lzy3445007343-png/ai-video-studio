@@ -3494,7 +3494,7 @@ function onTimelineDrop(e) {
   if (data && data.kind === "effect") {
     const rect = $("tlScroll").getBoundingClientRect();
     // L0-04：落点时间吸附到帧网格（TimelineMapper.snapFrame，与后端 snap_frame 同口径，fps 默认 30）
-    const atTimeUs = TimelineMapper.snapFrame(Math.max(0, Math.round((e.clientX - rect.left + $("tlScroll").scrollLeft) / pps() * 1e6)), 30);
+    const atTimeUs = timelineDropTimeUs(e.clientX);
     const bindSeg = findSegUnderCursor(e);
     const compatible = bindSeg && ["video", "image", "audio", "text", "sticker"].includes(bindSeg.segType);
     if (compatible) {
@@ -3528,9 +3528,8 @@ function onTimelineDrop(e) {
     return;
   }
   const wantType = data.type === "audio" ? "audio" : (data.type === "text" ? "text" : "video");
-  const rect = $("tlScroll").getBoundingClientRect();
-  // L0-04：落点时间吸附到帧网格（TimelineMapper.snapFrame，与后端 snap_frame 同口径，fps 默认 30）
-  const atTimeUs = TimelineMapper.snapFrame(Math.max(0, Math.round((e.clientX - rect.left + $("tlScroll").scrollLeft) / pps() * 1e6)), 30);
+  // L0-04：落点时间吸附到帧网格；与 dragover 共用同一坐标换算。
+  const atTimeUs = timelineDropTimeUs(e.clientX);
   // 统一走 computeDrop：同类型已有轨→精确落点；空白/异类型→新建该类型轨接住（与预览/实际同源）
   // 优先复用 dragover 最后缓存落点（防松手瞬间跨边界错位）
   const cached = window.__libDropCache;
@@ -3685,7 +3684,9 @@ function showClipGhost(dragType, xUs, yPx) {
   }
   ghost.style.display = "";
   ghost.style.width = widthPx + "px";
-  ghost.style.left = (xUs / 1e6 * ppsV - contentRect.left) + "px";
+  // clipGhost 是 tlContent 的子元素，left 使用内容坐标；不能减视口 left。
+  // 否则横向滚动后影子会与最终落点逐渐分离。
+  ghost.style.left = (xUs / 1e6 * ppsV) + "px";
   ghost.style.top = (yPx - contentRect.top - 16) + "px";  // 2026-08-18 关键 bug 修复：必须传 yPx，否则影子段在 tlContent 顶部固定
 }
 function hideClipGhost() {
@@ -4459,7 +4460,7 @@ function bindEvents() {
     }
     // 落点时间位（与 drop 时同源，避免边界漂移）；isLibrary=true → 落点被占用时改新建轨（不弹末尾）
     // L0-04：落点时间吸附到帧网格（TimelineMapper.snapFrame，与后端 snap_frame 同口径，fps 默认 30）
-    const atTimeUs = TimelineMapper.snapFrame(Math.max(0, Math.round((e.clientX - contentRect.left + $("tlScroll").scrollLeft) / pps() * 1e6)), 30);
+    const atTimeUs = timelineDropTimeUs(e.clientX);
     // 统一落点：preview/落点线/实际三位一体（computeDrop 单一真源，verticalDragDirection 决定间隙归属）
     const spanDurationUs = (!isEffect && d && typeof d.durationUs === "number" && d.durationUs > 0) ? d.durationUs : null;
     const drop = computeDrop(e, wantType, vDir, atTimeUs, true, null, spanDurationUs);
@@ -4828,6 +4829,16 @@ function initSubscriptionSlices() {
   // 4b：特效注册表回填(effects)→ 技能面板重渲（legacy 由 _emit→renderAll 覆盖，slice 模式需显式订阅；
   // effects 在 boot 与 renderMedia 懒加载处 Store.set，不经 refresh，故不能依赖 renderAll 保险路径）。
   Store.subscribeSlice("effects", (v, s) => { if (typeof renderSkill === "function") renderSkill(s); });
+}
+
+// 拖放时间统一从 tlScroll 视口坐标换算到 tlContent 内容时间。
+// tlContent 会随 scrollLeft 移动，使用它的 rect 再加 scrollLeft 会把滚动距离算两次。
+function timelineDropTimeUs(clientX) {
+  const scroll = $("tlScroll");
+  if (!scroll) return 0;
+  return TimelineMapper.snapFrame(Math.max(0, Math.round(
+    (clientX - scroll.getBoundingClientRect().left + scroll.scrollLeft) / pps() * 1e6
+  )), 30);
 }
 
 /* PreviewState 是画布拖拽、参数输入、关键帧编辑共用的临时真相。
