@@ -48,6 +48,8 @@ const Store = {
     waveMap: {},           // path -> 音频峰值数组（0~1，按时间顺序，每秒 60 点）
     selectedKey: null,     // "type:ti:idx"
     selectedKeys: [],      // 多选集合（Ctrl+A 全选）；单击也进此集合，selectedKey 为最后选中的焦点段
+    selectedSegIds: [],    // 稳定选择真相；selectedKeys 仅保留给当前时间轴 DOM 渲染兼容
+    selectedSegId: null,   // 选中焦点的稳定段 id
     selectedMaterialUid: null, // 素材面板选中的素材 uid（与时间轴选中互斥）
     pxPerSec: 120,         // 缩放
     playheadUs: 0,
@@ -149,6 +151,7 @@ function selSnapshot() {
   return {
     selectedKey: Store.state.selectedKey,
     selectedKeys: Store.state.selectedKeys,
+    selectedSegIds: Store.state.selectedSegIds,
     selectedMaterialUid: Store.state.selectedMaterialUid,
     selectedSegId: Store.state.selectedSegId,
   };
@@ -158,6 +161,7 @@ function applySelection(sel) {
   Store.set({
     selectedKey: sel.selectedKey ?? null,
     selectedKeys: sel.selectedKeys ?? [],
+    selectedSegIds: sel.selectedSegIds ?? [],
     selectedMaterialUid: sel.selectedMaterialUid ?? null,
     selectedSegId: sel.selectedSegId ?? null,
   });

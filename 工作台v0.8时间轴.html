@@ -2220,8 +2220,8 @@ function selectKey(key) {
     const seg = findSegByKey(key);
     if (seg && seg.id) segId = seg.id;
   }
-  if (key == null) Store.set({ selectedKey: null, selectedKeys: [], selectedMaterialUid: null, selectedSegId: null });
-  else Store.set({ selectedKey: key, selectedKeys: [key], selectedMaterialUid: null, selectedSegId: segId });
+  if (key == null) Store.set({ selectedKey: null, selectedKeys: [], selectedSegIds: [], selectedMaterialUid: null, selectedSegId: null });
+  else Store.set({ selectedKey: key, selectedKeys: [key], selectedSegIds: segId ? [segId] : [], selectedMaterialUid: null, selectedSegId: segId });
   updateToolbarState();
   renderKfPanelPF();
 }
@@ -2231,7 +2231,7 @@ function selectMaterial(uid, e) {
     const set = new Set(cur);
     if (set.has(uid)) set.delete(uid); else set.add(uid);
     const arr = [...set];
-    Store.set({ selectedMaterialUids: arr, selectedMaterialUid: arr.length === 1 ? arr[0] : null, selectedKey: null, selectedKeys: [] });
+    Store.set({ selectedMaterialUids: arr, selectedMaterialUid: arr.length === 1 ? arr[0] : null, selectedKey: null, selectedKeys: [], selectedSegIds: [], selectedSegId: null });
   } else if (e && e.shiftKey && cur.length) {   // Shift 范围选（按当前排序序列）
     const ids = (Store.state.materials || []).filter(Boolean)
       .filter(m => (Store.state.filter === "media" ? (m.type === "video" || m.type === "image") : m.type === Store.state.filter))
@@ -2241,10 +2241,10 @@ function selectMaterial(uid, e) {
     if (i >= 0 && j >= 0) {
       const [lo, hi] = i < j ? [i, j] : [j, i];
       const arr = ids.slice(lo, hi + 1);
-      Store.set({ selectedMaterialUids: arr, selectedMaterialUid: arr.length === 1 ? arr[0] : null, selectedKey: null, selectedKeys: [] });
-    } else Store.set({ selectedMaterialUids: [uid], selectedMaterialUid: uid, selectedKey: null, selectedKeys: [] });
+      Store.set({ selectedMaterialUids: arr, selectedMaterialUid: arr.length === 1 ? arr[0] : null, selectedKey: null, selectedKeys: [], selectedSegIds: [], selectedSegId: null });
+    } else Store.set({ selectedMaterialUids: [uid], selectedMaterialUid: uid, selectedKey: null, selectedKeys: [], selectedSegIds: [], selectedSegId: null });
   } else {
-    Store.set({ selectedMaterialUids: [uid], selectedMaterialUid: uid, selectedKey: null, selectedKeys: [] });
+    Store.set({ selectedMaterialUids: [uid], selectedMaterialUid: uid, selectedKey: null, selectedKeys: [], selectedSegIds: [], selectedSegId: null });
   }
 }
 
@@ -2744,9 +2744,10 @@ function startPointer(e, seg, mode, side) {
     const set = new Set(Store.state.selectedKeys);
     if (set.has(key)) set.delete(key); else set.add(key);
     const arr = [...set];
-    Store.set({ selectedKeys: arr, selectedKey: arr.length ? key : null, selectedMaterialUid: null });
+    const ids = arr.map(k => { const s = findSegByKey(k); return s && s.id; }).filter(Boolean);
+    Store.set({ selectedKeys: arr, selectedSegIds: ids, selectedKey: arr.length ? key : null, selectedSegId: ids.includes(segId) ? segId : (ids[0] || null), selectedMaterialUid: null });
   } else if (inSel && multi) {
-    Store.set({ selectedKey: key }); // 保持多选集合，仅把本段设为焦点（锚点）
+    Store.set({ selectedKey: key, selectedSegId: segId }); // 保持多选集合，仅把本段设为焦点（锚点）
   } else {
     selectKey(key);
   }
@@ -3274,9 +3275,11 @@ function onBoxUp(e) {
   if (b.shift) {
     const set = new Set(Store.state.selectedKeys); keys.forEach(k => set.add(k));
     const arr = [...set];
-    Store.set({ selectedKeys: arr, selectedKey: arr[arr.length - 1], selectedMaterialUid: null });
+    const ids = arr.map(k => { const s = findSegByKey(k); return s && s.id; }).filter(Boolean);
+    Store.set({ selectedKeys: arr, selectedSegIds: ids, selectedKey: arr[arr.length - 1], selectedSegId: ids[ids.length - 1] || null, selectedMaterialUid: null });
   } else {
-    Store.set({ selectedKeys: keys, selectedKey: keys[keys.length - 1], selectedMaterialUid: null });
+    const ids = keys.map(k => { const s = findSegByKey(k); return s && s.id; }).filter(Boolean);
+    Store.set({ selectedKeys: keys, selectedSegIds: ids, selectedKey: keys[keys.length - 1], selectedSegId: ids[ids.length - 1] || null, selectedMaterialUid: null });
   }
 }
 /* 整组缩放：拖 group-box 左右把手 → 整组时间跨度按 factor 拉伸/压缩（对齐 OpenCut group-resize 缩放）。
@@ -3713,22 +3716,29 @@ function doSplitRight() {
   call("split_segment_right", type, +ti, +idx, Math.round(Store.state.playheadUs)).then(refresh);
 }
 function doDelete() {
-  // 多选优先：selectedKeys 非空则整批删；否则退化为单选 selectedKey；都无则删素材
-  const keys = (Store.state.selectedKeys && Store.state.selectedKeys.length)
-    ? Store.state.selectedKeys
-    : (Store.state.selectedKey ? [Store.state.selectedKey] : []);
-  if (keys.length) { call("remove_segments", keys, Store.state.rippleOn).then(() => { selectKey(null); refresh(); }); return; }
+  // 删除只按稳定 id 执行；索引 key 在分割/移动后会漂移，不能作为破坏性操作目标。
+  const ids = (Store.state.selectedSegIds && Store.state.selectedSegIds.length)
+    ? Store.state.selectedSegIds
+    : (Store.state.selectedSegId ? [Store.state.selectedSegId] : []);
+  if (ids.length) {
+    call("remove_segments_by_ids", ids, Store.state.rippleOn).then(r => {
+      if (r && r.ok) { selectKey(null); refresh(); }
+      else UiFeedback.showToast({ description: "删除已取消：" + ((r && r.error) || "选中片段已变化"), variant: "warn" });
+    });
+    return;
+  }
   if (Store.state.selectedMaterialUid) deleteMaterial(Store.state.selectedMaterialUid);
 }
 function selectAll() {
   const keys = [];
   // 全选必须覆盖所有轨道类型（含 effect/sticker，否则特效段永远选不中、Delete 删不掉）
   forEachSeg((s, type, ti, idx) => keys.push(type + ":" + ti + ":" + idx));
-  Store.set({ selectedKeys: keys, selectedKey: keys.length ? keys[keys.length - 1] : null, selectedMaterialUid: null });
+  const ids = keys.map(k => { const s = findSegByKey(k); return s && s.id; }).filter(Boolean);
+  Store.set({ selectedKeys: keys, selectedSegIds: ids, selectedKey: keys.length ? keys[keys.length - 1] : null, selectedSegId: ids[ids.length - 1] || null, selectedMaterialUid: null });
 }
 function clearSelection() {
   if (Store.state.selectedKey || Store.state.selectedKeys.length || Store.state.selectedMaterialUid)
-    Store.set({ selectedKey: null, selectedKeys: [], selectedMaterialUid: null });
+    Store.set({ selectedKey: null, selectedKeys: [], selectedSegIds: [], selectedSegId: null, selectedMaterialUid: null });
 }
 
 function doCopy() {
@@ -3908,7 +3918,7 @@ function bindEvents() {
       e.preventDefault();
       const uid = card.dataset.uid;
       if (!(Store.state.selectedMaterialUids || []).includes(uid)) {
-        Store.set({ selectedMaterialUids: [uid], selectedMaterialUid: uid, selectedKey: null, selectedKeys: [] });
+        Store.set({ selectedMaterialUids: [uid], selectedMaterialUid: uid, selectedKey: null, selectedKeys: [], selectedSegIds: [], selectedSegId: null });
       }
       showAssetCtxMenu(e.clientX, e.clientY);
     });

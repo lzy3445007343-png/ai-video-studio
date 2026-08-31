@@ -4737,6 +4737,42 @@ class Api:
         save_state(self.state)
         return {"ok": True, "removed": removed}
 
+    def remove_segments_by_ids(self, seg_ids, ripple=False):
+        """按稳定段 id 原子批量删除。
+
+        `type:track:index` 在分割、移动或空轨折叠后会漂移，不能再作为破坏性操作的目标。
+        所有目标必须在当前草稿中存在；任一目标失效则整批拒绝，避免只删掉一部分或误删新占据该索引的段。
+        """
+        self._reload()
+        self._push_undo()
+        raw_ids = seg_ids if isinstance(seg_ids, list) else []
+        ids = []
+        for seg_id in raw_ids:
+            if isinstance(seg_id, str) and seg_id and seg_id not in ids:
+                ids.append(seg_id)
+        if not ids:
+            return {"ok": False, "error": "没有可删除的片段"}
+        targets = []
+        missing = []
+        for seg_id in ids:
+            seg = _seg_by_id(self.draft, seg_id)
+            if seg is None:
+                missing.append(seg_id)
+            else:
+                targets.append(seg)
+        if missing:
+            return {"ok": False, "error": "选中片段已变化，删除已取消", "missing_ids": missing}
+        before = copy.deepcopy(self.draft)
+        for seg in targets:
+            if _pop_seg_by_ref(self.draft, seg) is None:
+                # 理论上不可能：targets 全由当前 draft 取出。保留显式失败，防止旁路破坏原子语义。
+                return {"ok": False, "error": "片段删除定位失败，删除已取消"}
+        if ripple:
+            apply_ripple_adjustments(self.draft, compute_ripple_adjustments(before, self.draft))
+        _collapse_empty_tracks(self.draft)
+        save_state(self.state)
+        return {"ok": True, "removed": len(targets), "segment_ids": ids}
+
     def duplicate_segment(self, track_type, track_index, index, seg_id=None):
         """复制单段到同轨紧接其后（前端 Ctrl+D / 工具栏「复制」触发，对齐 OpenCut duplicate-selected）。
 
