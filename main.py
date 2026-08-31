@@ -2450,27 +2450,48 @@ def resolve_kf_value(anims, path, local_us):
 
 
 def _split_animations(anims, local):
-    """分割点 local（段内微秒）：<=local 的键留给左段；>=local 的键给右段并减 local。
-    对齐 OpenCut splitAnimationsAtTime（含边界：恰好等于 local 的键同时出现在两侧）。"""
+    """在分割点保留动画连续性。
+
+    直接把 <=local / >=local 的关键帧分到两段，会在切点没有关键帧时让右段起点
+    钳制到“下一帧”的值，造成分割后 X/Y 等属性突然跳变。每条通道都在切点补一对
+    插值边界帧（左段 local、右段 0），使分割前后的同一画面时刻取到同一个值。
+    """
     left, right = {}, {}
     for path, ch in (anims or {}).items():
         if not isinstance(ch, dict):
             continue
-        keys = ch.get("keys") or []
+        keys = sorted(ch.get("keys") or [], key=lambda k: k["t"])
         if not keys:
             continue
         lk, rk = [], []
-        for k in sorted(keys, key=lambda k: k["t"]):
+        for k in keys:
             if k["t"] <= local:
                 lk.append(dict(k))
             if k["t"] >= local:
                 nk = dict(k)
                 nk["t"] = k["t"] - local
                 rk.append(nk)
+        if not any(k["t"] == local for k in keys):
+            value, found = _kf_interp(keys, local, ch.get("type"))
+            if found:
+                boundary = {
+                    "id": uuid.uuid4().hex, "t": int(local), "v": value,
+                    "seg": "linear", "segmentToNext": "linear",
+                    "leftHandle": {"dt": 0, "dv": 0},
+                    "rightHandle": {"dt": 0, "dv": 0}, "tangentMode": "auto",
+                }
+                lk.append(boundary)
+                right_boundary = dict(boundary)
+                right_boundary["id"] = uuid.uuid4().hex
+                right_boundary["t"] = 0
+                rk.append(right_boundary)
+        lk.sort(key=lambda k: k["t"])
+        rk.sort(key=lambda k: k["t"])
+        meta = {key: copy.deepcopy(value) for key, value in ch.items() if key != "keys"}
         if lk:
-            left[path] = {"keys": lk}
+            left[path] = dict(meta, keys=lk)
         if rk:
-            right[path] = {"keys": rk}
+            right[path] = dict(meta, keys=rk)
     return left, right
 
 

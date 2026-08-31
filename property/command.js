@@ -13,9 +13,14 @@
  * ===================================================================== */
 
 const CommandService = {
+  _txRuns: null,
   /* 统一写入口：语义 Command + 审计（actor/reason/confidence/source/paths） */
   run(cmdId, args, meta) {
-    return call("execute", cmdId, args || {}, meta || { actor: "ui" });
+    const run = call("execute", cmdId, args || {}, meta || { actor: "ui" });
+    // withTx 中的多条命令必须全部完成后才能 commit。旧实现依赖回调显式 return Promise，
+    // 而画布手势等批量调用很容易漏 return，导致第一条写入后事务提前结束。
+    if (this._txRuns) this._txRuns.push(run);
+    return run;
   },
   /* 事务桥接 */
   beginTx(label, meta) { return call("begin_transaction", label || "batch", meta || {}); },
@@ -32,15 +37,29 @@ const CommandService = {
         if (opts.refresh !== false) refresh();
         return beginRes || { ok: false, error: "begin 事务失败" };
       }
-      return fn().then(
-        res => {
-          if (res && res.ok === false) {
-            if (opts.onError) opts.onError(res.error);
-            return this.abortTx().then(() => { if (opts.refresh !== false) refresh(); return res; });
+      const runs = [];
+      this._txRuns = runs;
+      let work;
+      try { work = fn(); }
+      catch (err) { work = Promise.reject(err); }
+      return Promise.resolve(work).then(
+        res => Promise.all(runs).then(results => ({ res, results })),
+        err => Promise.reject(err)
+      ).then(
+        ({ res, results }) => {
+          this._txRuns = null;
+          const failed = results.find(r => r && r.ok === false) || (res && res.ok === false ? res : null);
+          if (failed) {
+            if (opts.onError) opts.onError(failed.error);
+            return this.abortTx().then(() => { if (opts.refresh !== false) refresh(); return failed; });
           }
-          return this.commitTx().then(() => { if (opts.refresh !== false) refresh(); return res; });
+          return this.commitTx().then(() => {
+            if (opts.refresh !== false) refresh();
+            return results.length ? results[results.length - 1] : res;
+          });
         },
         err => {
+          this._txRuns = null;
           console.error("[CommandService] " + label + " 失败:", err);
           if (opts.onError) opts.onError(err);
           return this.abortTx().then(() => { if (opts.refresh !== false) refresh(); throw err; });
