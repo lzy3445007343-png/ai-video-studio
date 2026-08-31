@@ -270,6 +270,10 @@ SETTINGS_PATH = os.path.join(HERE, "settings.json")
 MCP_STATE_PATH = os.path.join(HERE, "mcp_state.json")
 # 草稿 + 素材共享状态文件：人和 AI/MCP 共用同一份「真相」，前端轮询刷新即可实时看到彼此的改动
 STATE_PATH = os.path.join(HERE, "draft_state.json")
+# 写盘前的工程快照：用于兜住绕过命令层、旧进程覆盖等异常路径。
+# 这不是 undo 栈的替代品；undo 服务正常编辑，快照服务数据恢复与事后定位。
+STATE_BACKUP_DIR = os.path.join(HERE, "state_backups")
+STATE_BACKUP_KEEP = 30
 # 共享撤销栈（⑧-A 根治）：AI(MCP 进程) 与桌面 UI 进程跨进程共用同一条撤销时间线。
 # 撤销栈原本只存各进程内存、互不打通 → AI 提交的批次桌面 Ctrl+Z 撤回不到。
 # 改为落盘：内容 = gzip(JSON(history + redo_stack + seq))，原子写（临时文件 + os.replace）。
@@ -1590,6 +1594,62 @@ def _publish_document_change(before_draft, state):
                 pass
 
 
+def _state_summary(state):
+    """返回稳定、无素材路径的工程摘要，供每次持久化审计与异常定位使用。"""
+    state = state if isinstance(state, dict) else {}
+    draft = state.get("draft") if isinstance(state.get("draft"), dict) else {}
+    main = draft.get("main") if isinstance(draft.get("main"), dict) else {}
+    overlay = draft.get("overlay") if isinstance(draft.get("overlay"), list) else []
+    audio = draft.get("audio") if isinstance(draft.get("audio"), list) else []
+    tracks = [main] + [t for t in overlay if isinstance(t, dict)] + [t for t in audio if isinstance(t, dict)]
+    segment_ids = []
+    for track in tracks:
+        segs = track.get("segs") if isinstance(track.get("segs"), list) else []
+        for seg in segs:
+            if isinstance(seg, dict) and seg.get("id"):
+                segment_ids.append(str(seg["id"]))
+    return {
+        "materials": len(state.get("materials") or []),
+        "tracks": len(tracks),
+        "segments": len(segment_ids),
+        "segment_ids": sorted(segment_ids),
+    }
+
+
+def _backup_previous_state(ondisk):
+    """原子保留写入前状态，并清理超过保留数量的旧快照。"""
+    if not isinstance(ondisk, dict):
+        return None
+    os.makedirs(STATE_BACKUP_DIR, exist_ok=True)
+    version = ondisk.get("version", "unknown")
+    stamp = int(time.time() * 1000)
+    target = os.path.join(STATE_BACKUP_DIR, "draft_state.%s.%s.%s.json" % (version, stamp, uuid.uuid4().hex[:8]))
+    fd, tmp = tempfile.mkstemp(dir=STATE_BACKUP_DIR, suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(ondisk, f, ensure_ascii=False, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, target)
+    except Exception:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+    try:
+        backups = sorted(
+            (os.path.join(STATE_BACKUP_DIR, name) for name in os.listdir(STATE_BACKUP_DIR)
+             if name.startswith("draft_state.") and name.endswith(".json")),
+            key=os.path.getmtime,
+        )
+        for old in backups[:-STATE_BACKUP_KEEP]:
+            os.remove(old)
+    except OSError as e:
+        print("[STATE-BACKUP-WARN] 清理旧快照失败:", repr(e))
+    return target
+
+
 def save_state(state, record=True):
     """把状态写回 draft_state.json，并打上版本时间戳（前端靠 version 判断是否变化）。
 
@@ -1632,14 +1692,18 @@ def save_state(state, record=True):
         if not os.path.exists(STATE_PATH):
             with open(STATE_PATH, "w", encoding="utf-8") as _f0:
                 json.dump({}, _f0)
+        backup_path = None
+        before_summary = None
         with open(STATE_PATH, "r+", encoding="utf-8") as f:
             if _HAS_LOCK:
                 portalocker.lock(f, portalocker.LOCK_EX)
             # 读盘当前 version
             ondisk_version = None
+            ondisk = None
             try:
                 f.seek(0)
                 _ondisk = json.load(f)
+                ondisk = _ondisk
                 ondisk_version = _ondisk.get("version")
             except Exception:
                 ondisk_version = None   # 读不到（首存/损坏）按无冲突处理
@@ -1654,6 +1718,13 @@ def save_state(state, record=True):
                 # = 拖入回弹/清空。返回 False 后所有 `if not save_state(...)` 调用点正确判失败、走错误分支。
                 # 冲突细节仍保留在 SAVE_LAST_CONFLICT 全局 + 控制台，_wrap_save_failure 照常注入。
                 return False
+            before_summary = _state_summary(ondisk)
+            # 只在领域内容实际变化时留快照；execute 尾部 record=False 的重复落盘不会制造冗余备份。
+            if isinstance(ondisk, dict) and (
+                ondisk.get("draft") != state.get("draft")
+                or ondisk.get("materials") != state.get("materials")
+            ):
+                backup_path = _backup_previous_state(ondisk)
             # 通过：写回（seek 0 覆盖，不再先清空再上锁）
             # 3d：序列化一次，复用字符串做「字节长度抽样」（避免写后再全树序列化）
             f.seek(0); f.truncate()
@@ -1669,6 +1740,21 @@ def save_state(state, record=True):
             print("[SAVE-VERIFY-FAIL] " + detail)
             FAILED_SAVE = True
             return False
+        # 任何成功写盘都留下摘要，即使调用方未经过 CommandManager，也能从日志发现异常写入来源。
+        _append_audit({
+            "ts": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()),
+            "cmd_id": "state_write",
+            "label": "state_write",
+            "actor": DOCUMENT_CHANGE_ACTOR,
+            "args": None,
+            "meta": {
+                "record": bool(record),
+                "before": before_summary,
+                "after": _state_summary(state),
+                "backup": os.path.basename(backup_path) if backup_path else None,
+            },
+            "source": "persistence",
+        })
         # 4a：成功写盘 → 计算并发布 document-changed 载荷（同进程 evaluate_js 推 + 轮询 diff 两通道）。
         _publish_document_change(before_committed, state)
         return True

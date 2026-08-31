@@ -20,6 +20,7 @@ settings.json
 
 # 草稿共享状态（人和 AI 共用同一份，运行时生成，不进 git）
 draft_state.json
+state_backups/
 
 # MCP 连接状态（运行时由 MCP server 写入，不进 git）
 mcp_state.json

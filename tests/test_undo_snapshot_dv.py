@@ -13,6 +13,7 @@ import os
 import sys
 import time
 import types
+from contextlib import contextmanager
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
@@ -47,10 +48,15 @@ if cmd_cls_lines:
 for fn in ("Command", "push_snapshot", "undo", "redo"):
     check("抽到 %s" % fn, fn in segments)
 
-# 构造命名空间：真实 Command 类 + 桩 save_state/_append_audit
+# 构造命名空间：真实 Command 类 + 内存态 load/save 桩
+memory = {"state": None}
 ns = {"copy": copy, "time": time}
 ns["_append_audit"] = lambda *a, **k: None
-ns["save_state"] = lambda state, record=True: True
+ns["load_state"] = lambda: copy.deepcopy(memory["state"])
+def save_memory(state, record=True):
+    memory["state"] = copy.deepcopy(state)
+    return True
+ns["save_state"] = save_memory
 exec(compile(segments["Command"], "<ast:Command>", "exec"), ns)
 for fn in ("push_snapshot", "undo", "redo"):
     exec(compile(segments[fn], "<ast:%s>" % fn, "exec"), ns)
@@ -60,6 +66,17 @@ Undo = ns["undo"]
 Redo = ns["redo"]
 
 
+@contextmanager
+def no_stack_lock():
+    yield
+
+
+def make_manager():
+    manager = types.SimpleNamespace(history=[], redo_stack=[], _cap=2000, _tx=None)
+    manager._stack_locked = no_stack_lock
+    return manager
+
+
 def make_api(dv, draft=None):
     return types.SimpleNamespace(
         state={"domain_version": dv, "draft": draft or {"v": 0}},
@@ -67,8 +84,12 @@ def make_api(dv, draft=None):
     )
 
 
+def sync_disk(api):
+    memory["state"] = copy.deepcopy(api.state)
+
+
 print("== 1 push_snapshot dv 记录 ==")
-cm = types.SimpleNamespace(history=[], redo_stack=[], _cap=2000, _tx=None)
+cm = make_manager()
 saved = {"v": 1}
 PushSnapshot(cm, saved, dv=5)
 cmd = cm.history[0]
@@ -79,20 +100,22 @@ check("source=snapshot", cmd.source == "snapshot")
 
 print("== 2 undo 门控：snapshot 命令可撤销（修复后）==")
 api = make_api(6, draft={"v": 1})   # 磁盘 dv=6 == snapshot.dv_after=6
+sync_disk(api)
 r = Undo(cm, api)
 check("undo 通过（disk_dv=6 == dv_after=6）", r["ok"] is True, "r=%s" % r)
 check("undo 后 dv 回退到 5", api.state["domain_version"] == 5, "got=%s" % api.state["domain_version"])
 check("redo 栈有该命令", len(cm.redo_stack) == 1)
 
 print("== 3 旧行为复现（不传 dv → 误判冲突，证明修复必要）==")
-cm2 = types.SimpleNamespace(history=[], redo_stack=[], _cap=2000, _tx=None)
+cm2 = make_manager()
 PushSnapshot(cm2, {"v": 1})   # 旧代码路径：不传 dv
 api2 = make_api(6, draft={"v": 1})
+sync_disk(api2)
 r2 = Undo(cm2, api2)
 check("旧行为：dv_after=0 → undo 冲突（bug 复现）", r2.get("conflict") is True and r2["ok"] is False)
 
 print("== 4 混合序列：execute + snapshot 连续撤销全通过 ==")
-cm3 = types.SimpleNamespace(history=[], redo_stack=[], _cap=2000, _tx=None)
+cm3 = make_manager()
 # 手动构造 execute 命令（dv_after=3）+ snapshot 命令（dv_before=3, dv_after=4）
 c1 = Command("move", "移动", {})
 c1.saved_state = {"v": 1}
@@ -106,6 +129,7 @@ s1.dv_before, s1.dv_after = 3, 4
 s1.source = "snapshot"
 cm3.history = [c1, s1]
 api3 = make_api(4, draft={"v": 3})   # 磁盘 dv=4
+sync_disk(api3)
 r3 = Undo(cm3, api3)   # undo snapshot
 check("混合序列 undo snapshot 通过", r3["ok"] is True, "r=%s" % r3)
 check("dv 回退到 3", api3.state["domain_version"] == 3)
