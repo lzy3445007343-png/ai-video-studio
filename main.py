@@ -5226,12 +5226,18 @@ class Api:
         save_state(self.state)
         return {"ok": True}
 
-    def _split_segment_core(self, track_type, track_index, index, at_time_us):
+    def _split_segment_core(self, track_type, track_index, index, at_time_us, seg_id=None):
         """公共分割逻辑：切点检查、修改左段、生成右段并插入 index+1。
         不调用 save_state，供 split_segment / split_left / split_right 复用。
         成功返回 {"ok": True, "seg": 左段, "right": 右段, "at": 切点, "index": 原index}。
         失败返回 {"ok": False, "error": ...}。
         """
+        if seg_id:
+            target = _seg_by_id(self.draft, seg_id)
+            located = _locate_seg(self.draft, target) if target is not None else None
+            if located is None:
+                return {"ok": False, "error": f"未找到段 id={seg_id}"}
+            track_type, track_index, index = located
         segs = _track_segs(self.draft, track_type, track_index)
         if segs is None:
             return {"ok": False, "error": f"{track_type} 没有第 {track_index} 条轨道"}
@@ -5273,7 +5279,7 @@ class Api:
         segs.insert(index + 1, right)
         return {"ok": True, "seg": seg, "right": right, "at": at, "index": index}
 
-    def split_segment(self, track_type, track_index, index, at_time_us):
+    def split_segment(self, track_type, track_index, index, at_time_us, seg_id=None):
         """在指定位置把一段素材切成两段（前端 S / Ctrl+B / 工具栏「分割」触发）。保留左右两段。
 
         at_time_us 是时间轴位置（微秒），必须落在该段内部（start, start+duration）。
@@ -5284,7 +5290,7 @@ class Api:
         """
         self._reload()
         self._push_undo()
-        result = self._split_segment_core(track_type, track_index, index, at_time_us)
+        result = self._split_segment_core(track_type, track_index, index, at_time_us, seg_id)
         if "error" in result:
             return result
         save_state(self.state)
@@ -5298,7 +5304,7 @@ class Api:
             "right": {"start": right["start"], "duration": right["duration"], "src_start": right["src_start"], "src_end": right["src_end"]},
         }
 
-    def split_segment_left(self, track_type, track_index, index, at_time_us, ripple=False):
+    def split_segment_left(self, track_type, track_index, index, at_time_us, ripple=False, seg_id=None):
         """在指定位置分割，保留左段，删除右段（OpenCut split-left，快捷键 Q / 工具栏 ◀✂）。
 
         ripple=True 时（波纹删右半）：删掉右段后，其右侧空出来的区间让后续片段整体左移收拢；
@@ -5307,7 +5313,7 @@ class Api:
         self._reload()
         self._push_undo()
         before = copy.deepcopy(self.draft)
-        result = self._split_segment_core(track_type, track_index, index, at_time_us)
+        result = self._split_segment_core(track_type, track_index, index, at_time_us, seg_id)
         if "error" in result:
             return result
         segs = _track_segs(self.draft, track_type, track_index)
@@ -5323,11 +5329,11 @@ class Api:
             "left": {"start": left["start"], "duration": left["duration"], "src_start": left["src_start"], "src_end": left["src_end"]},
         }
 
-    def split_segment_right(self, track_type, track_index, index, at_time_us):
+    def split_segment_right(self, track_type, track_index, index, at_time_us, seg_id=None):
         """在指定位置分割，保留右段，删除左段（OpenCut split-right，快捷键 W / 工具栏 ✂▶）。"""
         self._reload()
         self._push_undo()
-        result = self._split_segment_core(track_type, track_index, index, at_time_us)
+        result = self._split_segment_core(track_type, track_index, index, at_time_us, seg_id)
         if "error" in result:
             return result
         segs = _track_segs(self.draft, track_type, track_index)

@@ -3699,13 +3699,13 @@ function doSplit() {
   // 在播放头处把选中片段切成两段，保留左右（OpenCut split，快捷键 S / Ctrl+B / 工具栏 ✂）。
   if (!Store.state.selectedKey) return;
   const [type, ti, idx] = Store.state.selectedKey.split(":");
-  call("split_segment", type, +ti, +idx, Math.round(Store.state.playheadUs)).then(refresh);
+  call("split_segment", type, +ti, +idx, Math.round(Store.state.playheadUs), Store.state.selectedSegId).then(refresh);
 }
 function doSplitLeft() {
   // 在播放头处分割并删除右侧，保留左侧（OpenCut split-left，快捷键 Q / 工具栏 ◀✂）。
   if (!Store.state.selectedKey) return;
   const [type, ti, idx] = Store.state.selectedKey.split(":");
-  call("split_segment_left", type, +ti, +idx, Math.round(Store.state.playheadUs), Store.state.rippleOn).then(r => {
+  call("split_segment_left", type, +ti, +idx, Math.round(Store.state.playheadUs), Store.state.rippleOn, Store.state.selectedSegId).then(r => {
     if (r && r.ok && Store.state.rippleOn) seekPlayhead(r.at);  // 波纹删右半后，播放头跳到收拢后的切点
     refresh();
   });
@@ -3714,7 +3714,7 @@ function doSplitRight() {
   // 在播放头处分割并删除左侧，保留右侧（OpenCut split-right，快捷键 W / 工具栏 ✂▶）。
   if (!Store.state.selectedKey) return;
   const [type, ti, idx] = Store.state.selectedKey.split(":");
-  call("split_segment_right", type, +ti, +idx, Math.round(Store.state.playheadUs)).then(refresh);
+  call("split_segment_right", type, +ti, +idx, Math.round(Store.state.playheadUs), Store.state.selectedSegId).then(refresh);
 }
 function doDelete() {
   // 删除只按稳定 id 执行；索引 key 在分割/移动后会漂移，不能作为破坏性操作目标。
