@@ -21,6 +21,10 @@ function _makeVisualEl(mtype) {
 // 素材尺寸未知（未加载）→ fallback 画布大小（现状，letterbox），media 尺寸事件到达后自动校正。
 function _applyVisualSize(el, seg) {
   if (!el) return;
+  // 画布拖拽期间，applyKfTransform 会让出元素样式给 DragSession。
+  // 此处若仍把尺寸重置为逻辑画布尺寸，随后又因会话活跃跳过显示缩放，
+  // 就会出现“按住素材变大，松手恢复”的视觉跳变。
+  const keepInteractionSize = !!(seg && typeof InteractionManager !== "undefined" && InteractionManager.isActiveOn(seg.id));
   const media = el.firstElementChild;
   let mw = 0, mh = 0;
   if (media) {
@@ -32,11 +36,14 @@ function _applyVisualSize(el, seg) {
     const s = Math.min(cp.W / mw, cp.H / mh);
     const w = Math.max(1, Math.round(mw * s));
     const h = Math.max(1, Math.round(mh * s));
-    el.style.width = w + "px";
-    el.style.height = h + "px";
     el.dataset.baseW = w;   // C5.2：基础 contain 尺寸（applyKfTransform 乘 zoom 做视觉放大）
     el.dataset.baseH = h;
+    if (keepInteractionSize) return;
+    const ds = (typeof PreviewCoordinate !== "undefined") ? PreviewCoordinate.displayScale() : 1;
+    el.style.width = (w * ds) + "px";
+    el.style.height = (h * ds) + "px";
   } else {
+    if (keepInteractionSize) return;
     el.style.width = "100%"; el.style.height = "100%";
   }
 }
